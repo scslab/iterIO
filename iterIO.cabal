@@ -1,0 +1,34 @@
+Name:           iterio
+Version:        0.0
+Cabal-Version:  >= 1.2
+build-type:     Simple
+License:        BSD3
+License-File:   LICENSE
+Author:         David Mazieres
+Stability:      experimental
+Maintainer:     http://www.scs.stanford.edu/~dm/addr/
+Category:       Control
+Synopsis:       Iteratee-based IO with simple pipe operators
+Extra-source-files:
+        Examples/fgrep.hs
+Description:
+
+        Iteratee-based IO is an alternative to lazy IO that offers
+        referential transparency and convenient composition of
+        protocol layers or parsers.  The approach was originally
+        advocated by Oleg Kiselyov, in a talk whose slides you can
+        find here: <http://okmij.org/ftp/Streams.html#iteratee>.  The
+        original Iteratee implementation is here:
+        <http://hackage.haskell.org/package/iteratee>.  This package
+        is a complete re-write from scratch in an effort to simplify
+        many of the abstractions and make them easier to use.
+
+Library
+  Build-Depends: base >= 4 && < 5,
+                 bytestring >= 0.9 && < 1.0,
+                 mtl >= 1.1.0.2 && < 2,
+                 network >= 2.2 && < 3.0
+  Exposed-modules:
+    Data.IterIO.Base, Data.IterIO.Extra, Data.IterIO.LazyByteString
+  Extensions:
+    ForeignFunctionInterface
