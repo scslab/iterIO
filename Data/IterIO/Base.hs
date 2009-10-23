@@ -75,7 +75,7 @@ module Data.IterIO.Base
     , runIter
     , run, cat, catI, (|$)
     , (|..), (..|..), (..|)
-    , enumO, enumO', enumI, enumI'
+    , enumO, enumO', enumObracket, enumI, enumI'
     -- * Other functions
     , iterLoop
     , fixIterPure, fixMonadIO
@@ -104,7 +104,6 @@ import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import System.IO.Error (mkIOError, eofErrorType, isEOFError)
 import System.IO.Unsafe
-
 
 --
 -- Iteratee types
@@ -135,6 +134,7 @@ chunk t = Chunk t False
 chunkEOF :: (Monoid t) => Chunk t
 chunkEOF = Chunk mempty True
 
+-- | Returns True if a chunk has no data and its EOF bit is true.
 isChunkEOF :: (ChunkData t) => Chunk t -> Bool
 isChunkEOF (Chunk t eof) = eof && null t
 
@@ -218,6 +218,15 @@ getIterError (IterFail e)    = e
 getIterError (EnumOFail e _) = e
 getIterError (EnumIFail e _) = e
 getIterError _               = error "getIterError: no error to extract"
+
+{-
+isIterError :: Iter t m a -> Bool
+isIterError (IterF _)       = False
+isIterError (Done _ _)      = False
+isIterError (IterFail _)    = True
+isIterError (EnumOFail _ _) = True
+isIterError (EnumIFail _ _) = True
+-}
 
 isIterEOFError :: Iter t m a -> Bool
 isIterEOFError (IterF _) = False
@@ -415,6 +424,19 @@ joinI (IterFail e)    = IterFail e
 joinI (EnumIFail e i) = EnumOFail e i
 joinI (EnumOFail e i) = EnumOFail e $ joinI i
 
+-- | Allows you to look at the state of an 'Iter' by returning it into
+-- another monad.  This is just like the monadic 'return' method,
+-- except that @joinI@ additionally executes the 'Iter' on empty chunk
+-- if it is in the 'IterF' state.  Thus, you can, for instance, say
+-- @liftI $ liftIO $ ...@ and the IO action will actually execute at
+-- that point.
+liftI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
+         Iter tIn m a
+      -> Iter tOut m (Iter tIn m a)
+liftI iter@(IterF _) =
+    IterF $ \c -> runIter iter mempty >>= return . flip Done c
+liftI iter = return iter
+
 -- | Return the the first element when the Iteratee data type is a list.
 headI :: (Monad m) => Iter [a] m a
 headI = IterF $ return . dohead
@@ -480,9 +502,11 @@ type EnumO t m a = Iter t m a -> Iter t m a
 -- iteratee, by waiting for some event that is triggered by a
 -- side-effect of @a@.
 cat :: (Monad m, ChunkData t) => EnumO t m a -> EnumO t m a -> EnumO t m a
-cat a b iter = IterF $ \c -> do
-                 r <- runIter (a iter) mempty
-                 runIter (b r) c
+cat a b iter = do
+  iter' <- liftI $ a iter
+  case iter' of
+    IterF _ -> b iter'
+    _       -> iter'
 infixr 4 `cat`
 
 -- | Run an outer enumerator on an iteratee.  Any errors in inner
@@ -512,7 +536,7 @@ catI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
         EnumI tOut tIn m a
      -> EnumI tOut tIn m a
      -> EnumI tOut tIn m a
-catI a b iter = a iter >>= b
+catI a b = a >=> b
 infixr 4 `catI`
 
 -- | Fuse an outer enumerator, producing chunks of some type @tOut@,
@@ -544,6 +568,19 @@ infixr 3 ..|..
       -> Iter tOut m a
 (..|) inner iter = wrapI (runI . joinI) $ inner iter
 infixr 3 ..|
+
+-- | Build an 'EnumO' from a @before@ action, an @after@ function, and
+-- | an @input@ function, analogous to the 'bracket' function.
+enumObracket :: (Monad m, ChunkData t) =>
+                (Iter () m b)
+             -> (b -> Iter () m c)
+             -> (b -> Iter () m (Chunk t))
+             -> EnumO t m a
+enumObracket before after input iter = do
+  b <- runI before
+  result <- liftI $ enumO (input b) iter
+  runI (after b)
+  result
 
 -- | Construct an outer enumerator given a function that produces
 -- 'Chunk's of type @t@.

@@ -39,7 +39,9 @@ main = do
          hPutStrLn stderr $ "usage: " ++ prog ++ " string [file ...]"
          exitFailure
   hSetBuffering stdout NoBuffering
-  let enum = if length av == 1
+  let pat = head av
+      enum = if length av == 1
              then enumHandle stdin
-             else foldl1 cat $ map enumFile $ tail av
-  enum |.. filterLines (head av) |$ printLines
+             else foldr1 cat $ map enumFile $ tail av
+  enum |.. filterLines pat |$ printLines
+  exitSuccess

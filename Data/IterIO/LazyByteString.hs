@@ -11,6 +11,7 @@ module Data.IterIO.LazyByteString
     , inumLog, inumhLog
     ) where
 
+import Prelude hiding (null)
 import Control.Exception (onException)
 import Control.Monad
 import Control.Monad.Trans
@@ -26,6 +27,11 @@ import System.IO
 
 import Data.IterIO.Base
 import Data.IterIO.Extra
+
+-- | Turn a 'L.Bytestring' into a 'Chunk'.  Set the EOF marker when
+-- the 'L.Bytestring' is empty.
+dataToChunk :: (ChunkData t) => t -> Chunk t
+dataToChunk t = Chunk t $ null t
 
 --
 -- Iters
@@ -118,12 +124,10 @@ enumHandle h = enumO $ do
 enumFile :: (MonadIO m) =>
             FilePath
          -> EnumO L.ByteString m a
-enumFile path iter = do
-  h <- liftIO $ openFile path ReadMode
-  flip enumO iter $ liftIO $
-       do buf <- L.hGet h L.defaultChunkSize `onException` do hClose h
-          return $ Chunk buf $ L.null buf
-
+enumFile path = enumObracket (liftIO $ openFile path ReadMode) (liftIO . hClose)
+                (\h -> liftIO (L.hGet h L.defaultChunkSize)
+                       >>= return . dataToChunk)
+      
 --
 -- EnumIs
 --

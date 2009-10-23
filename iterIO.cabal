@@ -7,7 +7,7 @@ License-File:   LICENSE
 Author:         David Mazieres
 Stability:      experimental
 Maintainer:     http://www.scs.stanford.edu/~dm/addr/
-Category:       Control
+Category:       System, Data
 Synopsis:       Iteratee-based IO with simple pipe operators
 Extra-source-files:
         Examples/fgrep.hs
