@@ -1,5 +1,5 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+-- {-# LANGUAGE ScopedTypeVariables #-}
 -- {-# LANGUAGE MultiParamTypeClasses #-}
 -- {-# LANGUAGE ExistentialQuantification #-}
 -- {-# LANGUAGE DeriveDataTypeable #-}
@@ -122,11 +122,9 @@ instance ChunkData S.ByteString where
 instance ChunkData () where
     null _ = True
 
--- | A chunk of data
-data Chunk t = Chunk
-               t                -- ^ A Chunk of data
-               Bool             -- ^ True if data is followed by EOF
-               deriving (Eq, Show)
+-- | A chunk of data, plus a flag which is 'True' if the data is
+-- followed by an end-of-file.
+data Chunk t = Chunk t Bool deriving (Eq, Show)
 
 chunk :: t -> Chunk t
 chunk t = Chunk t False
@@ -542,7 +540,7 @@ infixr 4 `catI`
 -- | Fuse an outer enumerator, producing chunks of some type @tOut@,
 -- with an inner enumerator that transcodes @tOut@ to @tIn@, to
 -- produce a new outer enumerator producing chunks of type @tIn@.
-(|..) :: forall tOut tIn m a. (ChunkData tOut, ChunkData tIn, Monad m) =>
+(|..) :: (ChunkData tOut, ChunkData tIn, Monad m) =>
          EnumO tOut m (Iter tIn m a)
       -> EnumI tOut tIn m a
       -> EnumO tIn m a
@@ -550,8 +548,7 @@ infixr 4 `catI`
 infixr 3 |..
 
 -- | Fuse two inner enumerators into one.
-(..|..) :: forall tOut tMid tIn m a.
-           (ChunkData tOut, ChunkData tMid, ChunkData tIn, Monad m) => 
+(..|..) :: (ChunkData tOut, ChunkData tMid, ChunkData tIn, Monad m) => 
            EnumI tOut tMid m (Iter tIn m a)
         -> EnumI tMid tIn m a
         -> EnumI tOut tIn m a
