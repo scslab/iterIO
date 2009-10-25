@@ -34,4 +34,4 @@ Library
     Data.IterIO, Data.IterIO.Base, Data.IterIO.ListLike,
     Data.IterIO.Extra
   Extensions:
-    ForeignFunctionInterface
+    ForeignFunctionInterface, FlexibleInstances

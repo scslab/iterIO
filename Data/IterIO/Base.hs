@@ -1,9 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface #-}
--- {-# LANGUAGE ScopedTypeVariables #-}
--- {-# LANGUAGE MultiParamTypeClasses #-}
--- {-# LANGUAGE ExistentialQuantification #-}
--- {-# LANGUAGE DeriveDataTypeable #-}
--- {-# LANGUAGE RecursiveDo #-}
+-- {-# LANGUAGE ForeignFunctionInterface #-}
 
 
 {- | Alternate Enumerator/Iteratee take by David Mazieres.
@@ -444,7 +439,7 @@ safeHeadI = IterF $ return . dohead
       dohead (Chunk (a:as) eof) = Done (Just a) $ Chunk as eof
 
 -- | An Iteratee that puts data to a consumer function, then calls an
--- eof function.  For instance, 'handleI' is defined as:
+-- eof function.  For instance, 'handleI' could be defined as:
 --
 -- > handleI :: (MonadIO m) => Handle -> Iter L.ByteString m ()
 -- > handleI h = putI (liftIO . L.hPut h) (liftIO $ hShutdown h 1)

@@ -8,19 +8,20 @@ all: $(TARGETS) Setup
 
 .PHONY: all always clean doc
 
+GHC = ghc -XForeignFunctionInterface -XFlexibleInstances
 WALL = -Wall -Werror
 
 always:
 	@:
 
 Examples/reliable/%: always
-	ghc --make -iExamples/reliable -Wall -Werror $@.hs
+	$(GHC) --make -iExamples/reliable -Wall -Werror $@.hs
 
 Examples/%: always
-	ghc --make -Wall -Werror $@.hs
+	$(GHC) --make -Wall -Werror $@.hs
 
 Setup: Setup.hs
-	ghc --make $(WALL) Setup.hs
+	$(GHC) --make $(WALL) Setup.hs
 
 doc: Setup
 	./Setup configure --user

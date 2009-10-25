@@ -1,5 +1,5 @@
-{-# LANGUAGE ForeignFunctionInterface #-}
-{-# LANGUAGE FlexibleInstances #-}
+-- {-# LANGUAGE ForeignFunctionInterface #-}
+-- {-# LANGUAGE FlexibleInstances #-}
 
 -- | This module contains deprecated functions plus a few pieces of
 -- functionality that are missing from the standard Haskell libraries.

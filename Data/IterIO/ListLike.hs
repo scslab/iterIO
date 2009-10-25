@@ -1,6 +1,3 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE FlexibleInstances #-}
 
 module Data.IterIO.ListLike where
 
@@ -9,7 +6,7 @@ import Control.Exception (onException)
 import Control.Monad
 import Control.Monad.Trans
 -- import qualified Data.ByteString as S
--- import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.Monoid
 import Data.Char
@@ -102,6 +99,17 @@ handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
         -> Iter t m ()
 handleI h = putI (liftIO . LL.hPutStr h) (liftIO $ hShutdown h 1)
 
+--
+--
+sockDgramI :: (MonadIO m, SendRecvString t) =>
+              Socket
+           -> Maybe SockAddr
+           -> Iter [t] m ()
+sockDgramI s mdest = do
+  mpkt <- safeHeadI
+  case mpkt of
+    Nothing  -> return ()
+    Just pkt -> liftIO (genSendTo s pkt mdest) >> sockDgramI s mdest
 
 --
 -- EnumOs
@@ -126,21 +134,34 @@ enumDgramFrom sock = enumO $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
   return $ if r < 0 then chunkEOF else chunk [(msg, addr)]
 
--- | Feed data from a file handle into an Iteratee.
+-- | Feed data from a file handle into an 'Iter' in Lazy
+-- 'L.ByteString' format.
+enumHandle' :: (MonadIO m) => Handle -> EnumO L.ByteString m a
+enumHandle' = enumHandle'
+
+-- | Like 'enumHandle'', but can use any 'LL.ListLikeIO' type for the
+-- data instead of just 'L.ByteString'.
 enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
-              Handle
-           -> EnumO t m a
+               Handle
+            -> EnumO t m a
 enumHandle h = enumO $ do
   liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
   return $ dataToChunk buf
 
+-- | Enumerate the contents of a file as a series of lazy
+-- 'L.ByteString's.
+enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
+enumFile' = enumFile'
+
+-- | Like 'enumFile'', but can use any 'LL.ListLikeIO' type for the
+-- data read from the file.
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
-            FilePath
-         -> EnumO t m a
-enumFile path = enumObracket (liftIO $ openFile path ReadMode) (liftIO . hClose)
-                (\h -> liftIO (LL.hGet h defaultChunkSize)
-                       >>= return . dataToChunk)
+             FilePath
+          -> EnumO t m a
+enumFile path =
+    enumObracket (liftIO $ openFile path ReadMode) (liftIO . hClose) $
+        \h -> liftIO (LL.hGet h defaultChunkSize) >>= return . dataToChunk
 
 
 --
