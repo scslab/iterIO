@@ -8,7 +8,7 @@ all: $(TARGETS) Setup
 
 .PHONY: all always clean doc
 
-GHC = ghc -XForeignFunctionInterface -XFlexibleInstances
+GHC = ghc -XForeignFunctionInterface -XFlexibleInstances $(WALL)
 WALL = -Wall -Werror
 
 always:
@@ -18,10 +18,17 @@ Examples/reliable/%: always
 	$(GHC) --make -iExamples/reliable -Wall -Werror $@.hs
 
 Examples/%: always
-	$(GHC) --make -Wall -Werror $@.hs
+	$(GHC) --make $@.hs
 
 Setup: Setup.hs
-	$(GHC) --make $(WALL) Setup.hs
+	$(GHC) --make Setup.hs
+
+doc: Setup
+	./Setup configure --user
+	./Setup haddock --hyperlink-source
+
+Setup: Setup.hs
+	ghc --make Setup.hs
 
 doc: Setup
 	./Setup configure --user
