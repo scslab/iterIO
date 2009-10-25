@@ -64,12 +64,11 @@ inumGrep' re iter = do
              else mempty
 
 grepCount :: IO Int
-grepCount = enumFile "/usr/share/dict/words"
-                   `cat` enumFile "/usr/share/dict/extra.words"
-                |.. inumToLines
+grepCount = enumFile "/usr/share/dict/words" |.. inumToLines
+                `cat` enumFile "/usr/share/dict/extra.words" |.. inumToLines
             |$ inumGrep "kk"
-                ..| inumGrep "^[a-z]"
-                ..| lengthI
+                    ..| inumGrep "^[a-z]"
+                    ..| lengthI
 
 inumToLines :: (Monad m) => EnumI S.ByteString [S.ByteString] m a
 inumToLines = enumI' $ do

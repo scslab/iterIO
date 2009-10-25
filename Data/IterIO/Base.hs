@@ -65,11 +65,15 @@
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI
-    , chunk, chunkEOF, isChunkEOF
     -- * Core functions
-    , runIter
-    , run, cat, catI, (|$)
+    , (|$)
+    , runIter, run
+    , chunk, chunkEOF, isChunkEOF
+    -- * Concatenation functions
+    , cat, catI
+    -- * Fusing operators
     , (|..), (..|..), (..|)
+    -- * Enumerator construction functions
     , enumO, enumO', enumObracket, enumI, enumI'
     -- * Other functions
     , iterLoop
@@ -490,7 +494,7 @@ cat a b iter = do
   case iter' of
     IterF _ -> b iter'
     _       -> iter'
-infixr 4 `cat`
+infixr 3 `cat`
 
 -- | Run an outer enumerator on an iteratee.  Any errors in inner
 -- enumerators that have been fused to the iteratee will be considered
@@ -502,7 +506,7 @@ infixr 4 `cat`
       forceErrToIter (EnumOFail e _) = IterFail e
       forceErrToIter (EnumIFail e _) = IterFail e
       forceErrToIter other           = other
-infixl 2 |$
+infixr 2 |$
 
 -- | An inner enumerator or transcoder.  Such a function accepts data
 -- from some outer enumerator (acting like an Iteratee), then
@@ -520,7 +524,7 @@ catI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
      -> EnumI tOut tIn m a
      -> EnumI tOut tIn m a
 catI a b = a >=> b
-infixr 4 `catI`
+infixr 3 `catI`
 
 -- | Fuse an outer enumerator, producing chunks of some type @tOut@,
 -- with an inner enumerator that transcodes @tOut@ to @tIn@, to
@@ -530,7 +534,7 @@ infixr 4 `catI`
       -> EnumI tOut tIn m a
       -> EnumO tIn m a
 (|..) outer inner iter = joinI $ outer $ inner iter
-infixl 3 |..
+infixl 4 |..
 
 -- | Fuse two inner enumerators into one.
 (..|..) :: (ChunkData tOut, ChunkData tMid, ChunkData tIn, Monad m) => 
@@ -538,7 +542,7 @@ infixl 3 |..
         -> EnumI tMid tIn m a
         -> EnumI tOut tIn m a
 (..|..) outer inner iter = wrapI (return . joinI . joinI) $ outer $ inner iter
-infixr 3 ..|..
+infixl 5 ..|..
 
 -- | Fuse an inner enumerator that transcodes @tOut@ to @tIn@ with an
 -- iteratee taking type @tIn@ to produce an iteratee taking type
@@ -549,7 +553,7 @@ infixr 3 ..|..
       -> Iter tIn m a
       -> Iter tOut m a
 (..|) inner iter = wrapI (runI . joinI) $ inner iter
-infixr 3 ..|
+infixr 4 ..|
 
 -- | Build an 'EnumO' from a @before@ action, an @after@ function, and
 -- | an @input@ function, analogous to the 'bracket' function.

@@ -255,30 +255,29 @@ fuses an 'EnumI' to an 'Iter', producing a new 'Iter'.  Finally, there
 is a '..|..' operator that fuses two 'EnumI's into a single new
 'EnumI' composing their effects.
 
-The concatenation operators bind more tightly than the fusing
-operators, which in turn bind more tightly than '|$'.  Hence, putting
-it all together, we produce the following Haskell equivalent to the
-above Unix pipeline:
+The fusing operators bind more tightly than the infix concatenation
+functions, which in turn bind more tightly than '|$'.  (Concatenation
+operators can also be used through prefix function application, which
+binds most tightly.)  Hence, putting it all together, we produce the
+following Haskell equivalent to the above Unix pipeline:
 
 @
     grepCount :: IO Int
-    grepCount = 'enumFile' \"\/usr\/share\/dict\/words\"
-                         ``cat`` 'enumFile' \"\/usr\/share\/dict\/extra.words\"
-                    '|..' inumToLines
+    grepCount = 'enumFile' \"\/usr\/share\/dict\/words\" '|..' inumToLines
+                    ``cat`` 'enumFile' \"\/usr\/share\/dict\/extra.words\" '|..' inumToLines
                 '|$' inumGrep \"kk\"
-                    '..|' inumGrep \"^[a-z]\"
-                    '..|' lengthI
+                        '..|' inumGrep "^[a-z]"
+                        '..|' lengthI
 @
 
 One often has a choice as to whether to fuse an 'EnumI' to the
-'EnumO', or to the 'Iter'.  For example, @grepCount@ could also have
-been implemented almost equivalently as:
+'EnumO', or to the 'Iter'.  For example, @grepCount@ could
+alternatively have been implemented as:
 
 @
     grepCount' :: IO Int
-    grepCount' = 'enumFile' \"\/usr\/share\/dict\/words\"
-                         ``cat`` 'enumFile' \"\/usr\/share\/dict\/extra.words\"
-                    '|..' inumToLines
+    grepCount' = 'cat' ('enumFile' \"\/usr\/share\/dict\/words\" '|..' inumToLines)
+                         ('enumFile' \"\/usr\/share\/dict\/extra.words\" '|..' inumToLines)
                     '|..' inumGrep \"kk\"
                     '|..' inumGrep \"^[a-z]\"
                  '|$' lengthI
@@ -301,5 +300,25 @@ want to be able to recover from the `EnumI`'s failure.  In the
 compile, this is catastrophic for the program, which is why the first
 version fused @inumGrep@ to the @Iter@.
 
+Another alternative would have bee to swap the order of concatenation
+and fusing:
+
+@
+    grepCount'' :: IO Int
+    grepCount'' = 'cat' ('enumFile' \"\/usr\/share\/dict\/words\")
+                           ('enumFile' \"\/usr\/share\/dict\/extra.words\")
+                      '|..' inumToLines
+                  '|$' inumGrep \"kk\"
+                      '..|' inumGrep "^[a-z]"
+                      '..|' lengthI
+@
+
+This last version chances the semantics of the counting slightly.
+With @grepCount''@, if the first file has an incomplete last line,
+this line will be merged with the first line of the second file, which
+is probably not what you want.  (For instance, if the incomplete last
+line of the first file starts with a capital letter, then the first
+line of the second file will not be counted even if it starts with a
+lower-case letter and contains two \"k\"s.)
 
 -}

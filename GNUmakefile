@@ -1,5 +1,5 @@
 
-TARGETS = Examples/fgrep Examples/reliable/reference	\
+TARGETS = Examples/fgrep Examples/simple Examples/reliable/reference	\
 Examples/reliable/tester
 
 all: $(TARGETS) Setup
