@@ -1,5 +1,6 @@
 
-TARGETS = Examples/fgrep
+TARGETS = Examples/fgrep Examples/reliable/reference	\
+Examples/reliable/tester
 
 all: $(TARGETS) Setup
 	./Setup configure --user
@@ -11,6 +12,9 @@ WALL = -Wall -Werror
 
 always:
 	@:
+
+Examples/reliable/%: always
+	ghc --make -iExamples/reliable -Wall -Werror $@.hs
 
 Examples/%: always
 	ghc --make -Wall -Werror $@.hs
