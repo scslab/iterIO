@@ -556,7 +556,8 @@ infixl 5 ..|..
 infixr 4 ..|
 
 -- | Build an 'EnumO' from a @before@ action, an @after@ function, and
--- | an @input@ function, analogous to the 'bracket' function.
+-- an @input@ function in a manner analogous to the IO 'bracket'
+-- function.
 enumObracket :: (Monad m, ChunkData t) =>
                 (Iter () m b)
              -> (b -> Iter () m c)
