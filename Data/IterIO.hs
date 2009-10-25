@@ -93,11 +93,11 @@ the @lines2I@ function:  @'Iter' String m (String, String)@.  The
 'String' in this case, specifies the type of input expected by the
 iteratee.  The last type, @(String, String)@ in this case, specifies
 the result type of the iteratee.  Finally, the middle type, @m@, is a
-monad, which illustrates another point:  @'Iter' t@ (for any input
-type @t@) is a monad transformer.  In this case, when @head2File@
-invokes @lines2I@, @m@ will be @IO@, because @head2File@ is returning
-a result in the @IO@ monad.  However, @lines2I@ would work equally
-well with any other monad.
+monad, because @'Iter' t@ (for any input type @t@) is a monad
+transformer.  In this case, when @head2File@ invokes @lines2I@, @m@
+will be @IO@, because @head2File@ is returning a result in the @IO@
+monad.  However, @lines2I@ would work equally well with any other
+monad.
 
 
 -}

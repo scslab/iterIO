@@ -27,13 +27,6 @@ doc: Setup
 	./Setup configure --user
 	./Setup haddock --hyperlink-source
 
-Setup: Setup.hs
-	ghc --make Setup.hs
-
-doc: Setup
-	./Setup configure --user
-	./Setup haddock --hyperlink-source
-
 clean:
 	rm -rf $(TARGETS) Setup dist
 	find . \( -name '*~' -o -name '*.hi' -o -name '*.o' \) -print0 \
