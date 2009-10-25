@@ -30,7 +30,7 @@ Library
                  network >= 2.2 && < 3.0,
                  ListLike >= 1.0 && < 2.0
   Exposed-modules:
-    Data.IterIO.Base, Data.IterIO.Extra, Data.IterIO.LazyByteString,
-    Data.IterIO.ListLike
+    Data.IterIO, Data.IterIO.Base, Data.IterIO.ListLike,
+    Data.IterIO.Extra, Data.IterIO.LazyByteString
   Extensions:
     ForeignFunctionInterface

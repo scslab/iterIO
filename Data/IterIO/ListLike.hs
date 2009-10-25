@@ -13,7 +13,7 @@ import Control.Monad.Trans
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.Monoid
 import Data.Char
-import Data.Word
+-- import Data.Word
 import Network.Socket
 import System.IO
 
@@ -48,7 +48,7 @@ safeLineI = IterF $ return . doline LL.empty
               (l, r) = LL.break eol acc'
               result = dolr eof l r
           in case result of
-               Just (l', r') -> Done (Just l) (Chunk r eof)
+               Just (l', r') -> Done (Just l') (Chunk r' eof)
                Nothing | eof -> Done Nothing (Chunk acc' True)
                _             -> IterF $ return . doline acc'
       dolr eof l r

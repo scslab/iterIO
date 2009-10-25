@@ -6,11 +6,11 @@ import qualified Data.ByteString.Lazy as L
 
 import Control.Monad
 import Control.Monad.Trans
-import Data.IterIO.Base
-import Data.IterIO.LazyByteString
 import System.Environment
 import System.Exit
 import System.IO
+
+import Data.IterIO
 
 filterLines :: (Monad m) =>
                String
