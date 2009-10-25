@@ -1,4 +1,6 @@
 *.hi
 *.o
 *~
-Examples/fgrep
+/Examples/fgrep
+/Setup
+/dist

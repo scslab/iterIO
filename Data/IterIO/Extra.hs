@@ -1,10 +1,14 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE FlexibleInstances #-}
 
+-- | This module contains deprecated functions plus a few pieces of
+-- functionality that are missing from the standard Haskell libraries.
 module Data.IterIO.Extra
     ( -- * Deprecated functions
       feed, feedO, feedI
       -- * Functionality missing from system libraries
-    , recvStrFrom, sendStr, hShutdown
+    , SendRecvString(..)
+    , hShutdown
     ) where
 
 import Control.Concurrent.MVar
@@ -67,24 +71,41 @@ feedI enum t iter = do
 -- libraries
 --
 
--- | Receive data from a datagram socket into a lazy bytestring.
-recvStrFrom :: Socket -> Int -> IO (L.ByteString, Int, SockAddr)
-recvStrFrom s len = do
-  (str, (r, addr)) <- S.createAndTrim' (max 0 len) callRecv
-  return (L.fromChunks [str], r, addr)
-    where
-      callRecv ptr = do (r, addr) <- recvBufFrom s ptr len
-                        return (0, max r 0, (r, addr))
+-- | @SendRecvString@ is the class of string-like objects that can be
+-- used with datagram sockets.  The 'genSendTo' method works around a
+-- bug in the standard Haskell libraries that makes it hard to use
+-- connected datagram sockets, by calling the @send@ (rather than
+-- @sendto@) system call when the destination address is 'Nothing'.
+class SendRecvString t where
+    genRecvFrom :: Socket -> Int -> IO (t, Int, SockAddr)
+    genSendTo :: Socket -> t -> Maybe SockAddr -> IO Int
 
--- | Calls the /send/ system call with the contents of a lazy
--- 'Bytestring'.  This is required for connected datagram sockets, as
--- the 'SendTo' haskell function does not allow for a NULL destination
--- address pointer.
-sendStr :: Socket -> L.ByteString -> IO Int
-sendStr (MkSocket s _ _ _ _) str = do
-  r <- S.unsafeUseAsCStringLen (S.concat $ L.toChunks str) $
-       \(p, n) -> c_send s p (fromIntegral n) 0
-  return $ fromIntegral r
+instance SendRecvString [Char] where
+    genRecvFrom s len = recvFrom s len
+    genSendTo s str Nothing = send s str
+    genSendTo s str (Just dest) = sendTo s str dest
+
+instance SendRecvString S.ByteString where
+    genRecvFrom s len = do
+      (str, (r, addr)) <- S.createAndTrim' (max 0 len) callRecv
+      return (str, r, addr)
+        where
+          callRecv ptr = do (r, addr) <- recvBufFrom s ptr len
+                            return (0, max r 0, (r, addr))
+    genSendTo (MkSocket s _ _ _ _) str Nothing = do
+      r <- S.unsafeUseAsCStringLen str $
+           \(p, n) -> c_send s p (fromIntegral n) 0
+      return $ fromIntegral r
+    genSendTo s str (Just dest) = do
+      S.unsafeUseAsCStringLen str $ \(p, n) -> sendBufTo s p n dest
+
+instance SendRecvString L.ByteString where
+    genRecvFrom s len = do
+      (str, r, addr) <- genRecvFrom s len
+      return (L.fromChunks [str], r, addr)
+    -- XXX should to sendTo in terms of sendmsg to use iovecs
+    genSendTo s str mdest = genSendTo s (S.concat $ L.toChunks str) mdest
+
 
 -- | Flushes a file handle and calls the /shutdown/ system call so as
 -- to write an EOF to a socket while still being able to read from it.

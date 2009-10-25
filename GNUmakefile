@@ -1,7 +1,10 @@
 
 TARGETS = Examples/fgrep
 
-all: $(TARGETS)
+all: $(TARGETS) Setup
+	./Setup configure --user
+	./Setup build
+
 .PHONY: all always clean doc
 
 WALL = -Wall -Werror

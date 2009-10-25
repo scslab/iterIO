@@ -47,7 +47,7 @@ safeLineI = IterF $ return . doline L.empty
               (l, r) = L8.break eol acc'
           in case () of
                () | eof && L.null r ->
-                      Done Nothing (Chunk acc eof)
+                      Done Nothing (Chunk acc' eof)
                   | not eof && (L.null r || r == L8.singleton '\r') ->
                       IterF $ return . doline acc'
                   | L.take 2 r == L8.pack "\r\n" ->
@@ -101,7 +101,7 @@ handleI h = putI (liftIO . L.hPut h) (liftIO $ hShutdown h 1)
 enumDgram :: (MonadIO m) => Socket
           -> EnumO [L.ByteString] m a
 enumDgram sock = enumO $ do
-                   (msg, r, _) <- liftIO $ recvStrFrom sock 0x10000
+                   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
                    return $ if r < 0 then chunkEOF else chunk [msg]
 
 -- | Read datagrams from a socket and feed a list of (Bytestring,
@@ -109,7 +109,7 @@ enumDgram sock = enumO $ do
 enumDgramFrom :: (MonadIO m) => Socket
           -> EnumO [(L.ByteString, SockAddr)] m a
 enumDgramFrom sock = enumO $ do
-  (msg, r, addr) <- liftIO $ recvStrFrom sock 0x10000
+  (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
   return $ if r < 0 then chunkEOF else chunk [(msg, addr)]
 
 -- | Feed data from a file handle into an Iteratee.

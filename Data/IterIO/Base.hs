@@ -217,14 +217,12 @@ getIterError (EnumOFail e _) = e
 getIterError (EnumIFail e _) = e
 getIterError _               = error "getIterError: no error to extract"
 
-{-
 isIterError :: Iter t m a -> Bool
 isIterError (IterF _)       = False
 isIterError (Done _ _)      = False
 isIterError (IterFail _)    = True
 isIterError (EnumOFail _ _) = True
 isIterError (EnumIFail _ _) = True
--}
 
 isIterEOFError :: Iter t m a -> Bool
 isIterEOFError (IterF _) = False
@@ -379,26 +377,18 @@ chunkI = IterF $ \c@(Chunk t eof) -> return $
          if null t && not eof then chunkI else Done c (Chunk mempty eof)
 
 -- | Wrap a function around an 'Iter' to transform its result.  The
--- function may take a result (in the 'Done' state) and return another
--- 'IterF', for instance if it needs to perform IO via the 'liftIO'
--- function.  However, if the function does return an iter in the
--- 'IterF' state, it is immediately fed an EOF so as to produce
--- another result.
+-- 'Iter' will be fed data as usual, then fed to the function the
+-- first time it enters a state other than 'IterF'.
 wrapI :: (ChunkData t, Monad m) =>
          (Iter t m a -> Iter t m b)
       -> Iter t m a
       -> Iter t m b
-wrapI f iter = join $ lift $ wrapIter (return . f) iter
-
-wrapIter :: (ChunkData t, Monad m) =>
-            (Iter t m a -> m (Iter t m b))
-         -> Iter t m a
-         -> m (Iter t m b)
-wrapIter f iter@(IterF _) = return $ IterF $ runIter iter >=> wrapIter f
-wrapIter f iter = f iter >>= rerun
+wrapI f iter@(IterF _) =
+    IterF $ \c@(Chunk _ eof) -> runIter iter c >>= rewrap eof
     where
-      rerun iter'@(IterF _) = runIter iter' chunkEOF
-      rerun iter'           = return iter'
+      rewrap _ iter'@(IterF _) = return $ wrapI f iter'
+      rewrap eof iter'         = runIter (f iter') (Chunk mempty eof)
+wrapI f iter = f iter
 
 -- | Runs an Iteratee from within another iteratee (feeding it EOF if
 -- it is in the 'IterF' state) so as to extract a return value.  The
@@ -423,17 +413,17 @@ joinI (EnumIFail e i) = EnumOFail e i
 joinI (EnumOFail e i) = EnumOFail e $ joinI i
 
 -- | Allows you to look at the state of an 'Iter' by returning it into
--- another monad.  This is just like the monadic 'return' method,
--- except that @joinI@ additionally executes the 'Iter' on empty chunk
--- if it is in the 'IterF' state.  Thus, you can, for instance, say
--- @liftI $ liftIO $ ...@ and the IO action will actually execute at
--- that point.
-liftI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-         Iter tIn m a
-      -> Iter tOut m (Iter tIn m a)
-liftI iter@(IterF _) =
+-- an 'Iter' monad.  This is just like the monadic 'return' method,
+-- except that, if the 'Iter' is in the 'IterF' state, then @returnI@
+-- additionally feeds it an empty chunk.  Thus 'Iter's that do not
+-- require data, such as @returnI $ liftIO $ ...@, will execute and
+-- return a result (possibly reflecting exceptions) immediately.
+returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
+           Iter tIn m a
+        -> Iter tOut m (Iter tIn m a)
+returnI iter@(IterF _) =
     IterF $ \c -> runIter iter mempty >>= return . flip Done c
-liftI iter = return iter
+returnI iter = return iter
 
 -- | Return the the first element when the Iteratee data type is a list.
 headI :: (Monad m) => Iter [a] m a
@@ -501,7 +491,7 @@ type EnumO t m a = Iter t m a -> Iter t m a
 -- side-effect of @a@.
 cat :: (Monad m, ChunkData t) => EnumO t m a -> EnumO t m a -> EnumO t m a
 cat a b iter = do
-  iter' <- liftI $ a iter
+  iter' <- returnI $ a iter
   case iter' of
     IterF _ -> b iter'
     _       -> iter'
@@ -575,7 +565,7 @@ enumObracket :: (Monad m, ChunkData t) =>
              -> EnumO t m a
 enumObracket before after input iter = do
   b <- runI before
-  result <- liftI $ enumO (input b) iter
+  result <- returnI $ enumO (input b) iter
   runI (after b)
   result
 
@@ -610,8 +600,12 @@ enumO' :: (Monad m, ChunkData t) =>
        -> EnumO t m a
 enumO' input iter = enumO (liftM (flip Chunk False) input) iter
 
--- | Build an inner enumerator given an Iteratee that produces chunks
--- of the appropriate type.
+-- | Build an inner enumerator given a codec 'Iter' that returns
+-- chunks of the appropriate type.  Makes an effort to send an EOF to
+-- the codec if the inner 'Iter' fails, so as to facilitate cleanup.
+-- However, if a containing 'EnumO' or 'EnumI' fails, code handling
+-- that failure will have to send an EOF or the codec will not be able
+-- to clean up.
 enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
          Iter tOut m (Chunk tIn)
       -- ^ This Iteratee will be executed repeatedly to produce
@@ -631,7 +625,10 @@ enumI codec0 = enumI1 codec0
                   _ | eof || eof' -> return $ Done iter' cOut'
                   IterF _ | null cOut' -> return $ enumI1 codec0 iter'
                   IterF _ -> feedCodec codec0 iter' cOut'
-                  _ -> return $ Done iter' cOut'
+                  _ -> do codec'' <- runIter codec' chunkEOF
+                          if isIterError codec'' && not (isIterEOFError codec'')
+                            then return $ EnumIFail (getIterError codec'') iter'
+                            else return $ Done iter' cOut'
           _ | isIterEOFError codec' -> return $ return iter
           _ -> return $ EnumIFail (getIterError codec') iter
 
@@ -648,15 +645,15 @@ enumI' codec iter = enumI (liftM (flip Chunk False) codec) iter
 -- Basic outer enumerators
 --
 
--- | Enumerator that feeds pure data to iterators
+-- | An 'EnumO' that will feed pure data to 'Iter's.
 enumPure :: (Monad m, ChunkData t) => t -> EnumO t m a
 enumPure t = enumO $ return $ Chunk t True
 
--- | Create a loop-back (iteratee, outer-enumerator) pair.  The
--- iteratee and enumerator can be used in different threads.  Any
--- chunks fed to the iteratee will be fed by the enumerator into
--- whatever iteratee it is given.  This is useful for testing a
--- protocol implementation against itself.
+-- | Create a loopback @('Iter', 'EnumO')@ pair.  The iteratee and
+-- enumerator can be used in different threads.  Any data fed into the
+-- 'Iter' will in turn be fed by the 'EnumO' into whatever 'Iter' it
+-- is given.  This is useful for testing a protocol implementation
+-- against itself.
 iterLoop :: (MonadIO m, ChunkData t, Show t) =>
             m (Iter t m (), EnumO t m a)
 iterLoop = do
@@ -685,15 +682,14 @@ iterLoop = do
 -- Basic inner enumerators
 --
 
--- | The null inner enumerator.  Passes input through to another
--- iteratee.  On EOF returns the iteratee (without passing through the
--- EOF).  Also returns immediately should the inner iteratee return a
--- value or error.
+-- | The null 'EnumI', which passes data through to another iteratee
+-- unmodified.
 inumNop :: (ChunkData t, Monad m) => EnumI t t m a
 inumNop = enumI chunkI
-            
--- | Returns an Iteratee that can be written from multiple threads, as
--- long as the inner iteratee does not throw an exception.
+
+-- | Returns an 'Iter' that always returns itself until a result is
+-- produced.  You can fuse this to another 'Iter' to produce an 'Iter'
+-- that can safely be written from multiple threads.
 inumSplit :: (MonadIO m, ChunkData t) => EnumI t t m a
 inumSplit iter1 = do
   mv <- liftIO $ newMVar $ iter1
