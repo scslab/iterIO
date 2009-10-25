@@ -15,15 +15,20 @@ Description:
 
         Iteratee-based IO is an alternative to lazy IO that offers
         better error handling, referential transparency, and
-        convenient composition of protocol layers or parsers.  The
-        approach was originally advocated by Oleg Kiselyov (see talk
-        slides at <http://okmij.org/ftp/Streams.html#iteratee>).  The
-        original implementation by Kiselyov and John W. Lato was
-        simply called /iteratee/
-        (<http://hackage.haskell.org/package/iteratee>).  This package
-        is a from-scratch re-implementation of the iteratee concepts
-        with a completely new interface, in an effort to simplify many
-        the abstractions and make them easier to use.
+        convenient composition of protocol layers or parsers.  New
+        users should see the tutorial in the "Data.IterIO" module
+        documentation.  The approach was originally advocated by Oleg
+        Kiselyov (see talk slides at
+        <http://okmij.org/ftp/Streams.html#iteratee>).  The original
+        implementation by Kiselyov and John Lato was simply called
+        /iteratee/ (<http://hackage.haskell.org/package/iteratee>).
+        This package is a from-scratch re-implementation of the
+        iteratee concepts with a completely new interface, in an
+        effort to simplify many the abstractions and make them easier
+        to use.  The author of this package is particularly
+        greatefulto John Lato, who helped him understand much of the
+        important design rationale behind the original iteratee
+        package.
 
 Library
   Build-Depends: base >= 4 && < 5,

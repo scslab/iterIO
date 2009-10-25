@@ -1,10 +1,10 @@
 
 -- | This is the main module to import for the IterIO package.  It
 -- exports several other internal modules.  The module's documentation
--- gives a high-level overview of Iteratee-based that is intended more
--- as an introduction than as a reference.  See the "Data.IterIO.Base"
--- and "Data.IterIO.ListLike" modules for documetation of individual
--- functions.
+-- gives a high-level overview of the iteratee model, intended more as
+-- an introduction than as a reference.  See the "Data.IterIO.Base"
+-- and "Data.IterIO.ListLike" modules for more detailed documetation
+-- of data structures and functions.
 module Data.IterIO
     (module Data.IterIO.Base
     , module Data.IterIO.ListLike
@@ -46,7 +46,7 @@ Here is a simple example:
 'enumFile' enumerates the contents of a file.  'lineI' returns a line
 of input (discarding the newline).  '|$' is the /pipe apply/ operator
 that applies an 'EnumO' to an 'Iter', returning the result of the
-'Iter'--in this case is the first line of the file @path@.
+'Iter'--in this case is the first line of the file named @path@.
 
 An `Iter`'s main purpose may not be to produce a result.  Some 'Iter's
 are primarily useful for their side effects.  For example, 'handleI'
@@ -59,12 +59,12 @@ contents of a file to standard output:
     catFile path = 'enumFile'' path '|$' 'handleI' stdout
 @
 
-'enumFile'' is like 'enumFile' above, but always returns data using
-the lazy 'ByteString' type, which is more efficient than plain
+'enumFile'' is like 'enumFile' above, but type restricted to data in
+the lazy 'ByteString' format, which is more efficient than plain
 'String's.  ('enumFile' supports multiple types, but in this example
 there is not enough enformation for Haskell to choose one of them, so
 we must use 'enumfile'' or use a cast.)  Once again, '|$' is used to
-execute the IO actions, but this time, the return value is just @()@;
+execute the IO actions, but, this time, the return value is just @()@;
 the interesting action lies in the side effects of writing data to
 standard output while iterating over the input with 'handleI'.
 
@@ -94,17 +94,22 @@ the @lines2I@ function:  @'Iter' String m (String, String)@.  The
 'String' in this case, specifies the type of input expected by the
 iteratee.  The last type, @(String, String)@ in this case, specifies
 the result type of the iteratee.  Finally, the middle type, @m@, is a
-monad, because @'Iter' t@ (for an input type @t@) is a monad
+monad, because @'Iter' t@ (for a given input type @t@) is a monad
 transformer.  In this case, when @head2File@ invokes @lines2I@, @m@
 will be @IO@, because @head2File@ is returning a result in the @IO@
 monad.  However, @lines2I@ would work equally well with any other
 monad.
 
-Next notice how @'Iter' String m@ works as a monad.  The type of
-'lineI' in the above example is @'Iter' String m String@.  The
-@lines2I@ function executes 'lineI' twice using monadic @do@ syntax,
-then injects a pair of strings into the @'Iter' String m@ monad with
-@return@.
+Next notice the functioning of @'Iter' String m@ as a monad.  The type
+of 'lineI' in the above example is @'Iter' String m String@.  The
+@lines2I@ function executes 'lineI' twice using monadic @do@ syntax to
+bind the result to @line1@ and @line2@.  The monadic bind operator
+hides the details of IO chunk boundaries.  If, for instance, 'lineI'
+needs more input because a newline character has not yet yet been
+read, 'lineI' returns to the containing enumerator asking for more
+data.  If 'lineI' receives more than a line of input, it simply passes
+the unused input on to the next iteratee.  Both of these actions are
+hidden by the syntax, making most code much easier to read and write.
 
 That explains the 'Iter' type.  'EnumO' has the same three type
 arguments.  Thus, the type of 'enumFile' is @'enumFile' :: 'EnumO'
@@ -165,6 +170,9 @@ pipeline stages are going to be considering the file one line at a
 time, let's first build an 'EnumI' to separate input into lines:
 
 @
+    -- | Break input into lines of type S.ByteString, as this type
+    -- works most conveniently with regular expressions.  (Otherwise,
+    -- we would prefer lazy ByteStrings.)
     inumToLines :: (Monad m) => 'EnumI' S.ByteString [S.ByteString] m a
     inumToLines = 'enumI'' $ do
                     line <- 'lineI'
@@ -183,27 +191,28 @@ per line of the file.
 
 (Note that data is often viewed as flowing inwards from an outer
 enumerator, through inner enumerators, to iteratees.  Thus, inner
-enumerators often have types with names like @tOut@ and @tIn@, where
-@tOut@ is the outer data type, i.e., the input type of the inner
-enumerator.  Generally you should read @tOut@ and @tIn@ as "outer
-type" and "inner type", which is unfortunately the opposite of "output
-type" and "input type".)
+enumerators often have types like @'EnumI' tOut tIn m a@, where @tOut@
+is the outer data type, i.e., the input type of the inner enumerator.
+You should read @tOut@ and @tIn@ as \"outer type\" and \"inner type\",
+which is unfortunately the opposite of \"output type\" and \"input
+type\".)
 
 
 Inner-enumerators are generally constructed using either 'enumI' or
 `enumI'`, and by convention most 'EnumI' functions have names starting
-@inum@.  'enumI'' takes an argument of type @Iter t1 m t2@ that
-transcodes type @t1@ to type @t2@.  (In this case, @t1@ is
+\"@inum@...\".  'enumI'' takes an argument of type @Iter t1 m t2@ that
+transcodes type @t1@ to type @t2@.  (For @inumToLines@, @t1@ is
 @S.ByteString@ and @t2@ is @[S.ByteString]@).  'enumI' is like
 `enumI'`, but returns data 'Chunk's, the library's internal
 representation for data that allows finer-grained control of EOF
-conditions.  In this example, we just to let 'lineI' throw an
-exception on EOF and `enumI'` will do the right thing.
+conditions.  In @inumToLines@, we are happy just just to let 'lineI'
+throw an exception on EOF, as `enumI'` will do the right thing.
 
 We similarly define an 'EnumI' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),
-and a simple 'EnumI' to count list elements (since @lineCountI@ has
-the wrong type after we break files into lines with @inumToLines@):
+and a simple 'EnumI' to count list elements (since @lineCountI ::
+'Iter' String m Int@ has data type @String@, while after @inumToLines@
+we need an 'Iter' with input type @[S.ByteString]@).
 
 @
     inumGrep :: (Monad m) => String -> 'EnumI' [S.ByteString] [S.ByteString] m a
@@ -272,7 +281,7 @@ been implemented almost equivalently as:
                     '|..' inumToLines
                     '|..' inumGrep \"kk\"
                     '|..' inumGrep \"^[a-z]\"
-                '|$' lengthI
+                 '|$' lengthI
 @
 
 The difference lies in the error handling.  The library distinguishes
