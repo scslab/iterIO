@@ -74,8 +74,9 @@ feedI enum t iter = do
 -- | @SendRecvString@ is the class of string-like objects that can be
 -- used with datagram sockets.  The 'genSendTo' method works around a
 -- bug in the standard Haskell libraries that makes it hard to use
--- connected datagram sockets, by calling the @send@ (rather than
--- @sendto@) system call when the destination address is 'Nothing'.
+-- connected datagram sockets.  'genSendTo' accepts 'Nothing' as a
+-- destination address and then calls the @send@ (rather than
+-- @sendto@) system call.
 class SendRecvString t where
     genRecvFrom :: Socket -> Int -> IO (t, Int, SockAddr)
     genSendTo :: Socket -> t -> Maybe SockAddr -> IO Int
@@ -109,6 +110,11 @@ instance SendRecvString L.ByteString where
 
 -- | Flushes a file handle and calls the /shutdown/ system call so as
 -- to write an EOF to a socket while still being able to read from it.
+-- This is very important when the same file handle is being used to
+-- to read data in an 'EnumO' and to write data in an 'Iter'.  Proper
+-- protocol functioning may require the 'Iter' to send an EOF over the
+-- socket, but the 'EnumO' may still be reading from the socket in a
+-- differen tthread.
 hShutdown                            :: Handle -> CInt -> IO Int
 hShutdown h@(FileHandle _ m) how     = hFlush h >> hShutdown' m how
 hShutdown h@(DuplexHandle _ _ m) how = hFlush h >> hShutdown' m how
