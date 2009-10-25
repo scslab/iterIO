@@ -5,8 +5,16 @@ module Main
     ) where
 
 import Control.Monad.Trans
-import System.FilePath
+import Data.Maybe
+import Data.Monoid
+import qualified Data.ByteString.Char8 as S8
+import qualified Data.ByteString as S
+import qualified Data.ByteString.Lazy.Char8 as L8
+import qualified Data.ByteString.Lazy as L
+-- import System.FilePath
 import System.IO
+import Text.Regex.Posix
+import Text.Regex.Posix.ByteString
 
 import Data.IterIO
 
@@ -28,12 +36,63 @@ lines2I = do
   line2 <- lineI
   return (line1, line2)
 
-liftIOexample :: Iter String IO ()
-liftIOexample = do
+liftIOexampleI :: (MonadIO m) => Iter String m ()
+liftIOexampleI = do
   line <- lineI
   liftIO $ putStrLn $ "First line is: " ++ line
   next <- stringExactI 40
   liftIO $ putStrLn $ "And the next 40 bytes are: " ++ next
 
+lineCountI :: (Monad m) => Iter String m Int
+lineCountI = count 0
+    where
+      count n = do
+        line <- safeLineI
+        case line of
+          Just _  -> count (n+1)
+          Nothing -> return n
+
+
+inumGrep' :: (MonadIO m) => String -> EnumI L.ByteString L.ByteString m a
+inumGrep' re iter = do
+  Right cre <- liftIO $ compile 0 0 $ S8.pack re
+  flip enumI' iter $ do
+    line <- lineI
+    Right match <- liftIO $ execute cre (S.concat $ L.toChunks line)
+    return $ if isJust match
+             then L8.snoc line '\n'
+             else mempty
+
+grepCount :: IO Int
+grepCount = enumFile "/usr/share/dict/words"
+                   `cat` enumFile "/usr/share/dict/extra.words"
+                |.. inumToLines
+            |$ inumGrep "kk"
+                ..| inumGrep "^[a-z]"
+                ..| lengthI
+
+inumToLines :: (Monad m) => EnumI S.ByteString [S.ByteString] m a
+inumToLines = enumI' $ do
+                line <- lineI
+                return [line]
+
+inumGrep :: (Monad m) => String -> EnumI [S.ByteString] [S.ByteString] m a
+inumGrep re = enumI' $ do
+  line <- headI
+  return $ if line =~ packedRe then [line] else []
+    where
+      packedRe = S8.pack re
+
+lengthI :: (Monad m) => Iter [t] m Int
+lengthI = count 0
+    where
+      count n = do
+        line <- safeHeadI
+        case line of
+          Just _  -> count (n+1)
+          Nothing -> return n
+
 main :: IO ()
-main = return ()
+main = do
+  n <- grepCount
+  putStrLn $ show n

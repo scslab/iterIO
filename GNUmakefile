@@ -6,7 +6,7 @@ all: $(TARGETS) Setup
 	./Setup configure --user
 	./Setup build
 
-.PHONY: all always clean doc
+.PHONY: all always clean doc browse
 
 GHC = ghc -XForeignFunctionInterface -XFlexibleInstances $(WALL)
 WALL = -Wall -Werror
@@ -26,6 +26,9 @@ Setup: Setup.hs
 doc: Setup
 	./Setup configure --user
 	./Setup haddock --hyperlink-source
+
+browse: doc
+	firefox dist/doc/html/iterIO/index.html
 
 clean:
 	rm -rf $(TARGETS) Setup dist

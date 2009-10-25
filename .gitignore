@@ -2,6 +2,7 @@
 *.o
 *~
 /Examples/fgrep
+/Examples/simple
 /Examples/reliable/reference
 /Examples/reliable/tester
 /Setup

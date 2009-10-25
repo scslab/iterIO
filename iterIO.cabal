@@ -10,20 +10,20 @@ Maintainer:     http://www.scs.stanford.edu/~dm/addr/
 Category:       System, Data
 Synopsis:       Iteratee-based IO with simple pipe operators
 Extra-source-files:
-        Examples/fgrep.hs
+        Examples/simple.hs, Examples/fgrep.hs
 Description:
 
         Iteratee-based IO is an alternative to lazy IO that offers
         better error handling, referential transparency, and
         convenient composition of protocol layers or parsers.  The
         approach was originally advocated by Oleg Kiselyov (see talk
-        slides here <http://okmij.org/ftp/Streams.html#iteratee>).
-        The original implementation by Kiselyov and John W. Lato was
+        slides at <http://okmij.org/ftp/Streams.html#iteratee>).  The
+        original implementation by Kiselyov and John W. Lato was
         simply called /iteratee/
         (<http://hackage.haskell.org/package/iteratee>).  This package
-        is a complete re-write of iteratee from scratch, in an effort
-        to simplify many of the abstractions and make them easier to
-        use.
+        is a from-scratch re-implementation of the iteratee concepts
+        with a completely new interface, in an effort to simplify many
+        the abstractions and make them easier to use.
 
 Library
   Build-Depends: base >= 4 && < 5,

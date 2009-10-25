@@ -530,7 +530,7 @@ infixr 4 `catI`
       -> EnumI tOut tIn m a
       -> EnumO tIn m a
 (|..) outer inner iter = joinI $ outer $ inner iter
-infixr 3 |..
+infixl 3 |..
 
 -- | Fuse two inner enumerators into one.
 (..|..) :: (ChunkData tOut, ChunkData tMid, ChunkData tIn, Monad m) => 
