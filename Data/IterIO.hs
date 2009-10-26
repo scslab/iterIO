@@ -131,7 +131,7 @@ Here is an example of an 'Iter' with side effects:
 @
 
 Unlike @lines2I@, @liftIOexampleI@ does not return any interesting
-result, but it uses the 'liftIO' monad transformer method to output
+result, but it uses the @'liftIO'@ monad transformer method to output
 the first line of the file, followed by the next 40 bytes.  The
 'stringExactI' returns a 'String' (or 'ByteString') with exactly the
 requested number of bytes, unless an EOF (end-of-file) is encountered.
@@ -325,10 +325,18 @@ Error handling is provided by the 'catchI' and 'throwI' functions,
 which are roughly equivalent to the standard library 'catch' and
 'throwIO' functions.  Because 'catch' only works in the IO monad,
 'catchI' works by propagating synchronous exceptions through the
-'Iter' monad.  'liftIO' transforms IO errors into such synchronous
+'Iter' monad.  @'liftIO'@ transforms IO errors into such synchronous
 exceptions.  Unfortunately, there is currently no way to handle
 asynchronous exceptions such as those that arise in lazily evaluated
 pure code (e.g., divide by zero) or those thrown by another thread
-using 'throwTo'.
+using @'throwTo'@.
+
+@
+    enumFileCatchError :: (MonadIO m) => FilePath -> 'EnumO' L.ByteString m a
+    enumFileCatchError file = 'handlerI' printErrorAndResume . 'enumFile' file
+        where
+          printErrorAndResume (SomeException _) iter = 'verboseResumeI' iter
+@
+
 
 -}

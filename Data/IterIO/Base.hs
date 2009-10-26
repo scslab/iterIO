@@ -660,11 +660,27 @@ infixr 4 ..|
 
 -- | Build an 'EnumO' from a @before@ action, an @after@ function, and
 -- an @input@ function in a manner analogous to the IO 'bracket'
--- function.
+-- function.  For instance, you might implement `enumFile'` as
+-- follows:
+--
+-- >   enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
+-- >   enumFile' path =
+-- >     enumObracket (liftIO $ openFile path ReadMode) (liftIO $ hClose) doget
+-- >       where
+-- >         doget h = do
+-- >           buf <- liftIO $ L.hGet h 8192
+-- >           if (L.null buf)
+-- >             then return chunkEOF
+-- >             else return $ chunk buf
+--
 enumObracket :: (Monad m, ChunkData t) =>
                 (Iter () m b)
+             -- ^ Before action
              -> (b -> Iter () m c)
+             -- ^ After action, as function of before action result
              -> (b -> Iter () m (Chunk t))
+             -- ^ Chunk generating function, as a funciton of before
+             -- aciton result
              -> EnumO t m a
 enumObracket before after input iter = do
   eb <- tryI $ runI before
