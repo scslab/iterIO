@@ -4,6 +4,7 @@ module Main
     , module Data.IterIO
     ) where
 
+import Control.Exception ()
 import Control.Monad.Trans
 import Data.Maybe
 import Data.Monoid
@@ -90,6 +91,8 @@ lengthI = count 0
         case line of
           Just _  -> count (n+1)
           Nothing -> return n
+
+-- onExceptionI iter cleanup = iter `catchI` \(SomeException _) iter' -> cleanup >> iter'
 
 main :: IO ()
 main = do

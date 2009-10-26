@@ -31,6 +31,26 @@ dataToChunk t = Chunk t $ null t
 -- Iters
 --
 
+-- | Like 'headI', but works for any 'LL.ListLike' data type.
+headLikeI :: (ChunkData t, LL.ListLike t e, Monad m) =>
+             Iter t m e
+headLikeI = do
+  c <- chunkI
+  case c of
+    Chunk t False | null t -> headLikeI
+    Chunk t True  | null t -> throwEOFI "headLikeI"
+    Chunk t eof            -> Done (LL.head t) $ Chunk (LL.tail t) eof
+
+-- | Like 'safeHeadI', but works for any 'LL.ListLike' data type.
+safeHeadLikeI :: (ChunkData t, LL.ListLike t e, Monad m) =>
+                 Iter t m (Maybe e)
+safeHeadLikeI = do
+  c <- chunkI
+  case c of
+    Chunk t False | null t -> safeHeadLikeI
+    Chunk t True  | null t -> Done Nothing $ Chunk t True
+    Chunk t eof            -> Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
+
 -- | Like 'lineI', but returns 'Nothing' on EOF.
 safeLineI :: (Monad m, LL.ListLike t e, LL.StringLike t, Eq t, Enum e, Eq e) =>
              Iter t m (Maybe t)

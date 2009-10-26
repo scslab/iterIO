@@ -75,11 +75,13 @@ module Data.IterIO.Base
     , (|..), (..|..), (..|)
     -- * Enumerator construction functions
     , enumO, enumO', enumObracket, enumI, enumI'
+    -- * Predicates on iteratees
+    , isIterError, isEnumError
     -- * Other functions
     , iterLoop
     , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
-    , throwI, throwEOFI, catchI
+    , throwI, throwEOFI, catchI, handlerI, resumeI
     , nullI, chunkI
     , wrapI, runI, joinI
     , headI, safeHeadI
@@ -216,12 +218,19 @@ getIterError (EnumOFail e _) = e
 getIterError (EnumIFail e _) = e
 getIterError _               = error "getIterError: no error to extract"
 
+-- | True if an iteratee or enclosing enumerator has experienced a
+-- failure.
 isIterError :: Iter t m a -> Bool
 isIterError (IterF _)       = False
 isIterError (Done _ _)      = False
-isIterError (IterFail _)    = True
-isIterError (EnumOFail _ _) = True
-isIterError (EnumIFail _ _) = True
+isIterError _               = True
+
+-- | True if an enumerator enclosing an iteratee has experience a
+-- failure (but not if the iteratee itself failed).
+isEnumError :: Iter t m a -> Bool
+isEnumError (EnumOFail _ _) = True
+isEnumError (EnumIFail _ _) = True
+isEnumError _               = False
 
 isIterEOFError :: Iter t m a -> Bool
 isIterEOFError (IterF _) = False
@@ -350,10 +359,39 @@ throwEOFI :: (Monad m) => String -> Iter t m a
 throwEOFI loc = throwI $ mkIOError eofErrorType loc Nothing Nothing
 
 -- | Catch an exception thrown by an 'Iter'.  Returns the failed
--- 'Iter' that threw the exception.
+-- 'Iter' state, which may contain more information than just the
+-- exception.  For instance, if the exception occured in an
+-- enumerator, the returned 'Iter' will also contain an unfailed inner
+-- 'Iter' that has not failed.  To avoid discarting this extra
+-- information, you should not re-throw exceptions with 'throwI'.
+-- Rather, you should re-throw an exception by re-executing the failed
+-- 'Iter'.  For example, you could define an @onExceptionI@ function
+-- analogous to the standard library 'onException' as follows:
+--
+-- > onExceptionI iter cleanup =
+-- >     iter `catchI` \(SomeException _) iter' -> cleanup >> iter'
+--
+-- If you wish to continue processing the iteratee after a failure in
+-- an enumerator, use the 'resumeI' function.  For example:
+--
+-- > action `catchI` \(SomeException e) iter ->
+-- >     if isEnumError iter
+-- >       then do liftIO $ putStrLn $ "enumerator failure: " ++ show e
+-- >               resumeI iter
+-- >       else iter
+--
+-- Note that @catchI@ only works for /synchronous/ exceptions, such as
+-- IO errors (thrown within 'liftIO' blocks), the monadic 'fail'
+-- operation, and exceptions raised by 'throwI'.  It is not possible
+-- to catch /asynchronous/ exceptions, such as lazily evaluated
+-- divide-by-zero errors, the 'throw' function, or exceptions raised
+-- by other threads using 'throwTo'.
 catchI :: (Exception e, ChunkData t, Monad m) =>
           Iter t m a
+       -- ^ 'Iter' that might throw an exception
        -> (e -> Iter t m a -> Iter t m a)
+       -- ^ Exception handler, which gets as arguments both the
+       -- exception and the failing 'Iter' state.
        -> Iter t m a
 catchI iter handler = wrapI check iter
     where
@@ -362,6 +400,26 @@ catchI iter handler = wrapI check iter
       check err              = case fromException $ getIterError err of
                                  Just e  -> handler e err
                                  Nothing -> err
+
+-- | A version of 'throwI' with the arguments reversed, analogous to
+-- 'handle' in the standard library.  (A more logical name for this
+-- function might be 'handleI', but that name is used for the file
+-- handle iteratee.)
+handlerI :: (Exception e, ChunkData t, Monad m) =>
+          (e -> Iter t m a -> Iter t m a)
+       -- ^ Exception handler
+       -> Iter t m a
+       -- ^ 'Iter' that might throw an exception
+       -> Iter t m a
+handlerI = flip catchI
+
+-- | Used in an exception handler, after an enumerator fails, to
+-- resume processing of the 'Iter' by the next enumerator in a
+-- concatenated series.
+resumeI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a
+resumeI (EnumOFail _ iter) = iter
+resumeI (EnumIFail _ iter) = return iter
+resumeI iter               = iter
 
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, Monoid t) => Iter t m ()
@@ -428,8 +486,7 @@ returnI iter = return iter
 headI :: (Monad m) => Iter [a] m a
 headI = IterF $ return . dohead
     where
-      dohead (Chunk [] True)    =
-          throwI $ mkIOError eofErrorType "headI" Nothing Nothing
+      dohead (Chunk [] True)    = throwEOFI "headI"
       dohead (Chunk [] _)       = headI
       dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
 
