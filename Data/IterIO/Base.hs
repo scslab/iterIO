@@ -81,7 +81,9 @@ module Data.IterIO.Base
     , iterLoop
     , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
-    , throwI, throwEOFI, catchI, handlerI, resumeI
+    , throwI, throwEOFI
+    , tryI, catchI, handlerI
+    , resumeI, verboseResumeI
     , nullI, chunkI
     , wrapI, runI, joinI
     , headI, safeHeadI
@@ -103,6 +105,8 @@ import Data.IORef
 import Data.Monoid
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
+import System.Environment
+import System.IO
 import System.IO.Error (mkIOError, eofErrorType, isEOFError)
 import System.IO.Unsafe
 
@@ -161,6 +165,18 @@ data Iter t m a = IterF (Chunk t -> m (Iter t m a))
                 | EnumIFail SomeException a
                 -- ^ Inner enumerator failed, includes status of Iteratee
 
+instance (ChunkData t) => Show (Iter t m a) where
+    showsPrec _ (IterF _) rest = "IterF _" ++ rest
+    showsPrec _ (Done _ (Chunk t eof)) rest =
+        "Done _ (Chunk " ++ (if null t then "mempty " else "_ ")
+                         ++ show eof ++ ")" ++ rest
+    showsPrec _ (IterFail e) rest = "IterFail " ++ show e ++ rest
+    showsPrec _ (EnumOFail e i) rest =
+        "EnumOFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
+    showsPrec _ (EnumIFail e _) rest =
+        "EnumIFail " ++ show e ++ " _" ++ rest
+
+{-
 instance (Show t, Show a) => Show (Iter t m a) where
     showsPrec _ (IterF _) rest = "IterF" ++ rest
     showsPrec _ (Done a c) rest = "Done (" ++ show a ++ ") " ++ show c ++ rest
@@ -169,6 +185,7 @@ instance (Show t, Show a) => Show (Iter t m a) where
         "EnumOFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
     showsPrec _ (EnumIFail e i) rest =
         "EnumIFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
+-}
 
 -- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is
 -- already 'Done', or in some error condition, simulates the behavior
@@ -218,8 +235,9 @@ getIterError (EnumOFail e _) = e
 getIterError (EnumIFail e _) = e
 getIterError _               = error "getIterError: no error to extract"
 
--- | True if an iteratee or enclosing enumerator has experienced a
--- failure.
+-- | True if an iteratee /or/ an enclosing enumerator has experienced
+-- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
+-- 'True', but the converse is not true.
 isIterError :: Iter t m a -> Bool
 isIterError (IterF _)       = False
 isIterError (Done _ _)      = False
@@ -358,6 +376,21 @@ throwI e = IterFail $ toException e
 throwEOFI :: (Monad m) => String -> Iter t m a
 throwEOFI loc = throwI $ mkIOError eofErrorType loc Nothing Nothing
 
+-- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
+-- the 'Iter' throws an exception @e@, returns @'Left' e@.
+tryI :: (ChunkData t, Monad m, Exception e) =>
+        Iter t m a
+     -> Iter t m (Either e a)
+tryI = wrapI errToEiter
+    where
+      errToEiter (Done a c) = Done (Right a) c
+      errToEiter iter       = case fromException $ getIterError iter of
+                                Just e  -> return $ Left e
+                                Nothing -> fixError iter
+      fixError (EnumIFail e i) = EnumIFail e $ Right i
+      fixError (EnumOFail e i) = EnumOFail e $ liftM Right i
+      fixError iter            = IterFail $ getIterError iter
+
 -- | Catch an exception thrown by an 'Iter'.  Returns the failed
 -- 'Iter' state, which may contain more information than just the
 -- exception.  For instance, if the exception occured in an
@@ -421,6 +454,16 @@ resumeI (EnumOFail _ iter) = iter
 resumeI (EnumIFail _ iter) = return iter
 resumeI iter               = iter
 
+-- | Like 'resumeI', but if the failure was in an enumerator and the
+-- iteratee is resumable, prints an error message to standard error
+-- before invoking 'resumeI'.
+verboseResumeI :: (ChunkData t, MonadIO m) => Iter t m a -> Iter t m a
+verboseResumeI iter | isEnumError iter = do
+  prog <- liftIO $ getProgName
+  liftIO $ hPutStrLn stderr $ prog ++ ": " ++ show (getIterError iter)
+  resumeI iter
+verboseResumeI iter = iter
+
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, Monoid t) => Iter t m ()
 nullI = IterF $ return . check
@@ -444,7 +487,10 @@ wrapI f iter@(IterF _) =
     IterF $ \c@(Chunk _ eof) -> runIter iter c >>= rewrap eof
     where
       rewrap _ iter'@(IterF _) = return $ wrapI f iter'
-      rewrap eof iter'         = runIter (f iter') (Chunk mempty eof)
+      rewrap eof iter'         =
+          case f iter' of
+            i@(IterF _) -> runIter i (Chunk mempty eof)
+            i           -> return i
 wrapI f iter = f iter
 
 -- | Runs an Iteratee from within another iteratee (feeding it EOF if
@@ -621,10 +667,13 @@ enumObracket :: (Monad m, ChunkData t) =>
              -> (b -> Iter () m (Chunk t))
              -> EnumO t m a
 enumObracket before after input iter = do
-  b <- runI before
-  result <- returnI $ enumO (input b) iter
-  runI (after b)
-  result
+  eb <- tryI $ runI before
+  case eb of
+    Left e@(SomeException _) -> EnumOFail e iter
+    Right b -> do
+            result <- returnI $ enumO (input b) iter
+            runI (after b)
+            result
 
 -- | Construct an outer enumerator given a function that produces
 -- 'Chunk's of type @t@.

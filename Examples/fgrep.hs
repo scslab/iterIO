@@ -4,6 +4,7 @@ module Main where
 import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.ByteString.Lazy as L
 
+import Control.Exception
 import Control.Monad
 import Control.Monad.Trans
 import System.Environment
@@ -31,6 +32,11 @@ printLines = do
                  printLines
     Nothing -> return ()
 
+enumFileCatchError :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
+enumFileCatchError file = handlerI printErrorAndResume . enumFile file
+    where
+      printErrorAndResume (SomeException _) iter = verboseResumeI iter
+
 main :: IO ()
 main = do
   prog <- getProgName
@@ -42,6 +48,6 @@ main = do
   let pat = head av
       enum = if length av == 1
              then enumHandle stdin
-             else foldr1 cat $ map enumFile $ tail av
+             else foldr1 cat $ map enumFileCatchError $ tail av
   enum |.. filterLines pat |$ printLines
   exitSuccess

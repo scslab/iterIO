@@ -1,5 +1,20 @@
 
-module Data.IterIO.ListLike where
+-- | This module contains basic iteratees and enumerators for working
+-- with strings, 'LL.ListLike' objects, file handles, and datagram
+-- sockets.
+module Data.IterIO.ListLike
+    ( -- * Iteratees
+      headLikeI, safeHeadLikeI
+    , lineI, safeLineI
+    , stringExactI, stringMaxI
+    , handleI, sockDgramI
+    -- * Outer enumerators
+    , enumDgram, enumDgramFrom
+    , enumHandle, enumHandle'
+    , enumFile, enumFile'
+    -- * Inner enumerators
+    , inumLog, inumhLog
+    )where
 
 import Prelude hiding (null)
 import Control.Exception (onException)

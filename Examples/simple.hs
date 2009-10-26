@@ -92,8 +92,6 @@ lengthI = count 0
           Just _  -> count (n+1)
           Nothing -> return n
 
--- onExceptionI iter cleanup = iter `catchI` \(SomeException _) iter' -> cleanup >> iter'
-
 main :: IO ()
 main = do
   n <- grepCount
