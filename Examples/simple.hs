@@ -112,8 +112,27 @@ lengthI = count 0
           Just _  -> count (n+1)
           Nothing -> return n
 
+catchTest1 :: IO ()
+catchTest1 = myEnum |$ fail "bad Iter"
+    where
+      myEnum :: EnumO String IO ()
+      myEnum iter = catchI (enumPure "test" iter) handler
+      handler (SomeException _) _ = do
+        liftIO $ hPutStrLn stderr "ignoring exception"
+        return ()
+
+
 inumBad :: (ChunkData t, Monad m) => EnumI t t m a
 inumBad = enumI $ fail "inumBad"
+
+catchTest2 :: IO ()
+catchTest2 = myEnum |.. inumBad |$ nullI
+    where
+      myEnum :: EnumO String IO (Iter String IO ())
+      myEnum iter = catchI (enumPure "test" iter) handler
+      handler (SomeException _) _ = do
+        liftIO $ hPutStrLn stderr "ignoring exception"
+        return $ return ()
 
 skipError :: (ChunkData t, MonadIO m) =>
                SomeException -> Iter t m a -> Iter t m a
@@ -125,10 +144,10 @@ skipError e iter = do
 test1 :: IO ()
 test1 = enumCatch (enumPure "test") skipError |.. inumBad |$ nullI
 
--- Does not throw an exception, because enumCatch' catches
+-- Does not throw an exception, because inumCatch catches
 -- all errors, including from subsequently fused inumBad.
 test2 :: IO ()
-test2 = enumCatch' (enumPure "test") skipError |.. inumBad |$ nullI
+test2 = inumCatch (enumPure "test") skipError |.. inumBad |$ nullI
 
 -- Does not throw an exception, because inumBad fused within the
 -- argument to enumCatch.
