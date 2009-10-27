@@ -26,10 +26,10 @@ Description:
         iteratee concepts with a completely new interface, in an
         effort to simplify many the abstractions and make them easier
         to use.  The author of this package is particularly
-        greatefulto John Lato, who helped him understand much of the
+        grateful to John Lato, who helped him understand much of the
         important design rationale behind the original iteratee
         package.  The latest version of the iterIO sources is
-        available by git by executing:
+        available via git by executing:
         
         @git clone http:\/\/www.scs.stanford.edu\/~dm\/repos\/iterIO.git@
 
