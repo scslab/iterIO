@@ -4,7 +4,7 @@ module Main
     , module Data.IterIO
     ) where
 
--- import Control.Exception
+import Control.Exception
 import Control.Monad.Trans
 import Data.Maybe
 import Data.Monoid
@@ -111,6 +111,29 @@ lengthI = count 0
         case line of
           Just _  -> count (n+1)
           Nothing -> return n
+
+inumBad :: (ChunkData t, Monad m) => EnumI t t m a
+inumBad = enumI $ fail "inumBad"
+
+skipError :: (ChunkData t, MonadIO m) =>
+               SomeException -> Iter t m a -> Iter t m a
+skipError e iter = do
+  liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
+  resumeI iter
+
+-- Throws an exception
+test1 :: IO ()
+test1 = enumCatch (enumPure "test") skipError |.. inumBad |$ nullI
+
+-- Does not throw an exception, because enumCatch' catches
+-- all errors, including from subsequently fused inumBad.
+test2 :: IO ()
+test2 = enumCatch' (enumPure "test") skipError |.. inumBad |$ nullI
+
+-- Does not throw an exception, because inumBad fused within the
+-- argument to enumCatch.
+test3 :: IO ()
+test3 = enumCatch (enumPure "test" |.. inumBad) skipError |$ nullI
 
 main :: IO ()
 main = do

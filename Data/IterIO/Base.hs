@@ -773,62 +773,78 @@ enumI' codec iter = enumI (liftM (flip Chunk False) codec) iter
 enumPure :: (Monad m, ChunkData t) => t -> EnumO t m a
 enumPure t = enumO $ return $ Chunk t True
 
--- | Like 'catchI', but for 'EnumO's instead of 'Iter's.  Note that
--- this only catches exceptions that were thrown by enumerators.
--- ('catchI' catches both exceptions that are thrown by enumerators
--- and those thrown by iteratees.)  However, also note that when
--- applied to an 'EnumO', it will catch all errors thrown by any
--- 'EnumI's fused to the 'EnumO'.  This could lead to unexpected
--- results in cases like this:
+-- | Like 'catchI', but applied to 'EnumO's instead of 'Iter's.  There
+-- are three catching functions, in order of increasing generality.
 --
--- >    cat (enumFile "file1" `enumCatch` handler1)
--- >        (enumFile "file2" `enumCatch` handler2)
--- >            |.. inum
--- >    |$ somethingI
---
--- Suppose @handler1@ calls 'resumeI' to continue executing after an
--- exception.  If @inum@ throws an exception while processing @file1@,
--- the exception will be caught by @handler1@, then execution will
--- continue on @file2@, at which point the exception will be re-thrown
--- and caught for a second time by @handler2@.  If that is not what
--- you wanted, then it may have been better to write:
---
--- >    cat (enumFile "file1" `enumCatch` handler1)
--- >        (enumFile "file2" `enumCatch` handler2)
--- >    |$ inum ..| somethingI
---
--- If you want @inum@ to the left of '|$' but don't want to catch
--- errors it throes, then see `enumCatch'`.
-enumCatch :: (Exception e, ChunkData t, Monad m) =>
-             EnumO t m a
-          -- ^ 'EnumO' that might throw an exception
-          -> (e -> Iter t m a -> Iter t m a)
-          -- ^ Exception handler
-          -> EnumO t m a
-enumCatch enum handler = wrapI check . enum
+-- 'catchI' catches the most errors, including thows thrown by
+-- 'Iter's.  It's type is different from the other two, because it can
+-- be wrapped around an 'Iter' directly.  But through function
+-- composition, it can also catch enumerator errors, e.g.:
+enumCatch' :: (Exception e, ChunkData t, Monad m) =>
+              EnumO t m a
+           -- ^ 'EnumO' that might throw an exception
+           -> (e -> Iter t m a -> Iter t m a)
+           -- ^ Exception handler
+           -> EnumO t m a
+enumCatch' enum handler = wrapI check . enum
     where
-      -- check iter'@(IterF _)    = catchI iter' handler
       check iter'@(Done _ _)   = iter'
       check iter'@(IterFail _) = iter'
       check err                = case fromException $ getIterError err of
                                    Just e  -> handler e err
                                    Nothing -> err
 
--- | Catch errors thrown by an 'EnumO', but /not/ those thrown by
--- 'EnumI's fused to the output of @enumCatch'@.
-enumCatch' :: (Exception e, ChunkData t, Monad m) =>
-              EnumO t m (Iter t m a)
+-- | Like 'catchI', but for 'EnumO's instead of 'Iter's.  Note that
+-- @enumCatch@ can only catch exceptions thrown by enumerators (i.e.,
+-- stages to the left of '|$'), while 'catchI' catches both exceptions
+-- that are thrown by enumerators and those thrown by iteratees.
+--
+-- Catch errors thrown by an 'EnumO', but /not/ those thrown by
+-- 'EnumI's fused to the 'EnumO' after @enumCatch@ has been applied.
+-- If you want to catch all enumerator errors, including those from
+-- subsequently fused 'EnumI's, see the `enumCatch'` function.  For
+-- example, comare @test1@ (which throws an exception) to @test2@ and
+-- @test3@ (which do not):
+--
+-- >    inumBad :: (ChunkData t, Monad m) => EnumI t t m a
+-- >    inumBad = enumI $ fail "inumBad"
+-- >    
+-- >    skipError :: (ChunkData t, MonadIO m) =>
+-- >                 SomeException -> Iter t m a -> Iter t m a
+-- >    skipError e iter = do
+-- >      liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
+-- >      resumeI iter
+-- >    
+-- >    -- Throws an exception
+-- >    test1 :: IO ()
+-- >    test1 = enumCatch (enumPure "test") skipError |.. inumBad |$ nullI
+-- >    
+-- >    -- Does not throw an exception, because enumCatch' catches
+-- >    -- all errors, including from subsequently fused inumBad.
+-- >    test2 :: IO ()
+-- >    test2 = enumCatch' (enumPure "test") skipError |.. inumBad |$ nullI
+-- >    
+-- >    -- Does not throw an exception, because enumCatch was applied
+-- >    -- after inumBad was fused to enumPure.
+-- >    test3 :: IO ()
+-- >    test3 = enumCatch (enumPure "test" |.. inumBad) skipError |$ nullI
+--
+-- Note that both @\`enumCatch\`@ and ``enumCatch'`` have the default
+-- infix precedence (9), which binds more tightly than any
+-- concatenation or fusing operators.
+enumCatch :: (Exception e, ChunkData t, Monad m) =>
+              EnumO t m a
            -- ^ 'EnumO' that might throw an exception
            -> (e -> Iter t m a -> Iter t m a)
            -- ^ Exception handler
            -> EnumO t m a
-enumCatch' enum handler = wrapI check . enum . inumNop
+enumCatch enum handler = wrapI check . enum
     where
-      check (Done i _)   = i
-      check (IterFail e) = IterFail e
-      check err          = case fromException $ getIterError err of
-                             Just e  -> handler e $ joinI err
-                             Nothing -> joinI err
+      check iter@(EnumOFail e _) =
+          case fromException e of
+            Just e' -> handler e' iter
+            Nothing -> iter
+      check iter = iter
 
 -- | 'enumCatch' with the argument order switched.
 enumHandler :: (Exception e, ChunkData t, Monad m) =>
