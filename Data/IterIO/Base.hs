@@ -90,6 +90,7 @@ module Data.IterIO.Base
     , putI, sendI
     -- * Some basic Enumerators
     , enumPure
+    , enumCatch, enumHandler
     , inumNop, inumSplit
     ) where
 
@@ -603,12 +604,10 @@ infixr 3 `cat`
 -- enumerators that have been fused to the iteratee will be considered
 -- interatee failures.
 (|$) :: (ChunkData t, Monad m) => EnumO t m a -> Iter t m a -> m a
-(|$) enum iter =
-    run $ enum $ wrapI forceErrToIter iter
-    where
-      forceErrToIter (EnumOFail e _) = IterFail e
-      forceErrToIter (EnumIFail e _) = IterFail e
-      forceErrToIter other           = other
+(|$) enum iter = run $ enum $ wrapI (>>= return) iter
+-- The purpose of the wrapI (>>= return) is to convert any EnumIFail
+-- (or, less likely, EnumOFail) errors thrown by iter to be of type
+-- IterFail, so that catchE statements only catch enumerator failures.
 infixr 2 |$
 
 -- | An inner enumerator or transcoder.  Such a function accepts data
@@ -770,6 +769,32 @@ enumI' codec iter = enumI (liftM (flip Chunk False) codec) iter
 -- | An 'EnumO' that will feed pure data to 'Iter's.
 enumPure :: (Monad m, ChunkData t) => t -> EnumO t m a
 enumPure t = enumO $ return $ Chunk t True
+
+-- | Like 'catchI', but for 'EnumO's instead of 'Iter's.  Note that
+-- this only catches exceptions that were thrown by enumerators.
+-- ('catchI' catches both exceptions that are thrown by enumerators
+-- and those thrown by iteratees.)
+enumCatch :: (Exception e, ChunkData t, Monad m) =>
+             EnumO t m a
+          -> (e -> Iter t m a -> Iter t m a)
+          -> EnumO t m a
+enumCatch enum handler iter = wrapI check $ enum iter
+    where
+      check iter'@(IterF _)    = catchI iter' handler
+      check iter'@(Done _ _)   = iter'
+      check iter'@(IterFail _) = iter'
+      check err                = case fromException $ getIterError err of
+                                   Just e  -> handler e err
+                                   Nothing -> err
+
+-- | 'enumCatch' with the argument order switched.
+enumHandler :: (Exception e, ChunkData t, Monad m) =>
+               (e -> Iter t m a -> Iter t m a)
+            -- ^ Exception handler
+            -> EnumO t m a
+            -- ^ 'Iter' that might throw an exception
+            -> EnumO t m a
+enumHandler = flip enumCatch
 
 -- | Create a loopback @('Iter', 'EnumO')@ pair.  The iteratee and
 -- enumerator can be used in different threads.  Any data fed into the

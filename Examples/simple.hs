@@ -4,7 +4,7 @@ module Main
     , module Data.IterIO
     ) where
 
-import Control.Exception ()
+import Control.Exception
 import Control.Monad.Trans
 import Data.Maybe
 import Data.Monoid
@@ -70,6 +70,18 @@ grepCount = enumFile "/usr/share/dict/words" |.. inumToLines
             |$ inumGrep "kk"
                     ..| inumGrep "^[a-z]"
                     ..| lengthI
+
+grep :: String -> [FilePath] -> IO ()
+grep re []    = enumHandle stdin |.. inumToLines
+                |$ inumGrep re ..| (headI >>= liftIO . S.putStrLn)
+grep re files = foldr1 cat (map enumLines files)
+                |$ inumGrep re ..| (headI >>= liftIO . S.putStrLn)
+    where
+      enumLines file = enumFile file `enumCatch` handler
+                           |.. inumToLines
+      handler (SomeException e) iter = do
+        liftIO (hPutStrLn stderr $ show e)
+        resumeI iter
 
 inumToLines :: (Monad m) => EnumI S.ByteString [S.ByteString] m a
 inumToLines = enumI' $ do

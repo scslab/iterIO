@@ -12,6 +12,7 @@ module Data.IterIO
     -- $Overview
     ) where
 
+import Prelude hiding (catch)
 import Data.IterIO.Base hiding (ChunkData(null))
 import Data.IterIO.ListLike
 
@@ -266,7 +267,7 @@ following Haskell equivalent to the above Unix pipeline:
     grepCount = 'enumFile' \"\/usr\/share\/dict\/words\" '|..' inumToLines
                     ``cat`` 'enumFile' \"\/usr\/share\/dict\/extra.words\" '|..' inumToLines
                 '|$' inumGrep \"kk\"
-                        '..|' inumGrep "^[a-z]"
+                        '..|' inumGrep \"^[a-z]\"
                         '..|' lengthI
 @
 
@@ -309,7 +310,7 @@ and fusing:
                            ('enumFile' \"\/usr\/share\/dict\/extra.words\")
                       '|..' inumToLines
                   '|$' inumGrep \"kk\"
-                      '..|' inumGrep "^[a-z]"
+                      '..|' inumGrep \"^[a-z]\"
                       '..|' lengthI
 @
 
@@ -322,14 +323,14 @@ line of the second file will not be counted even if it starts with a
 lower-case letter and contains two \"k\"s.)
 
 Error handling is provided by the 'catchI' and 'throwI' functions,
-which are roughly equivalent to the standard library 'catch' and
-'throwIO' functions.  Because 'catch' only works in the IO monad,
+which are roughly equivalent to the standard library @'catch'@ and
+@'throwIO'@ functions.  Because @'catch'@ only works in the IO monad,
 'catchI' works by propagating synchronous exceptions through the
 'Iter' monad.  @'liftIO'@ transforms IO errors into such synchronous
-exceptions.  Unfortunately, there is currently no way to handle
-asynchronous exceptions such as those that arise in lazily evaluated
-pure code (e.g., divide by zero) or those thrown by another thread
-using @'throwTo'@.
+exceptions.  Unfortunately, there is no way to handle asynchronous
+exceptions such as those that arise in lazily evaluated pure code
+(e.g., divide by zero) or those thrown by another thread using
+@'throwTo'@.
 
 @
     enumFileCatchError :: (MonadIO m) => FilePath -> 'EnumO' L.ByteString m a
