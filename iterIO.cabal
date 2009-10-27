@@ -28,7 +28,10 @@ Description:
         to use.  The author of this package is particularly
         greatefulto John Lato, who helped him understand much of the
         important design rationale behind the original iteratee
-        package.
+        package.  The latest version of the iterIO sources is
+        available by git by executing:
+        
+        @git clone http:\/\/www.scs.stanford.edu\/~dm\/repos\/iterIO.git@
 
 Library
   Build-Depends: base >= 4 && < 5,
