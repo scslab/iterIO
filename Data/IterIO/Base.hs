@@ -834,9 +834,9 @@ enumPure t = enumO $ return $ Chunk t True
 -- | Like 'catchI', but applied to 'EnumO's and 'EnumI's instead of
 -- 'Iter's, and does not catch errors thrown by 'Iter's.
 --
--- There are three 'catch'-like functions in the iterIO library
--- catching varying numbers of types of failures, and @inumCatch@ is
--- the middle option.  By comparison:
+-- There are three 'catch'-like functions in the iterIO library,
+-- catching varying numbers of types of failures.  @inumCatch@ is the
+-- middle option.  By comparison:
 --
 -- * 'catchI' catches the most errors, including those thrown by
 --   'Iter's.  'catchI' can be applied to 'Iter's, 'EnumI's, or
@@ -854,11 +854,10 @@ enumPure t = enumO $ return $ Chunk t True
 --   it ignores 'Iter' and 'EnumI' failures so won't catch anything.)
 --
 -- One potentially unintuitive apsect of @inumCatch@ is that, when
--- applied to an enumerator, it catches enumerator failure in stages
--- to the the right of the enumerator on the same side of '|$'--even
--- though subsequently fused enumerators are not lexically scoped
--- within the arguments of the @inumCatch@ function.  See 'enumCatch'
--- for some examples of this behavior.
+-- applied to an enumerator, it catches any enumerator failure to the
+-- right that is on the same side of '|$'--even enumerators not
+-- lexically scoped within the argument of @inumCatch@.  See
+-- 'enumCatch' for some examples of this behavior.
 inumCatch :: (Exception e, ChunkData t, Monad m) =>
               EnumO t m a
            -- ^ 'EnumO' that might throw an exception
@@ -873,17 +872,14 @@ inumCatch enum handler = wrapI check . enum
                                    Just e  -> handler e err
                                    Nothing -> err
 
--- | Like 'catchI', but for 'EnumO's instead of 'Iter's.  Note that
--- @enumCatch@ can only catch exceptions thrown by enumerators (i.e.,
--- stages to the left of '|$'), while 'catchI' catches both exceptions
--- that are thrown by enumerators and those thrown by iteratees.
---
--- Catch errors thrown by an 'EnumO', but /not/ those thrown by
--- 'EnumI's fused to the 'EnumO' after @enumCatch@ has been applied.
--- If you want to catch all enumerator errors, including those from
--- subsequently fused 'EnumI's, see the `inumCatch` function.  For
--- example, comare @test1@ (which throws an exception) to @test2@ and
--- @test3@ (which do not):
+-- | Like 'catchI', but for 'EnumO's instead of 'Iter's.  Catches
+-- errors thrown by an 'EnumO', but /not/ those thrown by 'EnumI's
+-- fused to the 'EnumO' after @enumCatch@ has been applied, and not
+-- exceptions thrown from an 'Iter'.  If you want to catch all
+-- enumerator errors, including those from subsequently fused
+-- 'EnumI's, see the `inumCatch` function.  For example, comare
+-- @test1@ (which throws an exception) to @test2@ and @test3@ (which
+-- do not):
 --
 -- >    inumBad :: (ChunkData t, Monad m) => EnumI t t m a
 -- >    inumBad = enumI $ fail "inumBad"
