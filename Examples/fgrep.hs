@@ -4,12 +4,12 @@ module Main where
 import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.ByteString.Lazy as L
 
-import Control.Exception
 import Control.Monad
 import Control.Monad.Trans
 import System.Environment
 import System.Exit
 import System.IO
+import System.IO.Error
 
 import Data.IterIO
 
@@ -33,9 +33,12 @@ printLines = do
     Nothing -> return ()
 
 enumFileCatchError :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
-enumFileCatchError file = handlerI printErrorAndResume . enumFile file
+enumFileCatchError file = enumFile file `enumCatch` enumCatchIO
     where
-      printErrorAndResume (SomeException _) iter = verboseResumeI iter
+      enumCatchIO :: (ChunkData t, MonadIO m) =>
+                     IOError -> Iter t m a -> Iter t m a
+      enumCatchIO _ = verboseResumeI
+      -- enumCatchIO e = flip const (e :: IOError) verboseResumeI
 
 main :: IO ()
 main = do

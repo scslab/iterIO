@@ -606,8 +606,9 @@ infixr 3 `cat`
 (|$) :: (ChunkData t, Monad m) => EnumO t m a -> Iter t m a -> m a
 (|$) enum iter = run $ enum $ wrapI (>>= return) iter
 -- The purpose of the wrapI (>>= return) is to convert any EnumIFail
--- (or, less likely, EnumOFail) errors thrown by iter to be of type
--- IterFail, so that catchE statements only catch enumerator failures.
+-- (or, less likely, EnumOFail) errors thrown by iter to IterFail
+-- errors, so that enumCatch statements only catch enumerator
+-- failures.
 infixr 2 |$
 
 -- | An inner enumerator or transcoder.  Such a function accepts data
@@ -659,14 +660,14 @@ infixr 4 ..|
 
 -- | Build an 'EnumO' from a @before@ action, an @after@ function, and
 -- an @input@ function in a manner analogous to the IO 'bracket'
--- function.  For instance, you might implement `enumFile'` as
+-- function.  For instance, you could implement `enumFile'` as
 -- follows:
 --
 -- >   enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
 -- >   enumFile' path =
--- >     enumObracket (liftIO $ openFile path ReadMode) (liftIO $ hClose) doget
+-- >     enumObracket (liftIO $ openFile path ReadMode) (liftIO . hClose) doGet
 -- >       where
--- >         doget h = do
+-- >         doGet h = do
 -- >           buf <- liftIO $ L.hGet h 8192
 -- >           if (L.null buf)
 -- >             then return chunkEOF
@@ -684,11 +685,12 @@ enumObracket :: (Monad m, ChunkData t) =>
 enumObracket before after input iter = do
   eb <- tryI $ runI before
   case eb of
-    Left e@(SomeException _) -> EnumOFail e iter
-    Right b -> do
-            result <- returnI $ enumO (input b) iter
-            runI (after b)
-            result
+    Left e  -> EnumOFail e iter
+    Right b -> do iter' <- returnI $ enumO (input b) iter
+                  ec <- tryI $ runI (after b)
+                  case ec of
+                    Left e | not $ isIterError iter' -> EnumOFail e iter'
+                    _                                -> iter'
 
 -- | Construct an outer enumerator given a function that produces
 -- 'Chunk's of type @t@.
@@ -773,12 +775,34 @@ enumPure t = enumO $ return $ Chunk t True
 -- | Like 'catchI', but for 'EnumO's instead of 'Iter's.  Note that
 -- this only catches exceptions that were thrown by enumerators.
 -- ('catchI' catches both exceptions that are thrown by enumerators
--- and those thrown by iteratees.)
+-- and those thrown by iteratees.)  However, also note that when
+-- applied to an 'EnumO', it will catch all errors thrown by any
+-- 'EnumI's fused to the 'EnumO'.  This could lead to unexpected
+-- results in cases like this:
+--
+-- >    cat (enumFile "file1" `enumCatch` handler1)
+-- >        (enumFile "file2" `enumCatch` handler2)
+-- >            |.. inum
+-- >    |$ somethingI
+--
+-- Suppose @handler1@ calls 'resumeI' to continue executing after an
+-- exception.  If @inum@ throws an exception while processing @file1@,
+-- the exception will be caught by @handler1@, then execution will
+-- continue on @file2@, at which point the exception will be re-thrown
+-- and caught for a second time by @handler2@.  If that is not what
+-- you wanted, then it may have been better to write:
+--
+-- >    cat (enumFile "file1" `enumCatch` handler1)
+-- >        (enumFile "file2" `enumCatch` handler2)
+-- >    |$ inum ..| somethingI
+--
 enumCatch :: (Exception e, ChunkData t, Monad m) =>
              EnumO t m a
+          -- ^ 'Iter' that might throw an exception
           -> (e -> Iter t m a -> Iter t m a)
+          -- ^ Exception handler
           -> EnumO t m a
-enumCatch enum handler iter = wrapI check $ enum iter
+enumCatch enum handler = wrapI check . enum
     where
       check iter'@(IterF _)    = catchI iter' handler
       check iter'@(Done _ _)   = iter'

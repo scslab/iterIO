@@ -4,7 +4,7 @@ module Main
     , module Data.IterIO
     ) where
 
-import Control.Exception
+-- import Control.Exception
 import Control.Monad.Trans
 import Data.Maybe
 import Data.Monoid
@@ -14,6 +14,7 @@ import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.ByteString.Lazy as L
 -- import System.FilePath
 import System.IO
+import System.IO.Error
 import Text.Regex.Posix
 import Text.Regex.Posix.ByteString
 
@@ -76,10 +77,13 @@ grep re files
     | null files = enumHandle stdin |.. inumToLines |$ inumGrep re ..| linesOutI
     | otherwise  = foldr1 cat (map enumLines files) |$ inumGrep re ..| linesOutI
     where
-      enumLines file = enumFile file `enumCatch` handler |.. inumToLines
-      handler (SomeException e) iter = do
+      enumLines file = enumCatch (enumFile file |.. inumToLines) handler
+      handler :: IOError -> Iter [S.ByteString] IO a -> Iter [S.ByteString] IO a
+      handler e iter = do
         liftIO (hPutStrLn stderr $ show e)
-        resumeI iter
+        if isDoesNotExistError e
+          then resumeI iter
+          else iter
       linesOutI = do
         mline <- safeHeadI
         case mline of
