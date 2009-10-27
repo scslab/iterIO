@@ -90,7 +90,7 @@ module Data.IterIO.Base
     , putI, sendI
     -- * Some basic Enumerators
     , enumPure
-    , enumCatch, enumHandler
+    , enumCatch, enumHandler, enumCatch'
     , inumNop, inumSplit
     ) where
 
@@ -381,12 +381,12 @@ throwEOFI loc = throwI $ mkIOError eofErrorType loc Nothing Nothing
 -- the 'Iter' throws an exception @e@, returns @'Left' e@.
 tryI :: (ChunkData t, Monad m, Exception e) =>
         Iter t m a
-     -> Iter t m (Either e a)
+     -> Iter t m (Either (e, Iter t m a) a)
 tryI = wrapI errToEiter
     where
       errToEiter (Done a c) = Done (Right a) c
       errToEiter iter       = case fromException $ getIterError iter of
-                                Just e  -> return $ Left e
+                                Just e  -> return $ Left (e, iter)
                                 Nothing -> fixError iter
       fixError (EnumIFail e i) = EnumIFail e $ Right i
       fixError (EnumOFail e i) = EnumOFail e $ liftM Right i
@@ -685,12 +685,13 @@ enumObracket :: (Monad m, ChunkData t) =>
 enumObracket before after input iter = do
   eb <- tryI $ runI before
   case eb of
-    Left e  -> EnumOFail e iter
-    Right b -> do iter' <- returnI $ enumO (input b) iter
-                  ec <- tryI $ runI (after b)
-                  case ec of
-                    Left e | not $ isIterError iter' -> EnumOFail e iter'
-                    _                                -> iter'
+    Left (e,_) -> EnumOFail e iter
+    Right b    -> do
+            iter' <- returnI $ enumO (input b) iter
+            ec <- tryI $ runI (after b)
+            case ec of
+              Left (e,_) | not $ isIterError iter' -> EnumOFail e iter'
+              _                                    -> iter'
 
 -- | Construct an outer enumerator given a function that produces
 -- 'Chunk's of type @t@.
@@ -796,27 +797,45 @@ enumPure t = enumO $ return $ Chunk t True
 -- >        (enumFile "file2" `enumCatch` handler2)
 -- >    |$ inum ..| somethingI
 --
+-- If you want @inum@ to the left of '|$' but don't want to catch
+-- errors it throes, then see `enumCatch'`.
 enumCatch :: (Exception e, ChunkData t, Monad m) =>
              EnumO t m a
-          -- ^ 'Iter' that might throw an exception
+          -- ^ 'EnumO' that might throw an exception
           -> (e -> Iter t m a -> Iter t m a)
           -- ^ Exception handler
           -> EnumO t m a
 enumCatch enum handler = wrapI check . enum
     where
-      check iter'@(IterF _)    = catchI iter' handler
+      -- check iter'@(IterF _)    = catchI iter' handler
       check iter'@(Done _ _)   = iter'
       check iter'@(IterFail _) = iter'
       check err                = case fromException $ getIterError err of
                                    Just e  -> handler e err
                                    Nothing -> err
 
+-- | Catch errors thrown by an 'EnumO', but /not/ those thrown by
+-- 'EnumI's fused to the output of @enumCatch'@.
+enumCatch' :: (Exception e, ChunkData t, Monad m) =>
+              EnumO t m (Iter t m a)
+           -- ^ 'EnumO' that might throw an exception
+           -> (e -> Iter t m a -> Iter t m a)
+           -- ^ Exception handler
+           -> EnumO t m a
+enumCatch' enum handler = wrapI check . enum . inumNop
+    where
+      check (Done i _)   = i
+      check (IterFail e) = IterFail e
+      check err          = case fromException $ getIterError err of
+                             Just e  -> handler e $ joinI err
+                             Nothing -> joinI err
+
 -- | 'enumCatch' with the argument order switched.
 enumHandler :: (Exception e, ChunkData t, Monad m) =>
                (e -> Iter t m a -> Iter t m a)
             -- ^ Exception handler
             -> EnumO t m a
-            -- ^ 'Iter' that might throw an exception
+            -- ^ 'EnumO' that might throw an exception
             -> EnumO t m a
 enumHandler = flip enumCatch
 
@@ -859,8 +878,8 @@ inumNop :: (ChunkData t, Monad m) => EnumI t t m a
 inumNop = enumI chunkI
 
 -- | Returns an 'Iter' that always returns itself until a result is
--- produced.  You can fuse this to another 'Iter' to produce an 'Iter'
--- that can safely be written from multiple threads.
+-- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
+-- 'Iter' that can safely be written from multiple threads.
 inumSplit :: (MonadIO m, ChunkData t) => EnumI t t m a
 inumSplit iter1 = do
   mv <- liftIO $ newMVar $ iter1
