@@ -29,12 +29,15 @@ layers and parsers without worrying about IO chunk boundaries.
 Enumerators, implemented by the type 'EnumO', are so called because
 they enumerate all data elements (e.g., bytes or packets) in some
 source such as a file or socket.  Hence, an enumerator should be
-viewed as a /source/ outputting data.
+viewed as a /source/ outputting chunks of data whose type is a
+@'Monoid'@.
 
 Conversely, iteratees, implemented by the type 'Iter', should be
 viewed as /sinks/ consuming data.  When executing IO, the library
 /iterates/ over all data elements output by the source, using an
-iteratee to produce a result.
+iteratee to produce a result.  The source may output data in chunks
+whose boundaries do not coincide with logical message units; iteratees
+handle this transparently, simplifying programming.
 
 Here is a simple example:
 
@@ -169,6 +172,11 @@ iteratee world, we call such a pipeline stage an /inner enumerator/, or
 'EnumI'.  Before defining our @grep@ equivalent, since multiple
 pipeline stages are going to be considering the file one line at a
 time, let's first build an 'EnumI' to separate input into lines:
+
+@
+    import Data.ByteString as S
+    import Data.ByteString.Char8 as S8
+@
 
 @
     -- | Break input into lines of type S.ByteString, as this type
