@@ -433,7 +433,7 @@ tryI = wrapI errToEiter
 -- >         liftIO $ hPutStrLn stderr "ignoring exception"
 -- >         return ()
 --
--- Note that my @myEnum@ is an 'EnumO', but it actually takes an
+-- Note that @myEnum@ is an 'EnumO', but it actually takes an
 -- argument, @iter@, reflecting the usually hidden fact that 'EnumO's
 -- are actually functions.  Thus, @catchI@ is wrapped around the
 -- result of applying @'enumPure' \"test\"@ to an 'Iter'.
@@ -493,7 +493,7 @@ catchI iter handler = wrapI check iter
                                  Just e  -> handler e err
                                  Nothing -> err
 
--- | A version of 'throwI' with the arguments reversed, analogous to
+-- | A version of 'catchI' with the arguments reversed, analogous to
 -- 'handle' in the standard library.  (A more logical name for this
 -- function might be 'handleI', but that name is used for the file
 -- handle iteratee.)
@@ -507,7 +507,7 @@ handlerI = flip catchI
 
 -- | Used in an exception handler, after an enumerator fails, to
 -- resume processing of the 'Iter' by the next enumerator in a
--- concatenated series.
+-- concatenated series.  See 'catchI' for an example.
 resumeI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a
 resumeI (EnumOFail _ iter) = iter
 resumeI (EnumIFail _ iter) = return iter
@@ -605,7 +605,7 @@ safeHeadI = IterF $ return . dohead
       dohead (Chunk (a:as) eof) = Done (Just a) $ Chunk as eof
 
 -- | An Iteratee that puts data to a consumer function, then calls an
--- eof function.  For instance, 'handleI' could be defined as:
+-- eof function.  For instance, @'handleI'@ could be defined as:
 --
 -- > handleI :: (MonadIO m) => Handle -> Iter L.ByteString m ()
 -- > handleI h = putI (liftIO . L.hPut h) (liftIO $ hShutdown h 1)
@@ -620,8 +620,8 @@ putI putfn eoffn = do
   if eof then eoffn >> return () else putI putfn eoffn
 
 -- | Send datagrams using a supplied function.  The datagrams are fed
--- as a list of lazy 'Bytestring's, where each element of the list
--- should be a separate datagram.
+-- as a list of packets, where each element of the list should be a
+-- separate datagram.
 sendI :: (Monad m) =>
          (t -> Iter [t] m a)
       -> Iter [t] m ()
@@ -894,8 +894,9 @@ inumCatch enum handler = wrapI check . enum
 -- >    test1 :: IO ()
 -- >    test1 = enumCatch (enumPure "test") skipError |.. inumBad |$ nullI
 -- >    
--- >    -- Does not throw an exception, because inumCatch catches
--- >    -- all errors, including from subsequently fused inumBad.
+-- >    -- Does not throw an exception, because inumCatch catches all
+-- >    -- enumerator errors on the same side of '|$', including from
+-- >    -- subsequently fused inumBad.
 -- >    test2 :: IO ()
 -- >    test2 = inumCatch (enumPure "test") skipError |.. inumBad |$ nullI
 -- >    
