@@ -4,7 +4,7 @@
 -- documentation gives a high-level overview of the iteratee model,
 -- intended more as an introduction than as a reference.  See the
 -- "Data.IterIO.Base" and "Data.IterIO.ListLike" modules for more
--- detailed documetation of data structures and functions.
+-- detailed documentation of data structures and functions.
 module Data.IterIO
     (module Data.IterIO.Base
     , module Data.IterIO.ListLike
@@ -39,7 +39,7 @@ iteratee to produce a result.
 Here is a simple example:
 
 @
-    -- Return the first line of file
+    -- Return the first line of a file
     headFile :: FilePath -> IO String
     headFile path = 'enumFile' path '|$' 'lineI'
 @
@@ -47,7 +47,7 @@ Here is a simple example:
 'enumFile' enumerates the contents of a file.  'lineI' returns a line
 of input (discarding the newline).  '|$' is the /pipe apply/ operator
 that applies an 'EnumO' to an 'Iter', returning the result of the
-'Iter'--in this case is the first line of the file named @path@.
+'Iter'--in this case the first line of the file named @path@.
 
 An `Iter`'s main purpose may not be to produce a result.  Some 'Iter's
 are primarily useful for their side effects.  For example, 'handleI'
@@ -70,7 +70,7 @@ the interesting action lies in the side effects of writing data to
 standard output while iterating over the input with 'handleI'.
 
 The real power of the iteratee abstraction lies in the fact that
-'Iter's are monads.  One 'Iter' may invoke another to make use of the
+'Iter's are monad computations.  One 'Iter' may invoke another to make use of the
 first one's results.  Here is an example of a function that returns
 the first two lines of a file:
 
@@ -101,7 +101,7 @@ will be @IO@, because @head2File@ is returning a result in the @IO@
 monad.  However, @lines2I@ would work equally well with any other
 monad.
 
-Next notice the functioning of @'Iter' String m@ as a monad.  The type
+Next, notice the functioning of @'Iter' String m@ as a monad.  The type
 of 'lineI' in the above example is @'Iter' String m String@.  The
 @lines2I@ function executes 'lineI' twice using monadic @do@ syntax to
 bind the result to @line1@ and @line2@.  The monadic bind operator
@@ -134,7 +134,7 @@ Here is an example of an 'Iter' with side effects:
 Unlike @lines2I@, @liftIOexampleI@ does not return any interesting
 result, but it uses the @'liftIO'@ monad transformer method to output
 the first line of the file, followed by the next 40 bytes.  The
-'stringExactI' returns a 'String' (or 'ByteString') with exactly the
+'stringExactI' iteratee returns a 'String' (or 'ByteString') with exactly the
 requested number of bytes, unless an EOF (end-of-file) is encountered.
 
 Of course, the real power of command pipelines is that you can hook
@@ -164,8 +164,8 @@ The 'safeLineI' function is like 'lineI', but returns a @'Maybe'
 condition.
 
 What about the @grep@ command?  @grep@ sits in the middle of a
-pipeline, so it acts as both a data sink, and a data source.  In the
-iteratee world, we call such pipeline stage an /inner enumerator/, or
+pipeline, so it acts both as a data sink and as a data source.  In the
+iteratee world, we call such a pipeline stage an /inner enumerator/, or
 'EnumI'.  Before defining our @grep@ equivalent, since multiple
 pipeline stages are going to be considering the file one line at a
 time, let's first build an 'EnumI' to separate input into lines:
@@ -204,9 +204,9 @@ Inner-enumerators are generally constructed using either 'enumI' or
 \"@inum@...\".  'enumI'' takes an argument of type @Iter t1 m t2@ that
 transcodes type @t1@ to type @t2@.  (For @inumToLines@, @t1@ is
 @S.ByteString@ and @t2@ is @[S.ByteString]@).  'enumI' is like
-`enumI'`, but returns data 'Chunk's, the library's internal
+`enumI'`, but returns its data wrapped in 'Chunk's, the library's internal
 representation for data that allows finer-grained control of EOF
-conditions.  In @inumToLines@, we are happy just just to let 'lineI'
+conditions.  In @inumToLines@, we are happy just to let 'lineI'
 throw an exception on EOF, as `enumI'` will do the right thing.
 
 We similarly define an 'EnumI' to filter out lines not matching a
@@ -243,8 +243,8 @@ supports two types of composition for pipeline stages:
 /concatenation/ and /fusing/.
 
 Two 'EnumO's of the same type can be /concatenated/ with the 'cat'
-function, producing a new data source that enumerates first all of the
-data in the first 'EnumO', then all of the data in the second.  (There
+function, producing a new data source that enumerates all of the
+data in the first 'EnumO' followed by all of the data in the second.  (There
 is a similar 'catI' function for inner enumerators, though it is less
 frequently used.)
 
@@ -253,8 +253,8 @@ There are three /fusing/ operators.  The '|..' operator fuses an
 produces a pipeline that is open on the right hand side, as it still
 needs to be applied to an iteratee with '|$'.)  The '..|' operator
 fuses an 'EnumI' to an 'Iter', producing a new 'Iter'.  Finally, there
-is a '..|..' operator that fuses two 'EnumI's into a single new
-'EnumI' composing their effects.
+is a '..|..' operator that fuses two 'EnumI's into a single, new
+'EnumI', composing their effects.
 
 The fusing operators bind more tightly than the infix concatenation
 functions, which in turn bind more tightly than '|$'.  (Concatenation
@@ -301,7 +301,7 @@ want to be able to recover from the `EnumI`'s failure.  In the
 compile, this is catastrophic for the program, which is why the first
 version fused @inumGrep@ to the @Iter@.
 
-Another alternative would have bee to swap the order of concatenation
+Another alternative would have been to swap the order of concatenation
 and fusing:
 
 @
@@ -314,7 +314,7 @@ and fusing:
                       '..|' lengthI
 @
 
-This last version chances the semantics of the counting slightly.
+This last version changes the semantics of the counting slightly.
 With @grepCount''@, if the first file has an incomplete last line,
 this line will be merged with the first line of the second file, which
 is probably not what you want.  (For instance, if the incomplete last
@@ -323,7 +323,7 @@ line of the second file will not be counted even if it starts with a
 lower-case letter and contains two \"k\"s.)
 
 One limitation of all the @grepCount@ variants shown so far is that if
-the first file does not exists, the whole operation aborts.  This
+the first file does not exist, the whole operation aborts.  This
 might or might not be reasonable when counting lines, but in other
 contexts we may want to resume after failure.  Suppose we want to
 implement a function like the Unix @grep@ command that searches for a
@@ -388,7 +388,7 @@ it, so that the next enumerator in a concatenated series can continue
 feeding input to the iteratee.  If, instead of resuming, you want to
 re-throw the error, it suffices to re-execute the failing iteratee to
 propagate the error.  For instance, suppose we want to continue
-executing @grep@ when a file name does not exist, but if some other
+executing @grep@ when a named file does not exist, but if some other
 error happens, we want to re-throw the exception to abort the whole
 program.  This could be achieved as follows:
 
