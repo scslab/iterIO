@@ -1,16 +1,16 @@
 -- {-# LANGUAGE ForeignFunctionInterface #-}
 
 
-{- | Alternate Enumerator/Iteratee take by David Mazieres.
+{-   Alternate Enumerator/Iteratee take by David Mazieres.
 
      An iteratee is a data sink that is fed chunks of data.  It may
-     return a useful result, or its use may be in the side-effects it
-     has, such as storing the data to a file.  Iteratees are
+     return a useful result, or its use may like in the side-effects
+     it has, such as storing the data to a file.  Iteratees are
      represented by the type @'Iter' t m a@.  @t@ is the type of the
-     data chunks (which must be a 'ChunkData', such as 'String' or lazy
-     'ByteString').  @m@ is the 'Monad' in which the iteratee
+     data chunks (which must be a 'ChunkData', such as 'String' or
+     lazy 'L.ByteString').  @m@ is the 'Monad' in which the iteratee
      runs--for instance 'IO' (or an instance of 'MonadIO') for the
-     iteratee to perform IO.  'a' is the result type of the iteratee,
+     iteratee to perform IO.  @a@ is the result type of the iteratee,
      for when it has consumed enough input to produce a result.
 
      An Enumerator is a data source that feeds data chunks to an
@@ -62,6 +62,8 @@
 
 -}
 
+-- | Enumerator/Iteratee IO abstractions.  See the documentation for
+-- "Data.IterIO" for a high-level overview of these abstractions.
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI
@@ -115,8 +117,15 @@ import System.IO.Unsafe
 -- Iteratee types
 --
 
--- | ChunkData is a 'Monoid' type that additionally has a predicate
--- for testing whether an object is equal to 'mempty'.
+-- | @ChunkData@ is the class of data types that can be output by an
+-- enumerator and iterated on with an iteratee.  A @ChunkData@ type
+-- must be a 'Monoid', but must additionally provide a predicate,
+-- @null@, for testing whether an object is equal to 'mempty'.
+-- Feeding a @null@ chunk to an iteratee followed by any other chunk
+-- should have the same effect as just feeding the second chunk,
+-- except that some or all of the effects may happen at the time the
+-- iteratee receives the @null@ chunk, which is why sometimes the
+-- library explicitly feeds @null@ chunks to iteratees.
 class (Monoid t) => ChunkData t where
     null :: t -> Bool
 instance ChunkData [a] where
@@ -128,17 +137,24 @@ instance ChunkData S.ByteString where
 instance ChunkData () where
     null _ = True
 
--- | A chunk of data, plus a flag which is 'True' if the data is
--- followed by an end-of-file.
+-- | @Chunk@ is a wrapper around a 'ChunkData' type that also includes
+-- an EOF flag that is 'True' if the data is followed by an
+-- end-of-file condition.  An iteratee that receives a @Chunk@ with
+-- EOF 'True' must return a result (or failure); it is an error to
+-- demand more data after an EOF.
 data Chunk t = Chunk t Bool deriving (Eq, Show)
 
+-- | Constructor function that builds a chunk containing data and a
+-- 'False' EOF flag.
 chunk :: t -> Chunk t
 chunk t = Chunk t False
 
+-- | An empty chunk with the EOF flag 'True'.
 chunkEOF :: (Monoid t) => Chunk t
 chunkEOF = Chunk mempty True
 
--- | Returns True if a chunk has no data and its EOF bit is true.
+-- | Returns True if a chunk is the result of 'chunkEOF' (i.e., has no
+-- data and a 'True' EOF bit).
 isChunkEOF :: (ChunkData t) => Chunk t -> Bool
 isChunkEOF (Chunk t eof) = eof && null t
 
@@ -149,16 +165,33 @@ instance (ChunkData t) => Monoid (Chunk t) where
     mappend _ _                           = error "mappend to EOF"
 
 instance (ChunkData t) => ChunkData (Chunk t) where
-    null (Chunk t _) = null t
+    null (Chunk t False) = null t
+    null (Chunk _ True)  = False
 
--- | The basic Iteratee type.  An @Iter@ is a function that iterates
--- over input, potentially returning a result of type @a@.  @t@ is the
--- type of input chunks.  Note that @Iter t@ is a monad transformer.
+-- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
+-- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
+-- may execute actions (using the monad transformer 'lift' method),
+-- and @a@ is the result type of the iteratee.
+--
+-- An @Iter@ is in one of three states:  it may require more input, it
+-- may have produced a result, or it may have failed.  The first case
+-- is signaled by the 'IterF' constructor, which contains a function
+-- from a 'Chunk' of data to a new state of the iteratee (in monad
+-- @m@).  The second case is signaled by the 'Done' constructor, which
+-- returns both a result of type @a@, and a 'Chunk' containing any
+-- residual input the iteratee did not consume.  Finally failure is
+-- signaled by either 'IterFail', 'EnumOFail', or 'EnumIFail',
+-- depending on whether the failure occured in an iteratee, an outer
+-- enumerator, or an inner enumerator.  (In the last two cases, when
+-- an enumerator failed, the result also includes the state of the
+-- iteratee, which usually has not failed.)
+--
+-- Note that @Iter t@ is a monad transformer.
 data Iter t m a = IterF (Chunk t -> m (Iter t m a))
-                -- ^ The iteratee required more input
+                -- ^ The iteratee requires more input
                 | Done a (Chunk t)
-                -- ^ Sufficient input was received; the iteratee is
-                -- returning both a result and any unused input.
+                -- ^ Sufficient input was received; the iteratee has
+                -- returning a result and any unused input.
                 | IterFail SomeException
                 -- ^ The iteratee failed
                 | EnumOFail SomeException (Iter t m a)
@@ -532,8 +565,8 @@ nullI = IterF $ return . check
 
 -- | Returns a non-empty 'Chunk' or an EOF 'Chunk'.
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
-chunkI = IterF $ \c@(Chunk t eof) -> return $
-         if null t && not eof then chunkI else Done c (Chunk mempty eof)
+chunkI = IterF $ \c@(Chunk _ eof) -> return $
+         if null c then chunkI else Done c (Chunk mempty eof)
 
 -- | Wrap a function around an 'Iter' to transform its result.  The
 -- 'Iter' will be fed data as usual, then fed to the function the
@@ -635,9 +668,27 @@ sendI sendfn = do
 -- Enumerator types
 --
 
--- | An outermost enumerator that gets data from somewhere else and
--- feeds it to the iteratee, returning the iteratee when there is no
--- more input or the iteratee produces a result of type a.
+-- | An @EnumO t m a@ is an outer enumerator that gets data of type
+-- @t@ by executing actions in monad @m@, then feeds the data in
+-- chunks to an iteratee of type @'Iter' t m a@.  Most enumerators are
+-- polymorphic in the last type, @a@, so as work with iteratees
+-- returning any type.
+--
+-- An @EnumO@ is a function from iteratees to iteratees.  It
+-- transforms an iteratee by repeatedly feeding it input until one of
+-- four outcomes:  the iteratee returns a result, the iteratee fails,
+-- the @EnumO@ runs out of input, or the @EnumO@ fails.  When one of
+-- these four termination conditions holds, the @EnumO@ returns the
+-- new state of the iteratee.
+--
+-- Under no circumstances should an @EnumO@ ever feed a chunk with the
+-- EOF bit set to an iteratee.  When the @EnumO@ runs out of data, it
+-- must simply return the current state of the iteratee.  This way
+-- more data from another source can still be fed to the iteratee, as
+-- happens when enumerators are concatenated with the 'cat' function.
+--
+-- @EnumO@s should generally constructed using the 'enumO' function,
+-- which handles most of the error-handling details.
 type EnumO t m a = Iter t m a -> Iter t m a
 
 -- | Concatenate two outer enumerators, forcing them to be executed in
@@ -677,6 +728,36 @@ infixr 2 |$
 -- the innermost iteratee.  Thus tOut, the \"outer type\", is actually
 -- the type of input fed to an EnumI, while @tIn@ is what the @EnumI@
 -- feeds to an iteratee.
+--
+-- Like @EnumO@, an @EnumI@ is a function from iteratees to iteratees.
+-- However, an @EnumI@'s input and output types are different.  A
+-- simpler definition of @EnumI@ might have been:
+--
+-- > type EnumI' tOut tIn m a = Iter tIn m a -> Iter tOut m a
+--
+-- In fact, given an @EnumI@ object @enumI@, it is possible to
+-- construct such a function as @(enumI '..|')@.  But sometimes one
+-- might like to concatenate @EnumI@s.  For instance, consider a
+-- network protocol that changes encryption or compression modes
+-- midstream.  Transcoding is done by @EnumI@s.  To change transcoding
+-- methods after applying an @EnumI@ to an iteratee requires the
+-- ability to \"pop\" the iteratee back out of the @EnumI@ so as to be
+-- able to hand it to another @EnumI@.  The 'joinI' function provides
+-- this functionality in its most general form, though if one only
+-- needs 'EnumI' concatenation, the simpler 'catI' function serves
+-- this purpose.
+--
+-- As with 'EnumO's, an @EnumI@ must never feed an EOF chunk to its
+-- iteratee.  Instead, upon receiving EOF, the @EnumI@ should simply
+-- return the state of the inner iteratee (this is how \"popping\" the
+-- iteratee back out works).  An @EnumI@ should also return when the
+-- iteratee returns a result or fails, or when the @EnumI@ fails.  An
+-- @EnumI@ may return the state of the iteratee earlier, if it has
+-- reached some logical message boundary (e.g., many protocols finish
+-- processing headers upon reading a blank line).
+--
+-- @EnumI@s are generally constructed with the 'enumI' function, which
+-- hides most of the error handling details.
 type EnumI tOut tIn m a = Iter tIn m a -> Iter tOut m (Iter tIn m a)
 
 -- | Concatenate two inner enumerators
