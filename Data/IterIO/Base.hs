@@ -84,7 +84,7 @@ module Data.IterIO.Base
     , isIterError, isEnumError
     -- * Other functions
     , iterLoop
-    , fixIterPure, fixMonadIO
+    -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
     , throwI, throwEOFI
     , tryI, catchI, handlerI
@@ -339,6 +339,7 @@ fixtest2 i = do
                               else liftM (n *) (f $ n - 1)
 -}
 
+{-
 -- | This is a fixed point combinator for iteratees over monads that
 -- have no side effects.  If you wish to use @mdo@ with such a monad,
 -- you can define an instance of 'MonadFix' in which
@@ -359,6 +360,7 @@ fixIterPure f' = dofix mempty f'
          case iter of
            IterF _ -> return $ dofix c f -- Warning: repeats side effects
            _       -> return iter
+-}
 
 -- | This is a generalization of 'fixIO' for arbitrary members of the
 -- 'MonadIO' class.  
