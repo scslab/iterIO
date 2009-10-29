@@ -19,28 +19,31 @@
        * An /outer enumerator/, represented by the type 'EnumO',
          generates data from some external source, such as IO (or
          potentially some internal state such as a somepseudo-random
-         generator).  An outer enumerator use the 'feedO' function to
-         feed data chunks to an iteratee.  When the enumerator is out
-         of data, it returns the iteratee so that the iteratee can
-         potentially be passed to a different enumerator for more
-         data.  (An enumerator should not feed 'EOF' to an
-         iteratee--only the 'run' and 'runI' functions do this.)  If
-         the iteratee returns a result, the enumerator also returns it
-         immediately.
+         generator).  Outer enumerators are generally constructed
+         using 'enumO', which repeatedly runs a computation that
+         generates chunks of data.  When the enumerator is out of
+         data, data generating computation returns an EOF chunk, and
+         'enumO' returns the iteratee so that it can potentially be
+         passed to a different enumerator for more data.  (An
+         enumerator should not feed 'EOF' to an iteratee--only the
+         '|$' operator, 'run', and 'runI' functions do this.)  If the
+         iteratee returns a result or fails, the enumerator also
+         returns it immediately.
 
        * An /inner enumerator/, represented by the type 'EnumI', gets
          its data from another enumerator, then feeds this to an
-         iteratee.  Thus, an 'EnumI' appears as an iteratee to the
-         outer enumerator, and apears as an enumerator to some "inner"
-         iteratee to which it is feeding data.  Inner enumerators use
-         the function 'feedI' to feed data chunks to an iteratee.  An
-         inner enumerator, when done, returns the inner iteratee's
-         state, as well as its own Iteratee state.  An inner
-         enumerator that receives EOF should /not/ feed the EOF to its
-         iteratee, as the iteratee may subsequently be passed to
-         another enumerator for more input.  This is convention is
-         respected by the 'feedI' function, which takes data rather
-         than a chunk.
+         iteratee.  Thus, an 'EnumI' behaves as an iteratee when
+         interfacing to the outer enumerator, and behaves as an
+         enumerator when feeding data to some \"inner\" iteratee.
+         Inner are build using the function 'enumI', which is
+         analogous to 'enumO' for outer enumerators, except that the
+         chunk generating computation can use iteratees to process
+         data from the outer enumerator.  An inner enumerator, when
+         done, returns the inner iteratee's state, as well as its own
+         Iteratee state.  An inner enumerator that receives EOF should
+         /not/ feed the EOF to its iteratee, as the iteratee may
+         subsequently be passed to another enumerator for more input.
+         (This is convention is respected by the 'enumI' function.)
 
     IO is performed by applying an outer enumerator to an iteratee,
     using the '|$' (\"pipe apply\") binary operator.
