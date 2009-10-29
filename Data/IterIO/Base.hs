@@ -533,8 +533,8 @@ catchI iter handler = wrapI check iter
                                  Nothing -> err
 
 -- | A version of 'catchI' with the arguments reversed, analogous to
--- 'handle' in the standard library.  (A more logical name for this
--- function might be 'handleI', but that name is used for the file
+-- @'handle'@ in the standard library.  (A more logical name for this
+-- function might be @handleI@, but that name is used for the file
 -- handle iteratee.)
 handlerI :: (Exception e, ChunkData t, Monad m) =>
           (e -> Iter t m a -> Iter t m a)
@@ -575,12 +575,15 @@ chunkI = IterF $ \c@(Chunk _ eof) -> return $
          if null c then chunkI else Done c (Chunk mempty eof)
 
 -- | Wrap a function around an 'Iter' to transform its result.  The
--- 'Iter' will be fed data as usual, then fed to the function the
--- first time it enters a state other than 'IterF'.
+-- 'Iter' will be fed 'Chunk's as usual for as long as it remains in
+-- the 'IterF' state.  When the 'Iter' enters a state other than
+-- 'IterF', @wrapI@ passes it through the tranformation function.
 wrapI :: (ChunkData t, Monad m) =>
-         (Iter t m a -> Iter t m b)
-      -> Iter t m a
-      -> Iter t m b
+         (Iter t m a -> Iter t m b) -- ^ Transformation function
+      -> Iter t m a                 -- ^ Original 'Iter'
+      -> Iter t m b                 -- ^ Returns an 'Iter' whose
+                                    -- result will be transformed by
+                                    -- the transformation function
 wrapI f iter@(IterF _) =
     IterF $ \c@(Chunk _ eof) -> runIter iter c >>= rewrap eof
     where
@@ -593,7 +596,12 @@ wrapI f iter = f iter
 
 -- | Runs an Iteratee from within another iteratee (feeding it EOF if
 -- it is in the 'IterF' state) so as to extract a return value.  The
--- return value is lifted into the invoking Iteratee monadic type.
+-- return value is lifted into the invoking Iteratee monadic type.  If
+-- the iteratee being run fails, then @runI@ will propagate the
+-- failure by also failing.  In the event that the failure is an
+-- enumerator failure (either 'EnumIFail' or 'EnumOFail'), @runI@
+-- returns an 'EnumIFail' failure and includes the state of the
+-- iteratee.
 runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
@@ -603,7 +611,9 @@ runI (IterFail e)    = IterFail e
 runI (EnumIFail e i) = EnumIFail e i
 runI (EnumOFail e i) = runI i >>= EnumIFail e
 
--- | Pop an 'Iter' back out of an 'EnumI'.
+-- | Pop an 'Iter' back out of an 'EnumI', propagating any failure.
+-- Any enumerator failure ('EnumIFail' or 'EnumOFail') will be
+-- translated to an 'EnumOFail' state.
 joinI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Iter tOut m (Iter tIn m a)
       -> Iter tIn m a
