@@ -179,7 +179,7 @@ instance (ChunkData t) => ChunkData (Chunk t) where
 -- from a 'Chunk' of data to a new state of the iteratee (in monad
 -- @m@).  The second case is signaled by the 'Done' constructor, which
 -- returns both a result of type @a@, and a 'Chunk' containing any
--- residual input the iteratee did not consume.  Finally failure is
+-- residual input the iteratee did not consume.  Finally, failure is
 -- signaled by either 'IterFail', 'EnumOFail', or 'EnumIFail',
 -- depending on whether the failure occured in an iteratee, an outer
 -- enumerator, or an inner enumerator.  (In the last two cases, when
@@ -188,16 +188,21 @@ instance (ChunkData t) => ChunkData (Chunk t) where
 --
 -- Note that @Iter t@ is a monad transformer.
 data Iter t m a = IterF (Chunk t -> m (Iter t m a))
-                -- ^ The iteratee requires more input
+                -- ^ The iteratee requires more input.
                 | Done a (Chunk t)
-                -- ^ Sufficient input was received; the iteratee has
-                -- returning a result and any unused input.
+                -- ^ Sufficient input was received; the iteratee is
+                -- returning a result (of type @a@) and a 'Chunk'
+                -- containing any unused input.
                 | IterFail SomeException
-                -- ^ The iteratee failed
+                -- ^ The iteratee failed.
                 | EnumOFail SomeException (Iter t m a)
-                -- ^ Enumerator failed, includes status of Iteratee
+                -- ^ An 'EnumO' failed; the result includes the status
+                -- of the iteratee at the time the enumerator failed.
                 | EnumIFail SomeException a
-                -- ^ Inner enumerator failed, includes status of Iteratee
+                -- ^ An 'EnumI' failed; this result includes status of
+                -- the Iteratee.  (The type @a@ will always be
+                -- @'Iter' t m a\'@ for some @a'@ in the result of an
+                -- 'EnumI'.)
 
 instance (ChunkData t) => Show (Iter t m a) where
     showsPrec _ (IterF _) rest = "IterF _" ++ rest
@@ -380,7 +385,8 @@ instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
         Right ok -> return ok
 
 -- | Return the result of an iteratee.  If it is still in the 'IterF'
--- state, feed it an EOF to extract a result.
+-- state, feed it an EOF to extract a result.  Throws an exception if
+-- there has been a failure.
 run :: (ChunkData t, Monad m) => Iter t m a -> m a
 run iter@(IterF _)  = runIter iter chunkEOF >>= run
 run (Done a _)      = return a
@@ -710,8 +716,10 @@ cat a b iter = do
 infixr 3 `cat`
 
 -- | Run an outer enumerator on an iteratee.  Any errors in inner
--- enumerators that have been fused to the iteratee will be considered
--- interatee failures.
+-- enumerators that have been fused to the iteratee (in the second
+-- argument of @|$@) will be considered iteratee failures.  Any
+-- failures that are not caught by 'catchI', 'enumCatch', or
+-- 'inumCatch' will be thrown as exceptions.
 (|$) :: (ChunkData t, Monad m) => EnumO t m a -> Iter t m a -> m a
 (|$) enum iter = run $ enum $ wrapI (>>= return) iter
 -- The purpose of the wrapI (>>= return) is to convert any EnumIFail
@@ -722,16 +730,16 @@ infixr 2 |$
 
 -- | An inner enumerator or transcoder.  Such a function accepts data
 -- from some outer enumerator (acting like an Iteratee), then
--- transcodes the data and feeds it to another Iter (hence also
--- acting like an enumerator towards that inner Iter).  Note that
--- data is viewed as flowing inwards from the outermost enumerator to
--- the innermost iteratee.  Thus tOut, the \"outer type\", is actually
--- the type of input fed to an EnumI, while @tIn@ is what the @EnumI@
--- feeds to an iteratee.
+-- transcodes the data and feeds it to another Iter (hence also acting
+-- like an enumerator towards that inner Iter).  Note that data is
+-- viewed as flowing inwards from the outermost enumerator to the
+-- innermost iteratee.  Thus @tOut@, the \"outer type\", is actually
+-- the type of input fed to an @EnumI@, while @tIn@ is what the
+-- @EnumI@ feeds to an iteratee.
 --
--- Like @EnumO@, an @EnumI@ is a function from iteratees to iteratees.
--- However, an @EnumI@'s input and output types are different.  A
--- simpler definition of @EnumI@ might have been:
+-- As with @EnumO@, an @EnumI@ is a function from iteratees to
+-- iteratees.  However, an @EnumI@'s input and output types are
+-- different.  A simpler alternative to @EnumI@ might have been:
 --
 -- > type EnumI' tOut tIn m a = Iter tIn m a -> Iter tOut m a
 --
