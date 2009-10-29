@@ -706,7 +706,9 @@ type EnumO t m a = Iter t m a -> Iter t m a
 -- monadic actions would not actually get to run until @b@ executess
 -- a, and @b@ might start out, before feeding any input to its
 -- iteratee, by waiting for some event that is triggered by a
--- side-effect of @a@.
+-- side-effect of @a@.  Has fixity:
+--
+-- > infixr 3 `cat`
 cat :: (Monad m, ChunkData t) => EnumO t m a -> EnumO t m a -> EnumO t m a
 cat a b iter = do
   iter' <- returnI $ a iter
@@ -719,7 +721,9 @@ infixr 3 `cat`
 -- enumerators that have been fused to the iteratee (in the second
 -- argument of @|$@) will be considered iteratee failures.  Any
 -- failures that are not caught by 'catchI', 'enumCatch', or
--- 'inumCatch' will be thrown as exceptions.
+-- 'inumCatch' will be thrown as exceptions.  Has fixity:
+--
+-- > infixr 2 |$
 (|$) :: (ChunkData t, Monad m) => EnumO t m a -> Iter t m a -> m a
 (|$) enum iter = run $ enum $ wrapI (>>= return) iter
 -- The purpose of the wrapI (>>= return) is to convert any EnumIFail
@@ -768,9 +772,11 @@ infixr 2 |$
 -- hides most of the error handling details.
 type EnumI tOut tIn m a = Iter tIn m a -> Iter tOut m (Iter tIn m a)
 
--- | Concatenate two inner enumerators
+-- | Concatenate two inner enumerators.  Has fixity:
+--
+-- > infixr 3 `catI`
 catI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-        EnumI tOut tIn m a
+        EnumI tOut tIn m a      -- ^
      -> EnumI tOut tIn m a
      -> EnumI tOut tIn m a
 catI a b = a >=> b
@@ -778,17 +784,22 @@ infixr 3 `catI`
 
 -- | Fuse an outer enumerator, producing chunks of some type @tOut@,
 -- with an inner enumerator that transcodes @tOut@ to @tIn@, to
--- produce a new outer enumerator producing chunks of type @tIn@.
+-- produce a new outer enumerator producing chunks of type @tIn@.  Has
+-- fixity:
+--
+-- > infixl 4 |..
 (|..) :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-         EnumO tOut m (Iter tIn m a)
+         EnumO tOut m (Iter tIn m a) -- ^
       -> EnumI tOut tIn m a
       -> EnumO tIn m a
 (|..) outer inner iter = joinI $ outer $ inner iter
 infixl 4 |..
 
--- | Fuse two inner enumerators into one.
+-- | Fuse two inner enumerators into one.  Has fixity:
+--
+-- > infixl 5 ..|..
 (..|..) :: (ChunkData tOut, ChunkData tMid, ChunkData tIn, Monad m) => 
-           EnumI tOut tMid m (Iter tIn m a)
+           EnumI tOut tMid m (Iter tIn m a) -- ^
         -> EnumI tMid tIn m a
         -> EnumI tOut tIn m a
 (..|..) outer inner iter = wrapI (return . joinI . joinI) $ outer $ inner iter
@@ -796,10 +807,12 @@ infixl 5 ..|..
 
 -- | Fuse an inner enumerator that transcodes @tOut@ to @tIn@ with an
 -- iteratee taking type @tIn@ to produce an iteratee taking type
--- @tOut@.
+-- @tOut@.  Has fixity:
+--
+-- > infixr 4 ..|
 (..|) :: (ChunkData tOut, ChunkData tIn, Monad m
          , Show tOut, Show tIn, Show a) =>
-         EnumI tOut tIn m a
+         EnumI tOut tIn m a     -- ^
       -> Iter tIn m a
       -> Iter tOut m a
 (..|) inner iter = wrapI (runI . joinI) $ inner iter

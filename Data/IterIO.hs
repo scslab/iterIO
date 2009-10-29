@@ -13,7 +13,7 @@ module Data.IterIO
     ) where
 
 import Prelude hiding (catch)
-import Data.IterIO.Base hiding (null)
+import Data.IterIO.Base hiding (null, run) -- names that might collide
 import Data.IterIO.ListLike
 
 {- $Overview
