@@ -27,6 +27,7 @@ import Text.Printf
 
 import Data.IterIO
 import Data.IterIO.Extra
+import Data.IterIO.Base (run)
 
 import Arc4
 import TM
