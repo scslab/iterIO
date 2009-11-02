@@ -444,18 +444,18 @@ tryI = wrapI errToEiter
 -- you should not re-throw exceptions with 'throwI'.  Rather, you
 -- should re-throw an exception by re-executing the failed 'Iter'.
 -- For example, you could define an @onExceptionI@ function analogous
--- to the standard library 'onException' as follows:
+-- to the standard library @'onException'@ as follows:
 --
 -- @
 --  onExceptionI iter cleanup =
---      iter \`catchI\` \('SomeException' _) iter' -> cleanup >> iter'
+--      iter \`catchI\` \\('SomeException' _) iter' -> cleanup >> iter'
 -- @
 --
 -- If you wish to continue processing the iteratee after a failure in
 -- an enumerator, use the 'resumeI' function.  For example:
 --
 -- @
---  action \`catchI\` \('SomeException' e) iter ->
+--  action \`catchI\` \\('SomeException' e) iter ->
 --      if 'isEnumError' iter
 --        then do liftIO $ putStrLn $ \"ignoring enumerator failure: \" ++ show e
 --                'resumeI' iter
@@ -509,8 +509,7 @@ tryI = wrapI errToEiter
 -- a second time to create an @Iter String IO (Iter String IO ())@.
 -- (To avoid such nesting proliferation in 'EnumO' types, it is
 -- sometimes easier to fuse multiple 'EnumI's together with '..|..',
--- or to fuse an 'EnumI' to the 'Iter' with '..|', though the latter
--- option changes the exception semantics somewhat.)
+-- before fusing them to an 'EnumO'.)
 --
 -- If you are only interested in catching enumerator failures, see the
 -- functions 'enumCatch' and `inumCatch`, which catch enumerator but
@@ -708,8 +707,8 @@ sendI sendfn = do
 -- more data from another source can still be fed to the iteratee, as
 -- happens when enumerators are concatenated with the 'cat' function.
 --
--- @EnumO@s should generally constructed using the 'enumO' function,
--- which handles most of the error-handling details.
+-- @EnumO@s should generally be constructed using the 'enumO'
+-- function, which takes care of most of the error-handling details.
 type EnumO t m a = Iter t m a -> Iter t m a
 
 -- | Concatenate two outer enumerators, forcing them to be executed in
@@ -770,7 +769,7 @@ infixr 2 |$
 -- methods after applying an @EnumI@ to an iteratee requires the
 -- ability to \"pop\" the iteratee back out of the @EnumI@ so as to be
 -- able to hand it to another @EnumI@.  The 'joinI' function provides
--- this functionality in its most general form, though if one only
+-- this popping function in its most general form, though if one only
 -- needs 'EnumI' concatenation, the simpler 'catI' function serves
 -- this purpose.
 --
@@ -835,7 +834,7 @@ infixr 4 ..|
 
 -- | Build an 'EnumO' from a @before@ action, an @after@ function, and
 -- an @input@ function in a manner analogous to the IO 'bracket'
--- function.  For instance, you could implement `enumFile'` as
+-- function.  For instance, you could implement @`enumFile'`@ as
 -- follows:
 --
 -- >   enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
@@ -965,7 +964,7 @@ enumPure t = enumO $ return $ Chunk t True
 --   or to the right of '|$'.  When applied to the left of '|$', will
 --   not catch any errors thrown by 'EnumI's to the right of '|$'.
 --
--- * 'enumCatch' only catches 'EnumO' failures, and should only by
+-- * 'enumCatch' only catches 'EnumO' failures, and should only be
 --   applied to the left of '|$'.  (You /can/ apply 'enumCatch' to
 --   'EnumI's or to the right of '|$', but this is not useful because
 --   it ignores 'Iter' and 'EnumI' failures so won't catch anything.)
