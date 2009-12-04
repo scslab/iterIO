@@ -24,8 +24,8 @@ Description:
         /iteratee/ (<http://hackage.haskell.org/package/iteratee>).
         This package is a from-scratch re-implementation of the
         iteratee concepts with a completely new interface, in an
-        effort to simplify many the abstractions and make them easier
-        to use.  The author of this package is particularly
+        effort to simplify many of the abstractions and make them
+        easier to use.  The author of this package is particularly
         grateful to John Lato, who helped him understand much of the
         important design rationale behind the original iteratee
         package.  The latest version of the iterIO sources is
