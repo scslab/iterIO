@@ -1,3 +1,10 @@
+{-
+   This is a reference implementation in Haskell of a reliable
+   transport over UDP assignment used in Stanford's CS144 class.
+   See this web page for the original assignment:
+
+   http://www.scs.stanford.edu/09au-cs144/lab/reliable.html
+-}
 
 module Main where
 
