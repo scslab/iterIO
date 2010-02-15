@@ -1,8 +1,10 @@
 
-TARGETS = Examples/fgrep Examples/simple Examples/reliable/reference	\
+PKG = $(basename $(wildcard *.cabal))
+TARGETS = $(basename $(wildcard Examples/*.hs))		\
+Examples/reliable/reference Examples/webserver/websvr	\
 Examples/reliable/tester
 
-all: build doc $(TARGETS)
+all: build $(TARGETS)
 
 .PHONY: all always clean build doc browse install
 
@@ -34,7 +36,7 @@ install: build doc
 	./Setup install
 
 browse: doc
-	firefox dist/doc/html/iterIO/index.html
+	firefox dist/doc/html/$(PKG)/index.html
 
 clean:
 	rm -rf $(TARGETS) Setup dist
