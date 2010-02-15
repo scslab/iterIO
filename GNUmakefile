@@ -2,11 +2,9 @@
 TARGETS = Examples/fgrep Examples/simple Examples/reliable/reference	\
 Examples/reliable/tester
 
-all: $(TARGETS) Setup
-	./Setup configure --user
-	./Setup build
+all: build doc $(TARGETS)
 
-.PHONY: all always clean doc browse
+.PHONY: all always clean build doc browse install
 
 GHC = ghc -XForeignFunctionInterface -XFlexibleInstances $(WALL)
 WALL = -Wall -Werror
@@ -23,9 +21,17 @@ Examples/%: always
 Setup: Setup.hs
 	$(GHC) --make Setup.hs
 
-doc: Setup
+dist/setup-config: Setup
 	./Setup configure --user
+
+build: dist/setup-config
+	./Setup build
+
+doc: dist/setup-config
 	./Setup haddock --hyperlink-source
+
+install: build doc
+	./Setup install
 
 browse: doc
 	firefox dist/doc/html/iterIO/index.html
