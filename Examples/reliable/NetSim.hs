@@ -13,7 +13,7 @@ import System.Time
 import TM
 import Arc4
 import Data.IterIO
-import Data.IterIO.Extra
+-- import Data.IterIO.Extra
 
 type NetSim a = EnumI [L.ByteString] [L.ByteString] TM a
 type NetSimM = Iter [L.ByteString] TM
@@ -35,57 +35,53 @@ rndIntI bound = do
 
 
 dropper :: Float -> NetSim a
-dropper dropProb iter = do
+dropper dropProb = enumI' $ do
   packet <- headI
   dropit <- rndBoolI dropProb
-  if dropit
-    then dropper dropProb iter
-    else feedI (dropper dropProb) [packet] iter
+  return $ if dropit then [] else [packet]
 
 reorderer :: Float -> NetSim a
-reorderer prob iter1 = do
-  packet <- headI
-  oldOrNew packet iter1
-    where
-      oldOrNew old iter =
-          do new <- headI
-             b <- rndBoolI prob
-             feedI (oldOrNew $ if b then new else old)
-                   [if b then old else new] iter
+reorderer prob = enumI $ headI >>= oldOrNew
+  where
+    oldOrNew old = do
+      new <- headI
+      b <- rndBoolI prob
+      return $ if b
+               then CodecChunk (Just $ oldOrNew new) [old]
+               else CodecChunk (Just $ oldOrNew old) [new]
 
 duplicater :: Float -> NetSim a
-duplicater dupProb iter = do
+duplicater dupProb = enumI' $ do
   packet <- headI
   dupit <- rndBoolI dupProb
-  feedI (duplicater dupProb) (packet:if dupit then [packet] else []) iter
+  return $ (packet:if dupit then [packet] else [])
 
 badlength :: Float -> NetSim a
-badlength prob iter = do
+badlength prob = enumI' $ do
   pkt <- headI
   doit <- rndBoolI prob
-  pkt' <- (if doit then corrupt else return) pkt
-  feedI (corrupter prob) [pkt'] iter
+  return [if doit then corrupt pkt else pkt]
     where
-      corrupt pkt | L.null pkt = return pkt
-                  | otherwise  = return $ L.cons (L.head pkt .|. 0x80)
+      corrupt pkt | L.null pkt = pkt
+                  | otherwise  = L.cons (L.head pkt .|. 0x80)
                                  (L.drop 1 pkt)
 
 garbage :: Float -> NetSim a
-garbage prob iter = do
+garbage prob = enumI' $ do
   pkt <- headI
   doit <- rndBoolI prob
   if doit
     then do rlen <- rndIntI 513
             crap <- lift $ asks tcRnd >>= flip a4RandomStringN rlen
-            feedI (garbage prob) [crap,pkt] iter
-    else feedI (garbage prob) [pkt] iter
+            return [crap, pkt]
+    else return [pkt]
 
 corrupter :: Float -> NetSim a
-corrupter prob iter = do
+corrupter prob = enumI' $ do
   pkt <- headI
   doit <- rndBoolI prob
   pkt' <- (if doit then corrupt else return) pkt
-  feedI (corrupter prob) [pkt'] iter
+  return [pkt']
     where
       corrupt pkt | L.null pkt = return pkt
                   | otherwise = do
@@ -97,10 +93,10 @@ corrupter prob iter = do
                         return $ L.append a $ L.cons rb c
         
 truncater :: Float -> NetSim a
-truncater prob iter = do
+truncater prob = enumI' $ do
   pkt <- headI
   doit <- rndBoolI prob
-  feedI (truncater prob) [if doit then L.init pkt else pkt] iter
+  return [if doit then L.init pkt else pkt]
 
 subtime :: ClockTime -> ClockTime -> ClockTime
 subtime (TOD as aps) (TOD bs bps) =
@@ -113,14 +109,16 @@ leqtime (TOD as aps) (TOD bs bps) =
     as < bs || as == bs && aps <= bps
 
 excessive :: NetSim a
-excessive = doit [] Nothing
+excessive = enumI $ doit [] Nothing
     where
       holdtime = do to <- lift $ asks tcTimeout
                     let ms = to `div` 2
                     return $ TOD (fromIntegral $ ms `div` 1000)
                                (fromIntegral $ (ms `mod` 1000 * 1000000))
       dead = IterF $ \_ -> return $ dead
-      doit pkts' mtime iter = do
+      doit :: [L.ByteString] -> (Maybe ClockTime)
+              -> Codec [L.ByteString] TM [L.ByteString]
+      doit pkts' mtime = do
         pkt <- headI
         let pkts = pkt:pkts'
         now <- liftIO getClockTime
@@ -129,7 +127,8 @@ excessive = doit [] Nothing
                   Nothing -> liftIO getClockTime
         ht <- holdtime
         if (now `subtime` time) `leqtime` ht
-          then doit pkts (Just time) iter
+          then return $ CodecChunk (Just $ doit pkts (Just time)) []
           else if length pkts > 6
                then dead
-               else feedI inumNop (reverse pkts) iter
+               else return $ CodecChunk (Just $ chunkerToCodec chunkI)
+                    (reverse pkts)

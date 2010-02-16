@@ -70,7 +70,7 @@
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI
-    , CodecChunk, Codec
+    , CodecChunk(..), Codec
     -- * Core functions
     , (|$)
     , runIter, run
