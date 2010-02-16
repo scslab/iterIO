@@ -47,8 +47,8 @@ reorderer prob = enumI $ headI >>= oldOrNew
       new <- headI
       b <- rndBoolI prob
       return $ if b
-               then CodecChunk (Just $ oldOrNew new) [old]
-               else CodecChunk (Just $ oldOrNew old) [new]
+               then CodecF (oldOrNew new) [old]
+               else CodecF (oldOrNew old) [new]
 
 duplicater :: Float -> NetSim a
 duplicater dupProb = enumI' $ do
@@ -127,8 +127,8 @@ excessive = enumI $ doit [] Nothing
                   Nothing -> liftIO getClockTime
         ht <- holdtime
         if (now `subtime` time) `leqtime` ht
-          then return $ CodecChunk (Just $ doit pkts (Just time)) []
+          then return $ CodecF (doit pkts (Just time)) []
           else if length pkts > 6
                then dead
-               else return $ CodecChunk (Just $ chunkerToCodec chunkI)
+               else return $ CodecF (chunkerToCodec chunkI)
                     (reverse pkts)

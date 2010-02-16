@@ -70,7 +70,7 @@
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI
-    , CodecChunk(..), Codec
+    , Codec, CodecR(..)
     -- * Core functions
     , (|$)
     , runIter, run
@@ -839,26 +839,34 @@ infixl 5 ..|..
 (..|) inner iter = wrapI (runI . joinI) $ inner iter
 infixr 4 ..|
 
--- | A @Codec@ function is an 'Iter' that tranlates data from some
--- input type @tArg@ to an output type @tRes@ and returns the result
--- in a 'CodecChunk'.  If the @Codec@ is capable of translating more
--- input, it returns an 'Iter' for translating subsequent input.  This
--- convention allows @Codec@s to maintain state from one invocation to
--- the next, by currying the state into the codec function the next
--- time it is invoked.
-type Codec tArg m tRes = Iter tArg m (CodecChunk tArg m tRes)
+-- | A @Codec@ is an 'Iter' that tranlates data from some input type
+-- @tArg@ to an output type @tRes@ and returns the result in a
+-- 'CodecR'.  If the @Codec@ is capable of repeatedly being invoked to
+-- translate more input, it returns a 'CodecR' in the 'CodecF' state.
+-- This convention allows @Codec@s to maintain state from one
+-- invocation to the next by currying the state into the codec
+-- function the next time it is invoked.  A @Codec@ that cannot
+-- process more input returns a 'CodecR' in the 'CodecE' state.
+type Codec tArg m tRes = Iter tArg m (CodecR tArg m tRes)
 
--- | The result type returned by a 'Codec' that translates from type
--- @tArg@ to @tRes@ in monad @m@.  @CodecChunk@ includes a new 'Codec'
--- for translating subsequent input, or just @'Nothing'@ if no further
--- input can be processed.
-data CodecChunk tArg m tRes = CodecChunk (Maybe (Codec tArg m tRes)) tRes
+-- | The result type of a 'Codec' that translates from type @tArg@ to
+-- @tRes@ in monad @m@.  The result potentially includes a new 'Codec'
+-- for translating subsequent input.
+data CodecR tArg m tRes = CodecF { unCodecF :: (Codec tArg m tRes)
+                                 , unCodecR :: tRes }
+                          -- ^ This is the normal 'Codec' result,
+                          -- which includes another 'Codec' (often the
+                          -- same as one that was just called) for
+                          -- processing further input.
+                        | CodecE { unCodecR :: tRes }
+                          -- ^ This constructor is used if the 'Codec'
+                          -- is returning for the last time and cannot
+                          -- provide another 'Codec' to process
+                          -- further input.
 
 -- | Transform an ordinary 'Iter' into a stateless 'Codec'.
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
-iterToCodec iter = do
-  a <- iter
-  return $ CodecChunk (Just $ iterToCodec iter) a
+iterToCodec iter = iter >>= return . CodecF (iterToCodec iter)
 
 -- | Creates a 'Codec' from an 'Iter' @iter@ that returns 'Chunk's.
 -- The 'Codec' returned will keep offering to translate more input
@@ -867,8 +875,8 @@ chunkerToCodec :: (ChunkData t, Monad m) => Iter t m (Chunk a) -> Codec t m a
 chunkerToCodec iter = do
   Chunk d eof <- iter
   if eof
-   then return $ CodecChunk Nothing d
-   else return $ CodecChunk (Just $ chunkerToCodec iter) d
+   then return $ CodecE d
+   else return $ CodecF (chunkerToCodec iter) d
 
 -- | Build an 'EnumO' from a @before@ action, an @after@ function, and
 -- an @input@ function in a manner analogous to the IO 'bracket'
@@ -921,9 +929,9 @@ enumO :: (Monad m, ChunkData t) =>
          -- (obtained from the first argument) into an iteratee.
 enumO codec0 iter@(IterF _) = (lift $ runIter codec0 chunkEOF) >>= check
     where
-      check (Done (CodecChunk Nothing t) _) =
+      check (Done (CodecE t) _) =
           lift (runIter iter $ chunk t) >>= id
-      check (Done (CodecChunk (Just codec) t) _) =
+      check (Done (CodecF codec t) _) =
           lift (runIter iter $ chunk t) >>= enumO codec
       check codec
           | isIterEOFError codec = iter
@@ -957,18 +965,18 @@ enumI startCodec = enumI1 startCodec
         codec' <- runIter codec cOut
         case codec' of
           IterF _ -> return $ enumI1 codec' iter
-          Done (CodecChunk mcodec tIn) cOut' ->
-              runIter iter (chunk tIn) >>= check mcodec cOut'
+          Done codecr cOut' ->
+              runIter iter (chunk $ unCodecR codecr) >>= check codecr cOut'
           _ | isIterEOFError codec' -> return $ return iter
           _ -> return $ EnumIFail (getIterError codec') iter
 
-      check Nothing cOut iter          = return $ Done iter cOut
+      check (CodecE _) cOut iter       = return $ Done iter cOut
       check _ cOut@(Chunk _ True) iter = return $ Done iter cOut
-      check (Just codec) cOut iter@(IterF _)
+      check (CodecF codec _) cOut iter@(IterF _)
           | null cOut                  = return $ enumI1 codec iter
           | otherwise                  = feedCodec codec iter cOut
       -- If the iteratee has finished, have to send EOF to the codec
-      check (Just codec) cOut iter     = do
+      check (CodecF codec _) cOut iter = do
         do codec' <- runIter codec chunkEOF
            if isIterError codec' && not (isIterEOFError codec')
             then return $ EnumIFail (getIterError codec') iter
@@ -1023,7 +1031,7 @@ enumI' fn iter = enumI (iterToCodec fn) iter
 
 -- | An 'EnumO' that will feed pure data to 'Iter's.
 enumPure :: (Monad m, ChunkData t) => t -> EnumO t m a
-enumPure t = enumO $ return $ CodecChunk Nothing t
+enumPure t = enumO $ return $ CodecE t
 
 -- | Like 'catchI', but applied to 'EnumO's and 'EnumI's instead of
 -- 'Iter's, and does not catch errors thrown by 'Iter's.
