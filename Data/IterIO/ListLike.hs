@@ -155,7 +155,7 @@ sockDgramI s mdest = do
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> EnumO [t] m a
-enumDgram sock = enumO $ do
+enumDgram sock = enumO $ chunkerToCodec $ do
   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
   return $ if r < 0 then chunkEOF else chunk [msg]
 
@@ -165,7 +165,7 @@ enumDgram sock = enumO $ do
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> EnumO [(t, SockAddr)] m a
-enumDgramFrom sock = enumO $ do
+enumDgramFrom sock = enumO $ chunkerToCodec $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
   return $ if r < 0 then chunkEOF else chunk [(msg, addr)]
 
@@ -179,7 +179,7 @@ enumHandle' = enumHandle'
 enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                Handle
             -> EnumO t m a
-enumHandle h = enumO $ do
+enumHandle h = enumO $ chunkerToCodec $ do
   liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
   return $ dataToChunk buf
@@ -222,10 +222,10 @@ inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle
          -> EnumI t t m a
 inumhLog h =
-    enumI $ do
+    enumI $ chunkerToCodec $ do
       c@(Chunk buf eof) <- chunkI
       liftIO $ do
-              unless (null buf) $ LL.hPutStr h buf `onException` hClose h
-              when eof $ hClose h
+        unless (null buf) $ LL.hPutStr h buf `onException` hClose h
+        when eof $ hClose h
       return c
 
