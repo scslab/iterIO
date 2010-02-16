@@ -43,6 +43,7 @@ pktPrint iter = do
   feedI pktPrint [pkt] iter
 -}
 
+{-
 rawPktPrint :: String -> EnumI [L.ByteString] [L.ByteString] IO ()
 rawPktPrint prefix iter = do
   mraw <- safeHeadI
@@ -54,6 +55,17 @@ rawPktPrint prefix iter = do
              Just pkt ->
                  do liftIO (hPutStrLn stderr $ prefix ++ show pkt)
                     feedI (rawPktPrint prefix) [raw] iter
+-}
+
+rawPktPrint :: String -> EnumI [L.ByteString] [L.ByteString] IO ()
+rawPktPrint prefix = enumI' dopkt
+    where
+      dopkt = do
+        raw <- headI
+        do case pktparse raw of
+             Nothing  -> dopkt
+             Just pkt -> do liftIO (hPutStrLn stderr $ prefix ++ show pkt)
+                            return [raw]
 
 pktPut :: Iter [Packet] IO ()
 pktPut = safeHeadI >>= process

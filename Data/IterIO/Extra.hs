@@ -4,8 +4,8 @@
 -- | This module contains deprecated functions plus a few pieces of
 -- functionality that are missing from the standard Haskell libraries.
 module Data.IterIO.Extra
-    ( -- * Deprecated functions
-      feed, feedO, feedI
+    ( -- * Deprecated function
+      feed
       -- * Functionality missing from system libraries
     , SendRecvString(..)
     , hShutdown
@@ -13,7 +13,7 @@ module Data.IterIO.Extra
 
 import Control.Concurrent.MVar
 import Control.Monad
-import Control.Monad.Trans
+-- import Control.Monad.Trans
 import Foreign.C
 import Foreign.Ptr
 import qualified Data.ByteString as S
@@ -40,6 +40,7 @@ foreign import ccall unsafe "sys/socket.h shutdown"
 feed :: (Monad m, ChunkData t) => t -> Iter t m a -> m (Iter t m a)
 feed t iter = runIter iter $ Chunk t False
 
+{-
 -- | Feed pure data directly to an iteratee from within a function of
 -- type 'EnumO'.  Takes the outer 'EnumO' as an argument so as to
 -- invoke it recursively when the iteratee returns 'Cont'.
@@ -65,6 +66,7 @@ feedI enum t iter = do
     case result of
       IterF _ -> enum result
       _       -> return $ result
+-}
 
 --
 -- Some utility functions for things that are made hard by the Haskell

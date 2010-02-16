@@ -26,7 +26,7 @@ import Text.Printf
 -- import Debug.Trace
 
 import Data.IterIO
-import Data.IterIO.Extra
+-- import Data.IterIO.Extra
 import Data.IterIO.Base (run)
 
 import Arc4
@@ -70,18 +70,16 @@ pktshow (DataP ackno seqno payload) =
                     else L8.unpack payload)
 
 pktDebug :: (MonadIO m) => String -> EnumI [L.ByteString] [L.ByteString] m a
-pktDebug prefix iter = do
-  mraw <- safeHeadI
-  case mraw of
-    Nothing -> return iter
-    Just raw -> do
-        case pktparse raw of
-          Nothing  -> liftIO $ S8.hPut stderr
-                      $ S8.pack $ prefix ++ "corrupt packet\n"
-          Just pkt -> liftIO $ S8.hPut stderr $ S8.pack
-                      $ prefix ++ pktshow pkt ++ "\n"
-        feedI (pktDebug prefix) [raw] iter
+pktDebug prefix = enumI' $ do
+  raw <- headI
+  case pktparse raw of
+    Nothing  -> liftIO $ S8.hPut stderr
+                $ S8.pack $ prefix ++ "corrupt packet\n"
+    Just pkt -> liftIO $ S8.hPut stderr $ S8.pack
+                $ prefix ++ pktshow pkt ++ "\n"
+  return [raw]
 
+{-
 pktPut :: (Monad m) => EnumI [Packet] L.ByteString m a
 pktPut iter = safeHeadI >>= process
     where
@@ -90,6 +88,15 @@ pktPut iter = safeHeadI >>= process
           | L.null payload = return iter
           | otherwise      = feedI pktPut payload iter
       process _            = pktPut iter
+-}
+
+pktPut :: (Monad m) => EnumI [Packet] L.ByteString m a
+pktPut = enumI' $ headI >>= process
+    where
+      process (DataP _ _ payload)
+          | L.null payload = throwEOFI "EOF"
+          | otherwise      = return payload
+      process _ = headI >>= process
 
 internalTarget :: TM (Target a b)
 internalTarget = do
@@ -268,21 +275,25 @@ expectI goal | L.null goal = return True
     else return False
 
 lE :: (Monad m) => Int -> EnumO L.ByteString m a
-lE n iter | n == 0 = iter
-          | n < linelen = myfeed $ (replicate (n-1) '.')
+lE n0 = enumO $ codec n0
+    where
+      codec n
+          | n <= 0      = return $ CodecE L.empty
+          | n < linelen = ret n (replicate (n-1) '.')
           | otherwise =
               let msg = show n ++ " more characters to go"
                   msgpad = msg ++ (replicate ((linelen - length msg) - 1) ' ')
-              in myfeed msgpad
-    where
+              in ret n msgpad
       linelen = 47
-      myfeed str = feedO (lE $ max 0 (n - linelen)) (L8.pack $ str ++ "\n") iter
+      ret n str = return $ (if n <= linelen then CodecE
+                               else CodecF (codec $ n - linelen))
+                          (L8.pack $ str ++ "\n")
 
 packE :: (Monad m) => EnumI L.ByteString L.ByteString m a
-packE iter = do
+packE = enumI' $ do
   packet' <- stringExactI $ fromIntegral L.defaultChunkSize
   let packet = L.fromChunks [S8.concat $ L.toChunks packet']
-  feedI packE packet iter
+  return packet
 
 cE :: (Monad m) => Char -> Int -> EnumO L.ByteString m a
 cE c len iter =
@@ -296,15 +307,15 @@ nI n = do
     n'           -> nI n'
 
 a4E :: (Monad m) => String -> Int -> EnumO L.ByteString m a
-a4E key len = enumChunks (a4new key) len
+a4E key len = enumO $ enumChunks (a4new key) len
     where
-      enumChunks a4 n iter
-          | n == 0    = iter
+      enumChunks a4 n
+          | n <= 0    = return $ CodecE L.empty
           | otherwise =
-              do let chunklen = min n L.defaultChunkSize
-                     (c, a4') = a4chunk a4 chunklen
-                 feedO (enumChunks a4' (n - chunklen))
-                           (L.fromChunks [c]) iter
+              let chunklen = min n L.defaultChunkSize
+                  (c, a4') = a4chunk a4 chunklen
+              in return $
+                 CodecF (enumChunks a4' (n - chunklen)) (L.fromChunks [c])
 
 a4I :: (MonadIO m) => String -> Int -> Iter L.ByteString m Bool
 a4I key len = iter (a4new key) len
