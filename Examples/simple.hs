@@ -60,8 +60,8 @@ inumGrep' re iter = do
   Right cre <- liftIO $ compile 0 0 $ S8.pack re
   flip enumI' iter $ do
     line <- lineI
-    Right match <- liftIO $ execute cre (S.concat $ L.toChunks line)
-    return $ if isJust match
+    Right amatch <- liftIO $ execute cre (S.concat $ L.toChunks line)
+    return $ if isJust amatch
              then L8.snoc line '\n'
              else mempty
 
