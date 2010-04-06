@@ -172,7 +172,7 @@ enumDgramFrom sock = enumO $ chunkerToCodec $ do
 -- | Feed data from a file handle into an 'Iter' in Lazy
 -- 'L.ByteString' format.
 enumHandle' :: (MonadIO m) => Handle -> EnumO L.ByteString m a
-enumHandle' = enumHandle'
+enumHandle' = enumHandle
 
 -- | Like 'enumHandle'', but can use any 'LL.ListLikeIO' type for the
 -- data instead of just 'L.ByteString'.
