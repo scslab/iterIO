@@ -187,7 +187,7 @@ enumHandle h = enumO $ chunkerToCodec $ do
 -- | Enumerate the contents of a file as a series of lazy
 -- 'L.ByteString's.
 enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
-enumFile' = enumFile'
+enumFile' = enumFile
 
 -- | Like 'enumFile'', but can use any 'LL.ListLikeIO' type for the
 -- data read from the file.
@@ -195,7 +195,7 @@ enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
              FilePath
           -> EnumO t m a
 enumFile path =
-    enumObracket (liftIO $ openFile path ReadMode) (liftIO . hClose) $
+    enumObracket (liftIO $ openBinaryFile path ReadMode) (liftIO . hClose) $
         \h -> liftIO (LL.hGet h defaultChunkSize) >>= return . dataToChunk
 
 
@@ -212,7 +212,7 @@ inumLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
         -> Bool                 -- ^ True to truncate file
         -> EnumI t t m a
 inumLog path trunc iter = do
-  h <- liftIO $ openFile path (if trunc then WriteMode else AppendMode)
+  h <- liftIO $ openBinaryFile path (if trunc then WriteMode else AppendMode)
   liftIO $ hSetBuffering h NoBuffering
   inumhLog h iter
 

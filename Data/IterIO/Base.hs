@@ -347,7 +347,7 @@ fixtest2 i = do
 -- you can define an instance of 'MonadFix' in which
 -- @'mfix' = fixIterPure@.  However, be warned that this /only/ works
 -- when computations in the monad have no side effects, as
--- @fixIterPure@ will repeatedly re-invoke the funciton passsed in
+-- @fixIterPure@ will repeatedly re-invoke the function passsed in
 -- when more input is required (thereby also repeating side-effects).
 -- For cases in which the monad may have side effects, if the monad is
 -- in the 'MonadIO' class then there is already an 'mfix' instance
