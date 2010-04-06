@@ -4,8 +4,8 @@ module Main (module Main, module Arc4) where
 
 import Control.Concurrent
 import Control.Monad.Reader
-import Data.Char
-import Data.List
+-- import Data.Char
+-- import Data.List
 import Data.Word
 import Network.Socket
 import System.Console.GetOpt
@@ -155,7 +155,7 @@ showTests = do putStrLn "\nAvailable tests:\n"
                putStrLn ""
     where
       st _ [] = return ()
-      st n (t:ts) = do hPrintf stdout " %2d. %s\n" n (testDescrip t)
+      st n (t:ts) = do _ <- hPrintf stdout " %2d. %s\n" n (testDescrip t)
                        st (n+1) ts
 
 runTests :: Int -> [Test] -> TM (Int,Int)
@@ -189,7 +189,7 @@ main = withSocketsDo $ do
            _ | optList o -> showTests
            Just n | n <= 0 || n > length tests -> showTests
            Just n -> do
-             runReaderT (runTest n $ tests !! (n - 1)) config
+             _ <- runReaderT (runTest n $ tests !! (n - 1)) config
              return ()
            Nothing -> do
              (passed, completed) <- runReaderT (runTests 1 tests) config

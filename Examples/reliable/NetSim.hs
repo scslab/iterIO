@@ -3,7 +3,7 @@ module NetSim where
 
 -- import Control.Monad
 import Control.Monad.Reader
-import Control.Monad.Trans
+-- import Control.Monad.Trans
 import Data.Bits
 import qualified Data.ByteString.Lazy as L
 import Data.Word
@@ -20,9 +20,9 @@ type NetSimM = Iter [L.ByteString] TM
 
 udpI :: (MonadIO m) => Socket -> Iter [L.ByteString] m ()
 udpI s = do
-  error "udpI"
+  _ <- error "udpI"
   packet <- headI
-  liftIO $ sendStr s packet
+  _ <- liftIO $ sendStr s packet
   udpI s
 
 rndBoolI :: Float -> NetSimM Bool
@@ -71,7 +71,7 @@ garbage prob = enumI' $ do
   pkt <- headI
   doit <- rndBoolI prob
   if doit
-    then do rlen <- rndIntI 513
+    then do rlen <- rndIntI (513 :: Int)
             crap <- lift $ asks tcRnd >>= flip a4RandomStringN rlen
             return [crap, pkt]
     else return [pkt]
@@ -85,7 +85,7 @@ corrupter prob = enumI' $ do
     where
       corrupt pkt | L.null pkt = return pkt
                   | otherwise = do
-                        rbit <- liftM ((1::Word8) `shiftL`) $ rndIntI 8
+                        rbit <- liftM ((1::Word8) `shiftL`) $ rndIntI (8 :: Int)
                         rbyte <- rndIntI $ L.length pkt
                         let (a, b') = L.splitAt rbyte pkt
                             (b, c) = L.splitAt 1 b'

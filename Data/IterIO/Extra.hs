@@ -1,5 +1,6 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# OPTIONS_GHC -cpp #-}
 
 -- | This module contains deprecated functions plus a few pieces of
 -- functionality that are missing from the standard Haskell libraries.
@@ -11,7 +12,7 @@ module Data.IterIO.Extra
     , hShutdown
     ) where
 
-import Control.Concurrent.MVar
+-- import Control.Concurrent.MVar
 import Control.Monad
 -- import Control.Monad.Trans
 import Foreign.C
@@ -25,7 +26,15 @@ import System.IO
 
 import Data.IterIO.Base
 
+#if __GLASGOW_HASKELL__ <= 611
 import GHC.IOBase (Handle(..), Handle__(..))
+#else /* __GLASGOW_HASKELL__ >= 612 */
+import Data.Typeable
+import System.IO.Error
+import GHC.IO.FD (FD(..))
+import GHC.IO.Handle.Types (Handle__(..))
+import GHC.IO.Handle.Internals (wantWritableHandle)
+#endif /* __GLASGOW_HASKELL__ >= 612 */
 
 foreign import ccall unsafe "sys/socket.h send"
   c_send :: CInt -> Ptr a -> CSize -> CInt -> IO CInt
@@ -118,9 +127,25 @@ instance SendRecvString L.ByteString where
 -- socket, but the 'EnumO' may still be reading from the socket in a
 -- differen tthread.
 hShutdown                            :: Handle -> CInt -> IO Int
+
+#if __GLASGOW_HASKELL__ <= 611
 hShutdown h@(FileHandle _ m) how     = hFlush h >> hShutdown' m how
 hShutdown h@(DuplexHandle _ _ m) how = hFlush h >> hShutdown' m how
 hShutdown'       :: MVar Handle__ -> CInt -> IO Int
 hShutdown' m how = do withMVar m $ \(Handle__ { haFD = fd }) ->
                           liftM fromIntegral $ c_shutdown (fromIntegral fd) how
+
+#else /* __GLASGOW_HASKELL__ >= 612 */
+hShutdown h how = wantWritableHandle "hShutdown" h $
+                   \Handle__ {haDevice = dev} ->
+                       case cast dev of
+                         Just (FD {fdFD = fd}) ->
+                             liftM fromEnum $ c_shutdown fd how
+                         Nothing ->
+                             ioError (ioeSetErrorString
+                                      (mkIOError illegalOperationErrorType
+                                       "hShutdown" (Just h) Nothing) 
+                                      "handle is not a file descriptor")
+
+#endif /* __GLASGOW_HASKELL__ >= 612 */
   

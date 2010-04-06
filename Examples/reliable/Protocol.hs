@@ -9,8 +9,8 @@ import Control.Monad.Trans
 import Data.Binary.Get
 import Data.Binary.Put
 import Data.Bits
-import Data.Int
-import Data.List
+-- import Data.Int
+-- import Data.List
 import Data.Maybe
 -- import Data.Monoid
 import Data.Map (Map)
@@ -19,9 +19,9 @@ import Data.Word
 -- import Foreign.Ptr
 import qualified Data.ByteString.Lazy as L
 -- import qualified Data.ByteString.Lazy.Internal as L
-import qualified Data.ByteString.Lazy.Char8 as L8
+-- import qualified Data.ByteString.Lazy.Char8 as L8
 import Network.Socket
-import System.IO
+-- import System.IO
 
 import Data.IterIO
 -- import Data.IterIO.Extra
@@ -98,7 +98,7 @@ relSend ep fork iter = doSend 0 1
           liftIO $ writeSampleVar (epSnd ep) ()
           return next
         lift $ xmit next payload
-        lift $ fork $ rexmit next payload
+        _ <- lift $ fork $ rexmit next payload
         if L.null payload
           then -- Can't return until we are done sending Acks
                liftIO (waitQSem $ epRdone ep) >> return iter
@@ -108,7 +108,7 @@ relSend ep fork iter = doSend 0 1
       xmit seqno payload = do
         lfr <- liftIO $ readMVar (epLFR ep)
         let pkt = pktgen $ DataP lfr seqno payload
-        feed [pkt] iter
+        _ <- feed [pkt] iter
         return ()
 
       rexmit :: SeqNo -> L.ByteString -> m ()
@@ -134,10 +134,10 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
         case pktparse rawpkt of
           Nothing -> getPkts next q iter
           Just (AckP ackno) ->
-              do recvack ackno
+              do _ <- recvack ackno
                  getPkts next q iter
           Just p@(DataP ackno _ _) ->
-              do recvack ackno
+              do _ <- recvack ackno
                  doNext [] next (enqPacket next q p) iter
 
       doNext :: [Packet] -> SeqNo -> Queue
@@ -147,7 +147,7 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
           Just pkt -> doNext (pkt:pkts) (next+1) (Map.delete next q) iter
           Nothing | null pkts -> sendack next >> getPkts next q iter
           Nothing | otherwise ->
-            do sendack next
+            do _ <- sendack next
                -- feedI (getPkts next q) pkts iter
                result <- lift $ feed (reverse pkts) iter
                case result of
@@ -175,11 +175,11 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
           Nothing      -> done >> (return $ return a)
           Just Nothing -> closewait seqno a
           Just (Just (AckP ackno)) ->
-              do recvack ackno
+              do _ <- recvack ackno
                  closewait seqno a
           Just (Just (DataP ackno _ _)) ->
-              do recvack ackno
-                 sendack seqno
+              do _ <- recvack ackno
+                 _ <- sendack seqno
                  closewait seqno a
 
 

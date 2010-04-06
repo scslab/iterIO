@@ -9,11 +9,11 @@
 module Main where
 
 import Control.Concurrent
-import Control.Concurrent.MVar
+-- import Control.Concurrent.MVar
 import Control.Exception (finally)
 import Control.Monad
 import Control.Monad.Trans
-import Data.Maybe
+-- import Data.Maybe
 -- import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.ByteString.Lazy as L
 import Network.Socket
@@ -97,7 +97,7 @@ test d t w l r = do
 
   let recvpipe = receiver |$ relReceive ep sender ..| pktPut
   -- forkIO $ (recvpipe `finally` putMVar reader () >> forever recvpipe)
-  forkIO $ (recvpipe `finally` putMVar reader ())
+  _ <- forkIO $ (recvpipe `finally` putMVar reader ())
 
   enumHandle stdin |$ relSend ep forkIO ..| sender
   takeMVar reader

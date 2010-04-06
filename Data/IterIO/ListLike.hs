@@ -180,7 +180,7 @@ enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                Handle
             -> EnumO t m a
 enumHandle h = enumO $ chunkerToCodec $ do
-  liftIO $ hWaitForInput h (-1)
+  _ <- liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
   return $ dataToChunk buf
 

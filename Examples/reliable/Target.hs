@@ -127,7 +127,7 @@ kill ph sig = do
       case p of
         OpenHandle pid -> c_kill pid sig >> return p
         _              -> return p
-  forkIO $ waitForProcess ph >> return ()
+  _ <- forkIO $ waitForProcess ph >> return ()
   return ()
 
 
@@ -223,8 +223,8 @@ notify targ ph = do
           pid <- phPid ph
           hPutStrLn stderr $ "\nSpawned " ++ targ ++ " with PID "
                         ++ show pid ++ ".  Press RETURN to continue."
-          hWaitForInput stdin (-1)
-          L.hGetNonBlocking stdin 512
+          _ <- hWaitForInput stdin (-1)
+          _ <- L.hGetNonBlocking stdin 512
           return ()
 
 s2h2 :: IO (Socket, Socket) -> IO (Handle, Handle)
@@ -242,7 +242,7 @@ doErr quiet' h' = getPort quiet' h' []
              let acc' = acc ++ L8.unpack buf
              case acc' =~ "UDP port ([0-9]+)[^0-9]"
                        :: (String, String, String, [String]) of
-               (_,_,_,p:_) -> do forkIO $ handle eofHandler $
+               (_,_,_,p:_) -> do _ <- forkIO $ handle eofHandler $
                                         (if quiet then drainHandle
                                          else copyHandle)
                                         h `finally` hClose h
@@ -357,8 +357,8 @@ runStreamTest udpthreads eps timeout tests others = do
                     >> signalQSemN done ntests)
   liftIO $ do waitQSemN done ntests
               ok <- readMVar numok
-              mapM killThread $ to:(tt ++ ot ++ udpthreads)
-              mapM tKill eps
+              _ <- mapM killThread $ to:(tt ++ ot ++ udpthreads)
+              _ <- mapM tKill eps
               return $ ok == ntests
   where
     inc x = return $ x + 1
@@ -407,7 +407,7 @@ pingPong ut a b = do
         line <- lineI
         case reads $ L8.unpack line of
           (n, []):_ | n == expect && n == 1 ->
-               do lift $ feed (L8.pack "0\n") iter
+               do _ <- lift $ feed (L8.pack "0\n") iter
                   return True
           (n, []):_ | n == expect && n == 0 -> return True
           (n, []):_ | n == expect ->

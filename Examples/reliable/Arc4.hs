@@ -25,7 +25,7 @@ import Data.Char
 import Data.IORef
 import Data.Word
 import Foreign.Storable
-import System.IO
+-- import System.IO
 import System.IO.Unsafe
 import System.Time
 

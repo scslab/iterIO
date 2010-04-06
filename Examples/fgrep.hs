@@ -9,7 +9,7 @@ import Control.Monad.Trans
 import System.Environment
 import System.Exit
 import System.IO
-import System.IO.Error
+-- import System.IO.Error
 
 import Data.IterIO
 
