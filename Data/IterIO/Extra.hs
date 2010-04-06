@@ -12,7 +12,6 @@ module Data.IterIO.Extra
     , hShutdown
     ) where
 
--- import Control.Concurrent.MVar
 import Control.Monad
 -- import Control.Monad.Trans
 import Foreign.C
@@ -27,6 +26,7 @@ import System.IO
 import Data.IterIO.Base
 
 #if __GLASGOW_HASKELL__ <= 611
+import Control.Concurrent.MVar
 import GHC.IOBase (Handle(..), Handle__(..))
 #else /* __GLASGOW_HASKELL__ >= 612 */
 import Data.Typeable
