@@ -136,16 +136,15 @@ hShutdown' m how = do withMVar m $ \(Handle__ { haFD = fd }) ->
                           liftM fromIntegral $ c_shutdown (fromIntegral fd) how
 
 #else /* __GLASGOW_HASKELL__ >= 612 */
-hShutdown h how = wantWritableHandle "hShutdown" h $
-                   \Handle__ {haDevice = dev} ->
-                       case cast dev of
-                         Just (FD {fdFD = fd}) ->
-                             liftM fromEnum $ c_shutdown fd how
-                         Nothing ->
-                             ioError (ioeSetErrorString
-                                      (mkIOError illegalOperationErrorType
-                                       "hShutdown" (Just h) Nothing) 
-                                      "handle is not a file descriptor")
+hShutdown h how = do
+  hFlush h
+  wantWritableHandle "hShutdown" h $ \Handle__ {haDevice = dev} ->
+      case cast dev of
+        Just (FD {fdFD = fd}) -> liftM fromEnum $ c_shutdown fd how
+        Nothing -> ioError (ioeSetErrorString
+                            (mkIOError illegalOperationErrorType
+                             "hShutdown" (Just h) Nothing) 
+                            "handle is not a file descriptor")
 
 #endif /* __GLASGOW_HASKELL__ >= 612 */
   
