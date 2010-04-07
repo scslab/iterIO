@@ -281,13 +281,13 @@ getIterError _               = error "getIterError: no error to extract"
 
 -- | True if an iteratee /or/ an enclosing enumerator has experienced
 -- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
--- 'True', but the converse is not true.
+-- 'True', but the converse is not true.)
 isIterError :: Iter t m a -> Bool
 isIterError (IterF _)       = False
 isIterError (Done _ _)      = False
 isIterError _               = True
 
--- | True if an enumerator enclosing an iteratee has experience a
+-- | True if an enumerator enclosing an iteratee has experienced a
 -- failure (but not if the iteratee itself failed).
 isEnumError :: Iter t m a -> Bool
 isEnumError (EnumOFail _ _) = True
