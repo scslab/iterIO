@@ -67,13 +67,13 @@ safeHeadLikeI = do
     Chunk t eof            -> Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
 
 -- | Like 'lineI', but returns 'Nothing' on EOF.
-safeLineI :: (Monad m, LL.ListLike t e, LL.StringLike t, Eq t, Enum e, Eq e) =>
+safeLineI :: (Monad m, LL.ListLike t e, Eq t, Enum e, Eq e) =>
              Iter t m (Maybe t)
 safeLineI = IterF $ return . doline LL.empty
     where
-      cr = LL.fromString "\r"
-      nl = LL.fromString "\n"
-      crnl = LL.fromString "\r\n"
+      cr = LL.singleton $ toEnum $ fromEnum '\r'
+      nl = LL.singleton $ toEnum $ fromEnum '\n'
+      crnl = LL.append cr nl
       eol c = echr c == '\n' || echr c == '\r'
       doline acc (Chunk t eof) =
           let acc' = LL.append acc t
@@ -91,8 +91,7 @@ safeLineI = IterF $ return . doline LL.empty
           | otherwise = Nothing
 
 -- | Return a line delimited by \\r, \\n, or \\r\\n.
-lineI :: (Monad m, ChunkData t, LL.ListLike t e, LL.StringLike t
-         , Eq t, Enum e, Eq e) =>
+lineI :: (Monad m, ChunkData t, LL.ListLike t e, Eq t, Enum e, Eq e) =>
          Iter t m t
 lineI = do
   mline <- safeLineI
