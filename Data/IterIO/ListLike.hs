@@ -129,12 +129,16 @@ stringExactI len | len <= 0  = return mempty
             in if LL.length t == len then return acc' else accumulate acc'
 
 -- | Read input that exactly matches a string, or else fail.
-matchI :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq t, Monad m) =>
+matchI :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
           String -> Iter t m ()
-matchI target = do
-  let tt = LL.fromString target
-  t <- stringExactI $ LL.length tt
-  if t == tt then return () else fail $ "matchI: expected " ++ show target
+matchI fulltarget = doMatch $ LL.fromString fulltarget
+    where
+      doMatch target | LL.null target = return ()
+                     | otherwise      = do
+        m <- stringMaxI $ LL.length target
+        if not (LL.null m) && LL.isPrefixOf m target
+          then doMatch $ LL.drop (LL.length m) target
+          else fail $ "matchI expected " ++ show fulltarget
 
 -- | Put byte strings to a file handle then write an EOF to it. 
 handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>

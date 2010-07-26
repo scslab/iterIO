@@ -171,14 +171,16 @@ instance (ChunkData t) => Monoid (Chunk t) where
     mappend a (Chunk b True) | null b     = a
     mappend _ _                           = error "mappend to EOF"
 
--- | The exception type thrown by the 'fail' method of the 'Iter'
--- 'Monad'.
-data IterError = IterError String deriving (Show, Typeable)
-instance Exception IterError
-
 instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
     null (Chunk _ True)  = False
+
+-- | The exception type thrown by the 'fail' method of the 'Iter'
+-- 'Monad'.
+data IterError = IterError String deriving (Typeable)
+instance Exception IterError
+instance Show IterError where
+    showsPrec _ (IterError e) rest = "Iteratee failure: " ++ e ++ rest
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
 -- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
