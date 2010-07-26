@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 -- {-# LANGUAGE ForeignFunctionInterface #-}
 
 
@@ -70,9 +71,9 @@
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI
-    , Codec, CodecR(..)
+    , Codec, CodecR(..), IterError(..)
     -- * Core functions
-    , (|$)
+    , (|$), (<|>)
     , runIter, run
     , chunk, chunkEOF, isChunkEOF
     -- * Concatenation functions
@@ -89,10 +90,10 @@ module Data.IterIO.Base
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
     , throwI, throwEOFI
-    , tryI, catchI, handlerI
+    , tryI, retryI, catchI, handlerI
     , resumeI, verboseResumeI
     , nullI, dataI, chunkI
-    , wrapI, runI, joinI
+    , wrapI, runI, joinI, returnI
     , headI, safeHeadI
     , putI, sendI
     -- * Some basic Enumerators
@@ -111,6 +112,7 @@ import Control.Monad.Fix
 import Control.Monad.Trans
 import Data.IORef
 import Data.Monoid
+import Data.Typeable
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import System.Environment
@@ -168,6 +170,11 @@ instance (ChunkData t) => Monoid (Chunk t) where
     mappend (Chunk a False) (Chunk b eof) = Chunk (mappend a b) eof
     mappend a (Chunk b True) | null b     = a
     mappend _ _                           = error "mappend to EOF"
+
+-- | The exception type thrown by the 'fail' method of the 'Iter'
+-- 'Monad'.
+data IterError = IterError String deriving (Show, Typeable)
+instance Exception IterError
 
 instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
@@ -271,7 +278,39 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
                     IterF _   -> return $ m' >>= k
                     Done a c' -> runIter (k a) c'
                     err       -> return $ IterFail $ getIterError err
-    fail msg = IterFail $ mkError msg
+    fail msg = IterFail (toException (IterError msg))
+    -- fail msg = IterFail $ mkError msg
+
+instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
+    mzero     = fail "mzero"
+    mplus a b = do
+      r <- retryI a
+      case r of
+        Right a'                     -> return a'
+        Left (SomeException _, iter)
+            | isIterEOFError iter || isIterIterError iter -> b
+            | otherwise                                   -> iter
+
+-- | Infix synonym for 'mplus'.  Note that 'mplus' for the 'Iter'
+-- 'MonadPlus' uses 'retryI', which keeps a copy of all input data
+-- around until the iteratee finishes.  Thus, @<|>@ should not be used
+-- with iteratees that consume lots of input.
+--
+-- Note also that 'mplus' for the 'Iter' 'MonadPlus' only considers
+-- EOF failures and failures caused by the 'fail' method of the
+-- 'Monad'.  Other types of errors (such as IO errors) will not be
+-- caught by 'mplus'.
+--
+-- @<|>@ has precedence:
+--
+-- > infixr 1 <|>
+--
+-- Note that we specifically don't use the 'Alternative' class because
+-- the @<|>@ method of 'Alternative' has left fixity instead of right
+-- fixity (which would be very expensive).
+(<|>) :: (MonadPlus m) => m a -> m a -> m a
+(<|>) = mplus
+infixr 1 <|>
 
 getIterError                 :: Iter t m a -> SomeException
 getIterError (IterFail e)    = e
@@ -300,6 +339,13 @@ isIterEOFError (Done _ _) = False
 isIterEOFError err = case fromException $ getIterError err of
                        Just e -> isEOFError e
                        _      -> False
+
+isIterIterError :: Iter t m a -> Bool
+isIterIterError (IterF _) = False
+isIterIterError (Done _ _) = False
+isIterIterError err = case fromException $ getIterError err of
+                       Just (IterError _) -> True
+                       _                  -> False
 
 mkError :: String -> SomeException
 mkError msg = toException $ ErrorCall msg
@@ -423,8 +469,20 @@ throwI e = IterFail $ toException e
 throwEOFI :: (Monad m) => String -> Iter t m a
 throwEOFI loc = throwI $ mkIOError eofErrorType loc Nothing Nothing
 
+-- | Internal function used by 'tryI' and 'retryI' when re-propagating
+-- exceptions that don't match the requested exception type.  (To make
+-- the overall types of those two funcitons work out, a 'Right'
+-- constructor needs to be wrapped around the returned failing
+-- iteratee.)
+fixError :: (ChunkData t, Monad m) =>
+            Iter t m a -> Iter t m (Either x a)
+fixError (EnumIFail e i) = EnumIFail e $ Right i
+fixError (EnumOFail e i) = EnumOFail e $ liftM Right i
+fixError iter            = IterFail $ getIterError iter
+
 -- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
--- the 'Iter' throws an exception @e@, returns @'Left' e@.
+-- the 'Iter' throws an exception @e@, returns @'Left' (e, i)@ where
+-- @i@ is the state of the failing 'Iter'.
 tryI :: (ChunkData t, Monad m, Exception e) =>
         Iter t m a
      -> Iter t m (Either (e, Iter t m a) a)
@@ -434,9 +492,38 @@ tryI = wrapI errToEither
       errToEither iter       = case fromException $ getIterError iter of
                                  Just e  -> return $ Left (e, iter)
                                  Nothing -> fixError iter
-      fixError (EnumIFail e i) = EnumIFail e $ Right i
-      fixError (EnumOFail e i) = EnumOFail e $ liftM Right i
-      fixError iter            = IterFail $ getIterError iter
+
+-- | Runs an 'Iter' until it no longer requests input, keeping a copy
+-- of all input that was fed to it (which might be longer than the
+-- input the 'Iter' actually consumed).
+copyInput :: (ChunkData t, Monad m) =>
+          Iter t m a
+       -> Iter t m (Iter t m a, Chunk t)
+copyInput iter1 = doit mempty iter1
+    where
+      doit acc iter@(IterF _)  =
+          IterF $ \c -> runIter iter c >>= return . doit (mappend acc c)
+      doit acc (Done a c) = Done (Done a c, acc) c
+      doit acc iter       = return (iter, acc)
+
+-- | Simlar to 'tryI', but saves all data that has been fed to the
+-- failing 'Iter'.  Thus, the next 'Iter' to be invoked will see the
+-- same input that caused the current 'Iter' to fail.  (For this
+-- reason, it makes no sense to call 'resumeI' on the 'Iter' you get
+-- back from @retryI@.)
+--
+-- Because @retryI@ saves a copy of all input, it can consume a lot of
+-- memory and should only be used when the 'Iter' argument is known to
+-- consume a bounded amount of data.
+retryI :: (ChunkData t, Monad m, Exception e) =>
+        Iter t m a
+     -> Iter t m (Either (e, Iter t m a) a)
+retryI iter1 = copyInput iter1 >>= errToEither
+    where
+      errToEither (Done a c, _) = Done (Right a) c
+      errToEither (iter, c)     = case fromException $ getIterError iter of
+                                   Just e  -> Done (Left (e, iter)) c
+                                   Nothing -> fixError iter
 
 -- | Catch an exception thrown by an 'Iter'.  Returns the failed
 -- 'Iter' state, which may contain more information than just the
@@ -981,40 +1068,6 @@ enumI startCodec = enumI1 startCodec
            if isIterError codec' && not (isIterEOFError codec')
             then return $ EnumIFail (getIterError codec') iter
             else return $ Done iter cOut
-
-{-
--- | Build an inner enumerator given a codec 'Iter' that returns
--- chunks of the appropriate type.  Makes an effort to send an EOF to
--- the codec if the inner 'Iter' fails, so as to facilitate cleanup.
--- However, if a containing 'EnumO' or 'EnumI' fails, code handling
--- that failure will have to send an EOF or the codec will not be able
--- to clean up.
-enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
-         Iter tOut m (Chunk tIn)
-      -- ^ This Iteratee will be executed repeatedly to produce
-      -- transcoded chunks.
-      -> EnumI tOut tIn m a
-enumI codec0 = enumI1 codec0
-    where
-      enumI1 codec iter@(IterF _) = IterF $ feedCodec codec iter
-      enumI1 _ iter               = return iter
-      feedCodec codec iter cOut@(Chunk _ eof) = do
-        codec' <- runIter codec cOut
-        case codec' of
-          IterF _ -> return $ enumI1 codec' iter
-          Done (Chunk tIn eof') cOut' -> do
-                iter' <- runIter iter $ chunk tIn
-                case iter' of
-                  _ | eof || eof' -> return $ Done iter' cOut'
-                  IterF _ | null cOut' -> return $ enumI1 codec0 iter'
-                  IterF _ -> feedCodec codec0 iter' cOut'
-                  _ -> do codec'' <- runIter codec' chunkEOF
-                          if isIterError codec'' && not (isIterEOFError codec'')
-                            then return $ EnumIFail (getIterError codec'') iter'
-                            else return $ Done iter' cOut'
-          _ | isIterEOFError codec' -> return $ return iter
-          _ -> return $ EnumIFail (getIterError codec') iter
--}
 
 -- | Transcode (until codec throws an EOF error, or until after it has
 -- received EOF).
