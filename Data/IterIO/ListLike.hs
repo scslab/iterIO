@@ -7,6 +7,7 @@ module Data.IterIO.ListLike
       headLikeI, safeHeadLikeI
     , lineI, safeLineI
     , stringExactI, stringMaxI
+    , matchI
     , handleI, sockDgramI
     -- * Outer enumerators
     , enumDgram, enumDgramFrom
@@ -126,6 +127,14 @@ stringExactI len | len <= 0  = return mempty
         if null t then return acc else
             let acc' = LL.append acc t
             in if LL.length t == len then return acc' else accumulate acc'
+
+-- | Read input that exactly matches a string, or else fail.
+matchI :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq t, Monad m) =>
+          String -> Iter t m ()
+matchI target = do
+  let tt = LL.fromString target
+  t <- stringExactI $ LL.length tt
+  if t == tt then return () else fail $ "matchI: expected " ++ show target
 
 -- | Put byte strings to a file handle then write an EOF to it. 
 handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
