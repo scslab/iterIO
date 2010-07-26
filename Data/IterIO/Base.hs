@@ -490,7 +490,7 @@ tryI = wrapI errToEither
 -- which an exception thrown by an inner enumerator is caught:
 --
 -- > inumBad :: (ChunkData t, Monad m) => EnumI t t m a
--- > inumBad = enumI $ fail "inumBad"
+-- > inumBad = enumI' $ fail "inumBad"
 -- > 
 -- > catchTest2 :: IO ()
 -- > catchTest2 = myEnum |.. inumBad |$ nullI
@@ -1079,12 +1079,12 @@ inumCatch enum handler = wrapI check . enum
 -- fused to the 'EnumO' after @enumCatch@ has been applied, and not
 -- exceptions thrown from an 'Iter'.  If you want to catch all
 -- enumerator errors, including those from subsequently fused
--- 'EnumI's, see the `inumCatch` function.  For example, comare
+-- 'EnumI's, see the `inumCatch` function.  For example, compare
 -- @test1@ (which throws an exception) to @test2@ and @test3@ (which
 -- do not):
 --
 -- >    inumBad :: (ChunkData t, Monad m) => EnumI t t m a
--- >    inumBad = enumI $ fail "inumBad"
+-- >    inumBad = enumI' $ fail "inumBad"
 -- >    
 -- >    skipError :: (ChunkData t, MonadIO m) =>
 -- >                 SomeException -> Iter t m a -> Iter t m a
