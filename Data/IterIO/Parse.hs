@@ -2,12 +2,13 @@
 -- | This module contains functions to help parsing input from within
 -- iteratees.  Many of the operators are imported from or inspired by
 -- "Data.Applicative" and "Text.Parsec".  Some operators, notably
--- '\<|\>', are re-defined here to have different precedence and
+-- '<|>', are re-defined here to have different precedence and
 -- associativity.  (The @'Alternative'@ class's @\<|\>@ operator is
 -- left associative, which would be very inefficient with iteratees.)
 
 module Data.IterIO.Parse (char, string
-                         , (<?>), (<|>), (<$>), (<$), Applicative(..), (<**>)
+                         , (<?>), (<|>), many, many1
+                         , (<$>), (<$), Applicative(..), (<**>)
                          ) where
 
 import Control.Applicative (Applicative(..), (<**>))
@@ -52,15 +53,22 @@ iter <?> expected = mapExceptionI change iter
                  else e
 infix 0 <?>
 
+-- | Super inefficient--Yucko
+foldrMany :: (ChunkData t, Monad m) =>
+             (a -> b -> b) -> b -> Iter t m a -> Iter t m b
+foldrMany f z iter = foldNext
+    where
+      foldNext = f <$> iter <*> foldNext <|> return z
+
 -- | Run an iteratee zero or more times (until it fails) and return a
 -- list-like container of the results.
 many :: (LL.ListLike f a, MonadPlus m) => m a -> m f
-many v = some v <|> return LL.empty
+many v = many1 v <|> return LL.empty
 
 -- | Run an iteratee one or more times (until it fails) and return a
 -- list-like container of the results.
-some :: (LL.ListLike f a, MonadPlus m) => m a -> m f
-some v = liftM LL.cons v `ap` many v
+many1 :: (LL.ListLike f a, MonadPlus m) => m a -> m f
+many1 v = liftM LL.cons v `ap` many v
 
 -- | Read the next input element if it satisfies some predicate.
 satisfy :: (ChunkData t, LL.ListLike t e, Monad m) =>
