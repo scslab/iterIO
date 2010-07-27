@@ -46,7 +46,7 @@ uninstall: dist/setup-config
 	$(INDEXDOC)
 
 browse: doc
-	firefox dist/doc/html/$(PKG)/index.html
+	xdg-open dist/doc/html/$(PKG)/index.html
 
 clean:
 	rm -rf $(TARGETS) Setup dist
