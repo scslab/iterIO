@@ -50,6 +50,6 @@ Library
                  directory >=1.0 && < 2.0
   Exposed-modules:
     Data.IterIO, Data.IterIO.Base, Data.IterIO.ListLike,
-    Data.IterIO.Extra
+    Data.IterIO.Extra, Data.IterIO.Parse
   Extensions:
     ForeignFunctionInterface, FlexibleInstances, DeriveDataTypeable

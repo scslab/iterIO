@@ -73,7 +73,7 @@ module Data.IterIO.Base
      ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI
     , Codec, CodecR(..), IterError(..)
     -- * Core functions
-    , (|$), (<|>)
+    , (|$)
     , runIter, run
     , chunk, chunkEOF, isChunkEOF
     -- * Concatenation functions
@@ -90,7 +90,7 @@ module Data.IterIO.Base
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
     , throwI, throwEOFI
-    , tryI, retryI, catchI, handlerI
+    , tryI, backtrackI, catchI, handlerI
     , resumeI, verboseResumeI
     , nullI, dataI, chunkI
     , wrapI, runI, joinI, returnI
@@ -104,6 +104,7 @@ module Data.IterIO.Base
 
 import Prelude hiding (null)
 import qualified Prelude
+import Control.Applicative (Applicative(..))
 import Control.Concurrent.MVar
 import Control.Exception (SomeException(..), ErrorCall(..), Exception(..)
                          , try, throw)
@@ -270,6 +271,10 @@ runIter err _         = return err
 instance (ChunkData t, Monad m) => Functor (Iter t m) where
     fmap = liftM
 
+instance (ChunkData t, Monad m) => Applicative (Iter t m) where
+    pure = return
+    (<*>) = ap
+
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
     -- Could get rid of ChunkData requirement with the next definition
@@ -286,33 +291,12 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
 instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
     mzero     = fail "mzero"
     mplus a b = do
-      r <- retryI a
+      r <- backtrackI a
       case r of
         Right a'                     -> return a'
         Left (SomeException _, iter)
             | isIterEOFError iter || isIterIterError iter -> b
             | otherwise                                   -> iter
-
--- | Infix synonym for 'mplus'.  Note that 'mplus' for the 'Iter'
--- 'MonadPlus' uses 'retryI', which keeps a copy of all input data
--- around until the iteratee finishes.  Thus, @<|>@ should not be used
--- with iteratees that consume lots of input.
---
--- Note also that 'mplus' for the 'Iter' 'MonadPlus' only considers
--- EOF failures and failures caused by the 'fail' method of the
--- 'Monad'.  Other types of errors (such as IO errors) will not be
--- caught by 'mplus'.
---
--- @<|>@ has precedence:
---
--- > infixr 1 <|>
---
--- Note that we specifically don't use the 'Alternative' class because
--- the @<|>@ method of 'Alternative' has left fixity instead of right
--- fixity (which would be very expensive).
-(<|>) :: (MonadPlus m) => m a -> m a -> m a
-(<|>) = mplus
-infixr 1 <|>
 
 getIterError                 :: Iter t m a -> SomeException
 getIterError (IterFail e)    = e
@@ -471,7 +455,7 @@ throwI e = IterFail $ toException e
 throwEOFI :: (Monad m) => String -> Iter t m a
 throwEOFI loc = throwI $ mkIOError eofErrorType loc Nothing Nothing
 
--- | Internal function used by 'tryI' and 'retryI' when re-propagating
+-- | Internal function used by 'tryI' and 'backtrackI' when re-propagating
 -- exceptions that don't match the requested exception type.  (To make
 -- the overall types of those two funcitons work out, a 'Right'
 -- constructor needs to be wrapped around the returned failing
@@ -509,18 +493,18 @@ copyInput iter1 = doit mempty iter1
       doit acc iter       = return (iter, acc)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
--- failing 'Iter'.  Thus, the next 'Iter' to be invoked will see the
--- same input that caused the current 'Iter' to fail.  (For this
--- reason, it makes no sense to call 'resumeI' on the 'Iter' you get
--- back from @retryI@.)
+-- 'Iter', and rewinds the input if the 'Iter' fails.  Thus, the next
+-- 'Iter' to be invoked will see the same input that caused the
+-- current 'Iter' to fail.  (For this reason, it makes no sense ever
+-- to call 'resumeI' on the 'Iter' you get back from @backtrackI@.)
 --
--- Because @retryI@ saves a copy of all input, it can consume a lot of
--- memory and should only be used when the 'Iter' argument is known to
--- consume a bounded amount of data.
-retryI :: (ChunkData t, Monad m, Exception e) =>
-        Iter t m a
-     -> Iter t m (Either (e, Iter t m a) a)
-retryI iter1 = copyInput iter1 >>= errToEither
+-- Because @backtrackI@ saves a copy of all input, it can consume a
+-- lot of memory and should only be used when the 'Iter' argument is
+-- known to consume a bounded amount of data.
+backtrackI :: (ChunkData t, Monad m, Exception e) =>
+              Iter t m a
+           -> Iter t m (Either (e, Iter t m a) a)
+backtrackI iter1 = copyInput iter1 >>= errToEither
     where
       errToEither (Done a c, _) = Done (Right a) c
       errToEither (iter, c)     = case fromException $ getIterError iter of
