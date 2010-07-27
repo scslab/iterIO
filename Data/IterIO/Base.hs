@@ -84,14 +84,14 @@ module Data.IterIO.Base
     , chunkerToCodec, iterToCodec
     , enumO, enumO', enumObracket, enumI, enumI'
     -- * Predicates on iteratees
-    , isIterError, isEnumError
+    , isIterError, isIterParseError, isEnumError
     -- * Other functions
     , iterLoop
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
-    , throwI, throwEOFI
+    , throwI, throwEOFI, expectedI
     , tryI, backtrackI, catchI, handlerI
-    , resumeI, verboseResumeI
+    , resumeI, verboseResumeI, mapExceptionI
     , nullI, dataI, chunkI
     , wrapI, runI, joinI, returnI
     , headI, safeHeadI
@@ -178,10 +178,13 @@ instance (ChunkData t) => ChunkData (Chunk t) where
 
 -- | The exception type thrown by the 'fail' method of the 'Iter'
 -- 'Monad'.
-data IterError = IterError String deriving (Typeable)
+data IterError = IterError String
+               | IterExpected [String]
+                 deriving (Typeable)
 instance Exception IterError
 instance Show IterError where
-    showsPrec _ (IterError e) rest = "Iteratee failure: " ++ e ++ rest
+    showsPrec _ (IterError e) rest    = "Iteratee failure: " ++ e ++ rest
+    showsPrec _ (IterExpected l) rest = "Iteratee expected: " ++ show l ++ rest
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
 -- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
@@ -293,16 +296,27 @@ instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
     mplus a b = do
       r <- backtrackI a
       case r of
-        Right a'                     -> return a'
+        Right a' -> return a'
         Left (SomeException _, iter)
-            | isIterEOFError iter || isIterIterError iter -> b
-            | otherwise                                   -> iter
+            | isIterParseError iter -> runb (getExpected iter)
+            | otherwise             -> iter
+        where
+          runb Nothing  = b
+          runb (Just e) = mapExceptionI (combine e) b
+          combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
+          combine _ iter               = iter
 
 getIterError                 :: Iter t m a -> SomeException
 getIterError (IterFail e)    = e
 getIterError (EnumOFail e _) = e
 getIterError (EnumIFail e _) = e
 getIterError _               = error "getIterError: no error to extract"
+
+getExpected :: Iter t m a -> Maybe ([String])
+getExpected iter | not (isIterError iter) = Nothing
+                 | otherwise = case fromException (getIterError iter) of
+                                 Just (IterExpected expected) -> Just expected
+                                 _                            -> Nothing
 
 -- | True if an iteratee /or/ an enclosing enumerator has experienced
 -- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
@@ -319,6 +333,7 @@ isEnumError (EnumOFail _ _) = True
 isEnumError (EnumIFail _ _) = True
 isEnumError _               = False
 
+-- | True if an iteratee is in an error state caused by an EOF exception.
 isIterEOFError :: Iter t m a -> Bool
 isIterEOFError (IterF _) = False
 isIterEOFError (Done _ _) = False
@@ -326,12 +341,18 @@ isIterEOFError err = case fromException $ getIterError err of
                        Just e -> isEOFError e
                        _      -> False
 
-isIterIterError :: Iter t m a -> Bool
-isIterIterError (IterF _) = False
-isIterIterError (Done _ _) = False
-isIterIterError err = case fromException $ getIterError err of
-                       Just (IterError _) -> True
-                       _                  -> False
+-- | True if an iteratee is in an error state caused by an EOF
+-- exception, the monadic 'fail' operator, or the 'expectedI'
+-- function.
+isIterParseError :: Iter t m a -> Bool
+isIterParseError (IterF _)                = False
+isIterParseError (Done _ _)               = False
+isIterParseError err | isIterEOFError err = True
+isIterParseError err                      =
+    case fromException $ getIterError err of
+      Just (IterError _)    -> True
+      Just (IterExpected _) -> True
+      _                     -> False
 
 mkError :: String -> SomeException
 mkError msg = toException $ ErrorCall msg
@@ -446,14 +467,18 @@ run (EnumIFail e _) = throw e
 -- the 'MonadIO' class, and so cannot use 'catch' or 'onException' to
 -- clean up after exceptions.)  Use 'throwI' in preference to 'throw'
 -- whenever possible.
-throwI :: (Exception e, Monad m) => e -> Iter t m a
+throwI :: (Exception e) => e -> Iter t m a
 throwI e = IterFail $ toException e
 
 -- | Throw an 'IOError' of type EOF, which will be interpreted by
 -- 'enumO' and 'enumI' as an end of file chunk when thrown by the
 -- generator/codec.
-throwEOFI :: (Monad m) => String -> Iter t m a
+throwEOFI :: String -> Iter t m a
 throwEOFI loc = throwI $ mkIOError eofErrorType loc Nothing Nothing
+
+-- | Throw an iteratee error that describes expected input not found.
+expectedI :: String -> Iter t m a
+expectedI target = throwI $ IterExpected [target]
 
 -- | Internal function used by 'tryI' and 'backtrackI' when re-propagating
 -- exceptions that don't match the requested exception type.  (To make
@@ -641,6 +666,22 @@ verboseResumeI iter | isEnumError iter = do
   resumeI iter
 verboseResumeI iter = iter
 
+-- | Similar to the standard @'mapException'@ function in
+-- "Control.Exception", but operates on exceptions propagated through
+-- the 'Iter' monad, rather than language-level exceptions.
+mapExceptionI :: (Exception e1, Exception e2, ChunkData t, Monad m) =>
+                 (e1 -> e2) -> Iter t m a -> Iter t m a
+mapExceptionI f iter1 = wrapI check iter1
+    where
+      check iter@(IterF _) = iter
+      check iter@(Done _ _) = iter
+      check (IterFail e)    = IterFail (doMap e)
+      check (EnumOFail e i) = EnumOFail (doMap e) i
+      check (EnumIFail e a) = EnumIFail (doMap e) a
+      doMap e = case fromException e of
+                  Just e' -> toException (f e')
+                  Nothing -> e
+                
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, Monoid t) => Iter t m ()
 nullI = IterF $ return . check

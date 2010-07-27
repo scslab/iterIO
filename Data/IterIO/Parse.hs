@@ -6,14 +6,17 @@
 -- associativity.  (The @'Alternative'@ class's @\<|\>@ operator is
 -- left associative, which would be very inefficient with iteratees.)
 
-module Data.IterIO.Parse (matchI
-                         , (<|>), (<$>), (<$), Applicative(..), (<**>)
+module Data.IterIO.Parse (char, string
+                         , (<?>), (<|>), (<$>), (<$), Applicative(..), (<**>)
                          ) where
 
 import Control.Applicative (Applicative(..), (<**>))
+import Control.Exception (Exception(..))
 import Control.Monad
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
+import Data.Maybe
+import System.IO.Error (isEOFError)
 
 import Data.IterIO
 
@@ -38,15 +41,54 @@ import Data.IterIO
 (<|>) = mplus
 infixr 1 <|>
 
--- | Read input that exactly matches a string, or else fail.
-matchI :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
-          String -> Iter t m ()
-matchI fulltarget = doMatch $ LL.fromString fulltarget
+-- | @iter \<?\> token@ replaces any kind of parse failure in @iter@
+-- with an exception equivalent to calling @'expectedI' token@.
+(<?>) :: (ChunkData t, Monad m) => Iter t m a -> String -> Iter t m a
+iter <?> expected = mapExceptionI change iter
     where
-      doMatch target | LL.null target = return ()
+      change e = if (maybe False isEOFError (fromException e)
+                     || isJust (fromException e :: Maybe IterError))
+                 then toException (IterExpected [expected])
+                 else e
+infix 0 <?>
+
+-- | Run an iteratee zero or more times (until it fails) and return a
+-- list-like container of the results.
+many :: (LL.ListLike f a, MonadPlus m) => m a -> m f
+many v = some v <|> return LL.empty
+
+-- | Run an iteratee one or more times (until it fails) and return a
+-- list-like container of the results.
+some :: (LL.ListLike f a, MonadPlus m) => m a -> m f
+some v = liftM LL.cons v `ap` many v
+
+-- | Read the next input element if it satisfies some predicate.
+satisfy :: (ChunkData t, LL.ListLike t e, Monad m) =>
+           (e -> Bool) -> Iter t m e
+satisfy test = headLikeI >>= check
+    where
+      check e | test e    = return e
+              | otherwise = fail "satisfy failed"
+
+-- | Read input that exactly matches a character, or else fail.
+char :: (ChunkData t, LL.ListLike t e, Eq e, Enum e, Monad m) =>
+        Char -> Iter t m e
+char target = headLikeI >>= check
+    where
+      t = toEnum (fromEnum target)
+      check c | c == t    = return c
+              | otherwise = fail $ "expected '" ++ target:"'"
+
+-- | Read input that exactly matches a string, or else fail.
+string :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
+          String -> Iter t m t
+string fulltarget = doMatch ft
+    where
+      ft = LL.fromString fulltarget
+      doMatch target | LL.null target = return ft
                      | otherwise      = do
         m <- stringMaxI $ LL.length target
         if not (LL.null m) && LL.isPrefixOf m target
           then doMatch $ LL.drop (LL.length m) target
-          else fail $ "matchI expected " ++ show fulltarget
+          else fail $ "expected " ++ show fulltarget
 
