@@ -292,7 +292,17 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
     -- fail msg = IterFail $ mkError msg
 
 instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
-    mzero     = fail "mzero"
+    mzero = fail "mzero"
+    mplus a@(IterF _) b =
+        IterF $ \c -> do
+          a1 <- runIter a c
+          case a1 of
+            IterF _ | null c        -> return (mplus a1 b)
+            _ | isIterParseError a1 -> runIter b c
+            _                       -> return a1
+    mplus a b = if isIterParseError a then b else a
+
+{-
     mplus a b = do
       r <- backtrackI a
       case r of
@@ -305,6 +315,7 @@ instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
           runb (Just e) = mapExceptionI (combine e) b
           combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
           combine _ iter               = iter
+-}
 
 getIterError                 :: Iter t m a -> SomeException
 getIterError (IterFail e)    = e
