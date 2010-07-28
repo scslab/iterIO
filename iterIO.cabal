@@ -52,4 +52,5 @@ Library
     Data.IterIO, Data.IterIO.Base, Data.IterIO.ListLike,
     Data.IterIO.Extra, Data.IterIO.Parse
   Extensions:
-    ForeignFunctionInterface, FlexibleInstances, DeriveDataTypeable
+    ForeignFunctionInterface, FlexibleInstances, DeriveDataTypeable,
+    ExistentialQuantification

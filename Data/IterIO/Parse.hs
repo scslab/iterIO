@@ -6,17 +6,18 @@
 -- associativity.  (The @'Alternative'@ class's @\<|\>@ operator is
 -- left associative, which would be very inefficient with iteratees.)
 
-module Data.IterIO.Parse (char, string
+module Data.IterIO.Parse (ifParse, ifNoParse, char, string
                          , (<?>), (<|>), many, many1
                          , (<$>), (<$), Applicative(..), (<**>)
                          ) where
 
 import Control.Applicative (Applicative(..), (<**>))
-import Control.Exception (Exception(..))
+import Control.Exception (SomeException, Exception(..))
 import Control.Monad
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
 import Data.Maybe
+import Data.Typeable
 import System.IO.Error (isEOFError)
 
 import Data.IterIO
@@ -45,20 +46,44 @@ infixr 1 <|>
 -- | @iter \<?\> token@ replaces any kind of parse failure in @iter@
 -- with an exception equivalent to calling @'expectedI' token@.
 (<?>) :: (ChunkData t, Monad m) => Iter t m a -> String -> Iter t m a
-iter <?> expected = mapExceptionI change iter
-    where
-      change e = if (maybe False isEOFError (fromException e)
-                     || isJust (fromException e :: Maybe IterError))
-                 then toException (IterExpected [expected])
-                 else e
+iter <?> expected =
+    mapExceptionI (\(IterNoParse _) -> IterExpected [expected]) iter
 infix 0 <?>
+
+-- | @ifParse iter success failure@ runs @iter@, but saves a copy of
+-- all input consumed.  (This means @iter@ must not consume unbounded
+-- amounts of input!)  If @iter@ suceeds, its result is passed to the
+-- function @success@.  If @iter@ throws an exception of class
+-- 'IterNoParse', then @failure@ is executed with the input re-wound
+-- (so that @failure@ is fed the same input that @iter@ was).
+ifParse :: (ChunkData t, Monad m) =>
+           Iter t m a           -- ^ @iter@ to run with backtracking
+        -> (a -> Iter t m b)    -- ^ @success@ function
+        -> Iter t m b           -- ^ @failure@ action
+        -> Iter t m b
+ifParse iter yes no = do
+  ea <- backtrackI iter
+  case ea of
+    Right a -> yes a
+    Left (IterNoParse err, _) -> 
+        case cast err of
+          Just (IterExpected exp) -> mapExceptionI (combine exp) no
+          _ -> no
+    where
+      combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
+
+-- | This function is just 'ifParse' with the second and third
+-- arguments reversed.
+ifNoParse :: (ChunkData t, Monad m) =>
+             Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
+ifNoParse iter no yes = ifParse iter yes no
 
 -- | Super inefficient--Yucko
 foldrMany :: (ChunkData t, Monad m) =>
              (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldrMany f z iter = foldNext
-    where
-      foldNext = f <$> iter <*> foldNext <|> return z
+foldrMany f z iter =
+    let foldNext = ifNoParse iter (return z) $ \a -> f a <$> foldNext
+    in foldNext
 
 -- | Run an iteratee zero or more times (until it fails) and return a
 -- list-like container of the results.

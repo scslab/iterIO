@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
--- {-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE ExistentialQuantification #-}
 
 
 {-   Alternate Enumerator/Iteratee take by David Mazieres.
@@ -70,8 +70,8 @@
 -- "Data.IterIO" for a high-level overview of these abstractions.
 module Data.IterIO.Base
     (-- * Base types
-     ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI
-    , Codec, CodecR(..), IterError(..)
+     ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI, Codec, CodecR(..)
+    , IterNoParse(..), IterEOF(..), IterExpected(..)
     -- * Core functions
     , (|$)
     , runIter, run
@@ -84,7 +84,7 @@ module Data.IterIO.Base
     , chunkerToCodec, iterToCodec
     , enumO, enumO', enumObracket, enumI, enumI'
     -- * Predicates on iteratees
-    , isIterError, isIterParseError, isEnumError
+    , isIterError, isEnumError
     -- * Other functions
     , iterLoop
     -- , fixIterPure, fixMonadIO
@@ -176,15 +176,41 @@ instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
     null (Chunk _ True)  = False
 
--- | The exception type thrown by the 'fail' method of the 'Iter'
--- 'Monad'.
-data IterError = IterError String
-               | IterExpected [String]
-                 deriving (Typeable)
-instance Exception IterError
-instance Show IterError where
-    showsPrec _ (IterError e) rest    = "Iteratee failure: " ++ e ++ rest
-    showsPrec _ (IterExpected l) rest = "Iteratee expected: " ++ show l ++ rest
+-- | Generalized class of errors that occur when an Iteratee does not
+-- receive expected input.  (Catches both 'IterEOF' and 'IterExpected'
+-- exceptions.)
+data IterNoParse = forall a. (Exception a) => IterNoParse a deriving (Typeable)
+instance Show IterNoParse where
+    showsPrec _ (IterNoParse e) rest = show e ++ rest
+instance Exception IterNoParse
+
+-- | End-of-file occured in an Iteratee that required more input.
+data IterEOF = IterEOF IOError deriving (Typeable)
+instance Show IterEOF where
+    showsPrec _ (IterEOF e) rest = show e ++ rest
+instance Exception IterEOF where
+    toException e = SomeException (IterNoParse e)
+    fromException e = do
+      IterNoParse e' <- fromException e
+      cast e'
+
+unIterEOF :: SomeException -> SomeException
+unIterEOF e = case fromException e of
+                Just (IterEOF e') -> toException e'
+                _                 -> e
+
+-- | Iteratee expected particular input and did not receive it.
+data IterExpected = IterExpected [String] deriving (Typeable)
+instance Show IterExpected where
+    showsPrec _ (IterExpected tokens) rest =
+        "Iteratee expected on of " ++ show tokens ++ rest
+instance Exception IterExpected where
+    toException e = SomeException (IterNoParse e)
+    fromException e = do
+      IterNoParse e' <- fromException e
+      cast e'
+
+
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
 -- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
@@ -288,11 +314,13 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
                     IterF _   -> return $ m' >>= k
                     Done a c' -> runIter (k a) c'
                     err       -> return $ IterFail $ getIterError err
-    fail msg = IterFail (toException (IterError msg))
-    -- fail msg = IterFail $ mkError msg
+    -- fail msg = IterFail (toException (IterError msg))
+    fail msg = IterFail $ mkError msg
 
+{-
 instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
-    mzero = fail "mzero"
+    -- mzero = fail "mzero"
+    mzero = throwI $ IterExpected []
     mplus a@(IterF _) b =
         IterF $ \c -> do
           a1 <- runIter a c
@@ -301,6 +329,7 @@ instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
             _ | isIterParseError a1 -> runIter b c
             _                       -> return a1
     mplus a b = if isIterParseError a then b else a
+-}
 
 {-
     mplus a b = do
@@ -323,11 +352,13 @@ getIterError (EnumOFail e _) = e
 getIterError (EnumIFail e _) = e
 getIterError _               = error "getIterError: no error to extract"
 
+{-
 getExpected :: Iter t m a -> Maybe ([String])
 getExpected iter | not (isIterError iter) = Nothing
                  | otherwise = case fromException (getIterError iter) of
                                  Just (IterExpected expected) -> Just expected
                                  _                            -> Nothing
+-}
 
 -- | True if an iteratee /or/ an enclosing enumerator has experienced
 -- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
@@ -349,9 +380,10 @@ isIterEOFError :: Iter t m a -> Bool
 isIterEOFError (IterF _) = False
 isIterEOFError (Done _ _) = False
 isIterEOFError err = case fromException $ getIterError err of
-                       Just e -> isEOFError e
-                       _      -> False
+                       Just (IterEOF _) -> True
+                       _                -> False
 
+{-
 -- | True if an iteratee is in an error state caused by an EOF
 -- exception, the monadic 'fail' operator, or the 'expectedI'
 -- function.
@@ -364,6 +396,7 @@ isIterParseError err                      =
       Just (IterError _)    -> True
       Just (IterExpected _) -> True
       _                     -> False
+-}
 
 mkError :: String -> SomeException
 mkError msg = toException $ ErrorCall msg
@@ -447,13 +480,19 @@ instance MonadTrans (Iter t) where
 
 -- | Lift an IO operation into an 'Iter' monad, but if the IO
 -- operation throws an error, catch the exception and return it as a
--- failure of the Iteratee.
+-- failure of the Iteratee.  An IO exception satisfying the
+-- 'isEOFError' predicate is re-wrapped in an 'IterEOF' type so as to
+-- be caught by handlers expecting 'IterNoParse'.
 instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
     liftIO m = do
       result <- lift $ liftIO $ try m
       case result of
-        Left err -> IterFail $ toException (err :: IOError)
         Right ok -> return ok
+        Left err -> IterFail $ case fromException err of
+                                 Just ioerr | isEOFError ioerr ->
+                                                toException $ IterEOF ioerr
+                                 _ -> err
+
 
 -- | Return the result of an iteratee.  If it is still in the 'IterF'
 -- state, feed it an EOF to extract a result.  Throws an exception if
@@ -461,9 +500,9 @@ instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
 run :: (ChunkData t, Monad m) => Iter t m a -> m a
 run iter@(IterF _)  = runIter iter chunkEOF >>= run
 run (Done a _)      = return a
-run (IterFail e)    = throw e
-run (EnumOFail e _) = throw e
-run (EnumIFail e _) = throw e
+run (IterFail e)    = throw $ unIterEOF e
+run (EnumOFail e _) = throw $ unIterEOF e
+run (EnumIFail e _) = throw $ unIterEOF e
 
 
 --
@@ -485,7 +524,7 @@ throwI e = IterFail $ toException e
 -- 'enumO' and 'enumI' as an end of file chunk when thrown by the
 -- generator/codec.
 throwEOFI :: String -> Iter t m a
-throwEOFI loc = throwI $ mkIOError eofErrorType loc Nothing Nothing
+throwEOFI loc = throwI $ IterEOF $ mkIOError eofErrorType loc Nothing Nothing
 
 -- | Throw an iteratee error that describes expected input not found.
 expectedI :: String -> Iter t m a
@@ -958,7 +997,7 @@ infixl 5 ..|..
 -- > infixr 4 ..|
 (..|) :: (ChunkData tOut, ChunkData tIn, Monad m
          , Show tOut, Show tIn, Show a) =>
-         EnumI tOut tIn m a     -- ^
+         EnumI tOut tIn m a
       -> Iter tIn m a
       -> Iter tOut m a
 (..|) inner iter = wrapI (runI . joinI) $ inner iter
@@ -1101,10 +1140,13 @@ enumI startCodec = enumI1 startCodec
           | null cOut                  = return $ enumI1 codec iter
           | otherwise                  = feedCodec codec iter cOut
       -- If the iteratee has finished, have to send EOF to the codec
-      check (CodecF codec _) cOut iter = do
+      check (CodecF codec _) cOut iter =
         do codec' <- runIter codec chunkEOF
            if isIterError codec' && not (isIterEOFError codec')
             then return $ EnumIFail (getIterError codec') iter
+            -- We are returning cOut, but should we return cOut'
+            -- in the event that codec' is Done _ cOut'?  Probably
+            -- doesn't matter.
             else return $ Done iter cOut
 
 -- | Transcode (until codec throws an EOF error, or until after it has
