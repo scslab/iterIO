@@ -5,11 +5,14 @@
 -- "Data.Applicative" and inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
-                          (<|>), (\/), orEmpty, (<?>)
-                         , foldrI, foldr1I, many, many1
+                          (>$>), (<|>), (\/), orEmpty, (<?>)
+                         , foldrI, foldr1I
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
                          -- * Parsing Iteratees
+                         -- $Parseclike
+                         , many, skipMany, sepBy, endBy, sepEndBy
+                         , many1, skipMany1, sepBy1, endBy1, sepEndBy1
                          , satisfy, char, string
                          ) where
 
@@ -26,9 +29,17 @@ import Data.Typeable
 import Data.IterIO.Base
 import Data.IterIO.ListLike
 
--- | LL(1) parser alternative
+-- | LL(1) parser alternative.  @a \<|\> b@ starts by executing @a@.
+-- If @a@ throws an exception of class 'IterNoParse' /and/ @a@ has not
+-- consumed any input, then @b@ is executed.  (@a@ has consumed input
+-- if it returns in the 'IterF' state after being fed a non-empty
+-- 'Chunk'.)
 --
--- Has fixity:
+-- It is sometimes difficult to tell if Iteratee @a@ will always
+-- consume input before failing.  For this reason, it is usually safer
+-- to use the '\/' operator, which supports unlimited lookahead.
+--
+-- @\<|\>@ has fixity:
 --
 -- > infixr 3 <|>
 --
@@ -41,9 +52,17 @@ a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= return . check c
 a <|> b = a `catchI` \(IterNoParse _) _ -> b
 infixr 3 <|>
 
-(<$$>) :: (Functor f) => (t -> a -> b) -> f a -> t -> f b
-(<$$>) f a t = f t <$> a
-infixl 4 <$$>
+-- | @(f >$> a) t@ is equivelent to @f t '<$>' a@.  Particularly
+-- useful with infix combinators such as '\\/' and ``orEmpty`` for
+-- chaining a bunch of parse actions.  (See the example at 'orEmpty'.)
+--
+-- Has fixity:
+--
+-- > infixl 4 >$>
+--
+(>$>) :: (Functor f) => (t -> a -> b) -> f a -> t -> f b
+(>$>) f a t = f t <$> a
+infixl 4 >$>
 
 -- | An infix synonym for 'ifNoParse' that allows LL(*) parsing, while
 -- keeping input data copies to places that might require
@@ -64,7 +83,7 @@ infixl 4 <$$>
 --
 -- @
 --   myMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m [a]
---   myMany iter = iter \\/ return [] $ \\res -> (res :) '<$>' myMany iter
+--   myMany iter = iter \\/ return [] $ (:) '>$>' myMany iter
 -- @
 --
 -- Has fixity:
@@ -82,12 +101,21 @@ infix 2 \/
 --
 -- @
 --   myMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m [a]
---   myMany iter = iter ``orEmpty`` (\\res -> (res :) '<$>' myMany iter)
+--   myMany iter = iter ``orEmpty`` (:) '>$>' myMany iter
 -- @
+--
+-- Has fixity:
+--
+-- > infixr 3 `orEmpty`
 --
 orEmpty :: (ChunkData t, Monad m, Monoid b) =>
            Iter t m a -> (a -> Iter t m b) -> Iter t m b
 orEmpty = (\/ return mempty)
+infixr 3 `orEmpty`
+
+myMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m [a]
+myMany iter = iter `orEmpty` (:) >$> myMany iter
+
 
 -- | @iter \<?\> token@ replaces any kind of parse failure in @iter@
 -- with an exception equivalent to calling @'expectedI' token@.
@@ -112,6 +140,11 @@ foldrI f z iter = iter \/ return z $ \a -> f a <$> foldrI f z iter
 foldr1I :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
 foldr1I f z iter = f <$> iter <*> foldr1I f z iter
+
+-- $Parseclike
+--
+-- These functions are intended to be similar to those supplied by
+-- "Text.Parsec".
 
 -- | Run an iteratee zero or more times (until it fails) and return a
 -- list-like container of the results.
