@@ -69,9 +69,8 @@ infix 0 <?>
 -- results.
 foldrI :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldrI f z iter =
-    let foldNext = ifNoParse iter (return z) $ \a -> f a <$> foldNext
-    in foldNext
+foldrI f z iter = foldNext
+    where foldNext = ifNoParse iter (return z) $ \a -> f a <$> foldNext
 
 -- | Repeatedly invoke an Iteratee, and right fold a function over the
 -- results.  Requires the Iteratee to succeed at least once.
@@ -82,13 +81,55 @@ foldr1I f z iter = iter >>= \a -> f a <$> foldrI f z iter
 -- | Run an iteratee zero or more times (until it fails) and return a
 -- list-like container of the results.
 many :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
-many v = foldrI LL.cons LL.empty v
+many = foldrI LL.cons LL.empty
+
+skipMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
+skipMany = foldrI (\_ _ -> ()) ()
+
+sepBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
+         Iter t m a -> Iter t m b -> Iter t m f
+sepBy item sep = ifNoParse item (return LL.empty) $ \i1 ->
+                 liftM (LL.cons i1) $ foldr1I LL.cons LL.empty (sep >> item)
+
+endBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
+         Iter t m a -> Iter t m b -> Iter t m f
+endBy item sep = foldrI LL.cons LL.empty $
+                 do i <- item; sep; return i
+
+sepEndBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
+            Iter t m a -> Iter t m b -> Iter t m f
+sepEndBy item sep =
+    ifNoParse item (return LL.empty) $ \i1 ->
+    liftM (LL.cons i1) $ ifNoParse sep (return LL.empty) $ \_ ->
+    sepEndBy item sep
 
 -- | Run an iteratee one or more times (until it fails) and return a
 -- list-like container of the results.
 many1 :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
-many1 v = foldr1I LL.cons LL.empty v
+many1 = foldr1I LL.cons LL.empty
 
+skipMany1 :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
+skipMany1 = foldr1I (\_ _ -> ()) ()
+
+sepBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
+          Iter t m a -> Iter t m b -> Iter t m f
+sepBy1 item sep = do
+  i1 <- item
+  liftM (LL.cons i1) $ foldr1I LL.cons LL.empty (sep >> item)
+
+endBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
+          Iter t m a -> Iter t m b -> Iter t m f
+endBy1 item sep = foldr1I LL.cons LL.empty $
+                 do i <- item; sep; return i
+
+sepEndBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
+             Iter t m a -> Iter t m b -> Iter t m f
+sepEndBy1 item sep = 
+    item >>= \i1 ->
+    liftM (LL.cons i1) $ ifNoParse sep (return LL.empty) $ \_ ->
+    sepEndBy item sep
+
+                 
 -- | Read the next input element if it satisfies some predicate.
 satisfy :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m e

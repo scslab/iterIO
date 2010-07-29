@@ -185,15 +185,19 @@ instance Show IterNoParse where
     showsPrec _ (IterNoParse e) rest = show e ++ rest
 instance Exception IterNoParse
 
+noParseFromException :: (Exception e) => SomeException -> Maybe e
+noParseFromException s = do IterNoParse e <- fromException s; cast e
+
+noParseToException :: (Exception e) => e -> SomeException
+noParseToException = toException . IterNoParse
+
 -- | End-of-file occured in an Iteratee that required more input.
 data IterEOF = IterEOF IOError deriving (Typeable)
 instance Show IterEOF where
     showsPrec _ (IterEOF e) rest = show e ++ rest
 instance Exception IterEOF where
-    toException e = SomeException (IterNoParse e)
-    fromException e = do
-      IterNoParse e' <- fromException e
-      cast e'
+    toException = noParseToException
+    fromException = noParseFromException
 
 unIterEOF :: SomeException -> SomeException
 unIterEOF e = case fromException e of
@@ -204,13 +208,19 @@ unIterEOF e = case fromException e of
 data IterExpected = IterExpected [String] deriving (Typeable)
 instance Show IterExpected where
     showsPrec _ (IterExpected tokens) rest =
-        "Iteratee expected on of " ++ show tokens ++ rest
+        "Iteratee expected one of " ++ show tokens ++ rest
 instance Exception IterExpected where
-    toException e = SomeException (IterNoParse e)
-    fromException e = do
-      IterNoParse e' <- fromException e
-      cast e'
+    toException = noParseToException
+    fromException = noParseFromException
 
+-- | Miscellaneous Iteratee parse error.
+data IterParseErr = IterParseErr String deriving (Typeable)
+instance Show IterParseErr where
+    showsPrec _ (IterParseErr err) rest =
+        "Iteratee parse error: " ++ err ++ rest
+instance Exception IterParseErr where
+    toException = noParseToException
+    fromException = noParseFromException
 
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
