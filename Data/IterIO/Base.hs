@@ -83,11 +83,11 @@ module Data.IterIO.Base
     , chunkerToCodec, iterToCodec
     , enumO, enumO', enumObracket, enumI, enumI'
     -- * Exception and error functions
-    , IterNoParse(..), IterEOF(..), IterExpected(..)
+    , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
     , isIterError, isEnumError
     , ifParse, ifNoParse
     , throwI, throwEOFI, expectedI
-    , tryI, backtrackI, catchI, handlerI
+    , tryI, tryBI, catchI, catchBI, handlerI, handlerBI
     , resumeI, verboseResumeI, mapExceptionI
     -- * Other functions
     , iterLoop
@@ -178,8 +178,8 @@ instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk _ True)  = False
 
 -- | Generalized class of errors that occur when an Iteratee does not
--- receive expected input.  (Catches both 'IterEOF' and 'IterExpected'
--- exceptions.)
+-- receive expected input.  (Catches 'IterEOF', 'IterExpected', and
+-- the miscellaneous 'IterParseErr'.)
 data IterNoParse = forall a. (Exception a) => IterNoParse a deriving (Typeable)
 instance Show IterNoParse where
     showsPrec _ (IterNoParse e) rest = show e ++ rest
@@ -523,7 +523,7 @@ run (EnumIFail e _) = throw $ unIterEOF e
 --
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
--- all input consumed using 'backtrackI'.  (This means @iter@ must not
+-- all input consumed using 'tryBI'.  (This means @iter@ must not
 -- consume unbounded amounts of input!)  If @iter@ suceeds, its result
 -- is passed to the function @success@.  If @iter@ throws an exception
 -- of class 'IterNoParse', then @failure@ is executed with the input
@@ -534,10 +534,10 @@ ifParse :: (ChunkData t, Monad m) =>
         -> Iter t m b           -- ^ @failure@ action
         -> Iter t m b
 ifParse iter yes no = do
-  ea <- backtrackI iter
+  ea <- tryBI iter
   case ea of
     Right a -> yes a
-    Left (IterNoParse err, _) -> 
+    Left (IterNoParse err) -> 
         case cast err of
           Just (IterExpected e1) -> mapExceptionI (combine e1) no
           _ -> no
@@ -614,22 +614,24 @@ copyInput iter1 = doit mempty iter1
       doit acc iter       = return (iter, acc)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
--- 'Iter', and rewinds the input if the 'Iter' fails.  Thus, the next
--- 'Iter' to be invoked will see the same input that caused the
--- current 'Iter' to fail.  (For this reason, it makes no sense ever
--- to call 'resumeI' on the 'Iter' you get back from @backtrackI@.)
+-- 'Iter', and rewinds the input if the 'Iter' fails.  Thus, if it
+-- returns @'Left' exception@, the next 'Iter' to be invoked will see
+-- the same input that caused the previous 'Iter' to fail.  (For this
+-- reason, it makes no sense ever to call 'resumeI' on the 'Iter' you
+-- get back from @backtrackI@, and @tryBI@ thus does not return the
+-- failing Iteratee the way 'tryI' does.)
 --
--- Because @backtrackI@ saves a copy of all input, it can consume a
--- lot of memory and should only be used when the 'Iter' argument is
--- known to consume a bounded amount of data.
-backtrackI :: (ChunkData t, Monad m, Exception e) =>
-              Iter t m a
-           -> Iter t m (Either (e, Iter t m a) a)
-backtrackI iter1 = copyInput iter1 >>= errToEither
+-- Because @tryBI@ saves a copy of all input, it can consume a lot of
+-- memory and should only be used when the 'Iter' argument is known to
+-- consume a bounded amount of data.
+tryBI :: (ChunkData t, Monad m, Exception e) =>
+         Iter t m a
+      -> Iter t m (Either e a)
+tryBI iter1 = copyInput iter1 >>= errToEither
     where
       errToEither (Done a c, _) = Done (Right a) c
       errToEither (iter, c)     = case fromException $ getIterError iter of
-                                   Just e  -> Done (Left (e, iter)) c
+                                   Just e  -> Done (Left e) c
                                    Nothing -> fixError iter
 
 -- | Catch an exception thrown by an 'Iter'.  Returns the failed
@@ -726,11 +728,31 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
        -> Iter t m a
 catchI iter handler = wrapI check iter
     where
-      check iter'@(IterF _)  = catchI iter' handler
+      -- next possibility should be impossible
+      -- check iter'@(IterF _)  = catchI iter' handler
       check iter'@(Done _ _) = iter'
       check err              = case fromException $ getIterError err of
                                  Just e  -> handler e err
                                  Nothing -> err
+
+-- | Catch exception with backtracking.  This is a version of 'catchI'
+-- that keeps a copy of all data fed to the iteratee.  If an exception
+-- is caught, the input is re-wound before running the exception
+-- handler.  Because this funciton saves a copy of all input, it
+-- should not be used on Iteratees that consume unbounded amounts of
+-- input.  Note that unlike 'catchI', this function does not return
+-- the failing Iteratee, because it doesn't make sense to call
+-- 'resumeI' on an Iteratee after re-winding the input.
+catchBI :: (Exception e, ChunkData t, Monad m) =>
+           Iter t m a
+        -> (e -> Iter t m a)
+        -> Iter t m a
+catchBI iter handler = copyInput iter >>= uncurry check
+    where
+      check iter'@(Done _ _) _ = iter'
+      check err input          = case fromException $ getIterError err of
+                                   Just e -> Done () input >> handler e
+                                   Nothing -> err
 
 -- | A version of 'catchI' with the arguments reversed, analogous to
 -- @'handle'@ in the standard library.  (A more logical name for this
@@ -738,11 +760,20 @@ catchI iter handler = wrapI check iter
 -- handle iteratee.)
 handlerI :: (Exception e, ChunkData t, Monad m) =>
           (e -> Iter t m a -> Iter t m a)
-       -- ^ Exception handler
-       -> Iter t m a
-       -- ^ 'Iter' that might throw an exception
-       -> Iter t m a
+         -- ^ Exception handler
+         -> Iter t m a
+         -- ^ 'Iter' that might throw an exception
+         -> Iter t m a
 handlerI = flip catchI
+
+-- | 'catchBI' with the arguments reversed.
+handlerBI :: (Exception e, ChunkData t, Monad m) =>
+             (e -> Iter t m a)
+          -- ^ Exception handler
+          -> Iter t m a
+          -- ^ 'Iter' that might throw an exception
+          -> Iter t m a
+handlerBI = flip catchBI
 
 -- | Used in an exception handler, after an enumerator fails, to
 -- resume processing of the 'Iter' by the next enumerator in a

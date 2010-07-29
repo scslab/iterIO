@@ -1,10 +1,11 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | This module contains functions to help parsing input from within
 -- iteratees.  Many of the operators are either imported from
 -- "Data.Applicative" and inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
-                          (\/), orEmpty, (<?>)
+                          (<|>), (\/), orEmpty, (<?>)
                          , foldrI, foldr1I, many, many1
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
@@ -12,6 +13,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , satisfy, char, string
                          ) where
 
+import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>))
 import Control.Exception (SomeException, Exception(..))
 import Control.Monad
@@ -21,28 +23,41 @@ import Data.Maybe
 import Data.Monoid
 import Data.Typeable
 
-import Data.IterIO
+import Data.IterIO.Base
+import Data.IterIO.ListLike
 
-{-
+-- | LL(1) parser alternative
+--
+-- Has fixity:
+--
+-- > infixr 3 <|>
+--
 (<|>) :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
-a@(IterF _) <|> b = IterF $ \c -> do runIter a c >>= check (null c)
+a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= return . check c
+    where
+      check c a1@(IterF _) | not (null c) = a1
+                           | otherwise    = a1 <|> b
+      check c a1 = a1 <|> (Done () c >> b)
+a <|> b = a `catchI` \(IterNoParse _) _ -> b
+infixr 3 <|>
 
-      case a1 of
-        IterF _ | null c        -> return (a1 <|> b)
-        _ | isIterParseError a1 -> runIter b c
-        _                       -> return a1
-a <|> b = if isIterParseError a then b else a
--}
+(<$$>) :: (Functor f) => (t -> a -> b) -> f a -> t -> f b
+(<$$>) f a t = f t <$> a
+infixl 4 <$$>
 
--- | An infix synonym for 'ifNoParse'.  The code:
+-- | An infix synonym for 'ifNoParse' that allows LL(*) parsing, while
+-- keeping input data copies to places that might require
+-- backgracking.  The code:
 --
 -- >     iter \/ failIter $ \res ->
 -- >     doSomethingWith res
 --
--- Executes @iter@ (saving the input with 'backtrackI'), and if @iter@
--- throws an exception of class 'IterNoParse', executes @failIter@ on
--- the same input.  On the other hand, if @iter@ succeeds and returns
--- @res@, then the expression will go on to @doSomethingWith res@.
+-- Executes @iter@ (saving copying the input for backgracking).  If
+-- @iter@ fails with an exception of class 'IterNoParse', then this
+-- code re-winds the input and executes @failIter@ on the same input.
+-- On the other hand, if @iter@ succeeds and returns @res@, then the
+-- processed input is discarded and the result of @iter@ is fed to
+-- function @doSomethingWith@.
 --
 -- For example, to build up a list of results of executing @iter@, one
 -- could implement a type-restricted version of 'many' as follows:
