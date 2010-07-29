@@ -1,4 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | This module contains functions to help parsing input from within
 -- iteratees.  Many of the operators are either imported from
@@ -6,7 +5,7 @@
 
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (>$>), (<|>), (\/), orI, orEmpty, (<?>)
-                         , foldrI, foldr1I
+                         , foldrI, foldr1I, foldlI, foldl1I
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
                          -- * Parsing Iteratees
@@ -156,13 +155,32 @@ infix 0 <?>
 -- results.
 foldrI :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldrI f z iter = iter \/ return z $ \a -> f a <$> foldrI f z iter
+foldrI f z iter = iter \/ return z $ f >$> foldrI f z iter
 
 -- | Repeatedly invoke an Iteratee, and right fold a function over the
 -- results.  Requires the Iteratee to succeed at least once.
 foldr1I :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
 foldr1I f z iter = f <$> iter <*> foldr1I f z iter
+
+-- | Strict left fold over an iteratee (until it throws an
+-- 'IterNoParse' exception).  @foldlI f z iter@ is sort of equivalent
+-- to:
+--
+-- @
+--   f z <$> iter <*> iter <*> iter <*> ...
+-- @
+foldlI :: (ChunkData t, Monad m) =>
+          (b -> a -> b) -> b -> Iter t m a -> Iter t m b
+foldlI f z0 iter = foldNext z0
+    where foldNext z = z `seq` iter \/ return z $ \a -> foldNext (f z a)
+
+-- | A version of 'foldlI' that fails if the Iteratee argument does
+-- not succeed at least once.
+foldl1I :: (ChunkData t, Monad m) =>
+          (b -> a -> b) -> b -> Iter t m a -> Iter t m b
+foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
+
 
 -- $Parseclike
 --
