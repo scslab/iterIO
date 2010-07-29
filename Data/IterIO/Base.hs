@@ -241,7 +241,8 @@ instance Exception IterParseErr where
 -- an enumerator failed, the result also includes the state of the
 -- iteratee, which usually has not failed.)
 --
--- Note that @Iter t@ is a monad transformer.
+-- Note that @Iter t@ is a 'MonadTrans' and @Iter t m@ is a a 'Monad'
+-- (as discussed in the documentation for module "Data.IterIO").
 data Iter t m a = IterF (Chunk t -> m (Iter t m a))
                 -- ^ The iteratee requires more input.
                 | Done a (Chunk t)
@@ -327,36 +328,13 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
                     IterF _   -> return $ m' >>= k
                     Done a c' -> runIter (k a) c'
                     err       -> return $ IterFail $ getIterError err
-    -- fail msg = IterFail (toException (IterError msg))
     fail msg = IterFail $ mkError msg
+    -- fail msg = IterFail (toException (IterError msg))
 
 {-
 instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
-    -- mzero = fail "mzero"
-    mzero = throwI $ IterExpected []
-    mplus a@(IterF _) b =
-        IterF $ \c -> do
-          a1 <- runIter a c
-          case a1 of
-            IterF _ | null c        -> return (mplus a1 b)
-            _ | isIterParseError a1 -> runIter b c
-            _                       -> return a1
-    mplus a b = if isIterParseError a then b else a
--}
-
-{-
-    mplus a b = do
-      r <- backtrackI a
-      case r of
-        Right a' -> return a'
-        Left (SomeException _, iter)
-            | isIterParseError iter -> runb (getExpected iter)
-            | otherwise             -> iter
-        where
-          runb Nothing  = b
-          runb (Just e) = mapExceptionI (combine e) b
-          combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
-          combine _ iter               = iter
+    mzero = throwI $ IterParseErr "mzero"
+    mplus a b = ifParse a return b
 -}
 
 getIterError                 :: Iter t m a -> SomeException
@@ -364,14 +342,6 @@ getIterError (IterFail e)    = e
 getIterError (EnumOFail e _) = e
 getIterError (EnumIFail e _) = e
 getIterError _               = error "getIterError: no error to extract"
-
-{-
-getExpected :: Iter t m a -> Maybe ([String])
-getExpected iter | not (isIterError iter) = Nothing
-                 | otherwise = case fromException (getIterError iter) of
-                                 Just (IterExpected expected) -> Just expected
-                                 _                            -> Nothing
--}
 
 -- | True if an iteratee /or/ an enclosing enumerator has experienced
 -- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is

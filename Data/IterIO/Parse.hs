@@ -5,7 +5,7 @@
 -- "Data.Applicative" and inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
-                          (>$>), (<|>), (\/), orEmpty, (<?>)
+                          (>$>), (<|>), (\/), orI, orEmpty, (<?>)
                          , foldrI, foldr1I
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
@@ -41,7 +41,7 @@ import Data.IterIO.ListLike
 --
 -- @\<|\>@ has fixity:
 --
--- > infixr 3 <|>
+-- > infixr 2 <|>
 --
 (<|>) :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
 a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= return . check c
@@ -50,7 +50,7 @@ a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= return . check c
                            | otherwise    = a1 <|> b
       check c a1 = a1 <|> (Done () c >> b)
 a <|> b = a `catchI` \(IterNoParse _) _ -> b
-infixr 3 <|>
+infixr 2 <|>
 
 -- | @(f >$> a) t@ is equivelent to @f t '<$>' a@.  Particularly
 -- useful with infix combinators such as '\\/' and ``orEmpty`` for
@@ -58,11 +58,11 @@ infixr 3 <|>
 --
 -- Has fixity:
 --
--- > infixl 4 >$>
+-- > infixl 3 >$>
 --
 (>$>) :: (Functor f) => (t -> a -> b) -> f a -> t -> f b
 (>$>) f a t = f t <$> a
-infixl 4 >$>
+infixr 3 >$>
 
 -- | An infix synonym for 'ifNoParse' that allows LL(*) parsing, while
 -- keeping input data copies to places that might require
@@ -83,7 +83,7 @@ infixl 4 >$>
 --
 -- @
 --   myMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m [a]
---   myMany iter = iter \\/ return [] $ (:) '>$>' myMany iter
+--   myMany iter = iter \\/ return [] '$' (:) '>$>' myMany iter
 -- @
 --
 -- Has fixity:
@@ -94,6 +94,29 @@ infixl 4 >$>
         Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
 (\/) = ifNoParse
 infix 2 \/
+
+-- | @orI@ is a version of '<|>' with infinite backtracking, allowing
+-- LL(*) instead of LL(1) parsing.  @orI a b@ executes @a@, keeping a
+-- copy of all input consumed.  If @a@ throws an exception of class
+-- 'IterNoParse' (e.g., by calling 'expectedI' or 'throwEOFI'), then
+-- @b@ is executed on the same input.
+--
+-- Because @orI@ must keep a copy of all input fed to @a@, @a@ must
+-- not read unbounded input.  If @a@ is a compound Iteratee such as @a
+-- = ma >>= k@ and backtracking is only required on the first part
+-- (@ma@), then it is preferable to use '\/', as in:
+--
+-- @
+--   a '\/' b '$' k
+-- @
+--
+-- Has fixity:
+--
+-- > infixr 3 `orI`
+--
+orI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
+orI a b = ifParse a return b
+infixr 3 `orI`
 
 -- | Defined as @orEmpty = ('\\/ return 'mempty')@, and useful when
 -- parse failures should just return an empty 'Monoid'.  For example,
@@ -122,12 +145,12 @@ myMany iter = iter `orEmpty` (:) >$> myMany iter
 --
 -- Has fixity:
 --
--- > infixr 0 <?>
+-- > infix 0 <?>
 --
 (<?>) :: (ChunkData t, Monad m) => Iter t m a -> String -> Iter t m a
 iter <?> expected =
     mapExceptionI (\(IterNoParse _) -> IterExpected [expected]) iter
-infixr 0 <?>
+infix 0 <?>
 
 -- | Repeatedly invoke an Iteratee, and right fold a function over the
 -- results.
@@ -156,8 +179,8 @@ skipMany = foldrI (\_ _ -> ()) ()
 
 sepBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
          Iter t m a -> Iter t m b -> Iter t m f
-sepBy item sep = item `orEmpty` \i1 ->
-                 LL.cons i1 <$> foldr1I LL.cons LL.empty (sep *> item)
+sepBy item sep =
+    item `orEmpty` LL.cons >$> foldr1I LL.cons LL.empty (sep *> item)
 
 endBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
          Iter t m a -> Iter t m b -> Iter t m f
@@ -165,9 +188,9 @@ endBy item sep = foldrI LL.cons LL.empty (item <* sep)
 
 sepEndBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m f
-sepEndBy item sep = nextSep undefined
-    where nextItem i = LL.cons i <$> (sep `orEmpty` nextSep)
-          nextSep _  = item `orEmpty` nextItem
+sepEndBy item sep =
+    item `orEmpty` LL.cons >$> sep `orEmpty` (\_ -> sepEndBy item sep)
+
 
 -- | Run an iteratee one or more times (until it fails) and return a
 -- list-like container of the results.
@@ -179,8 +202,7 @@ skipMany1 = foldr1I (\_ _ -> ()) ()
 
 sepBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
           Iter t m a -> Iter t m b -> Iter t m f
-sepBy1 item sep = item >>= \i1 ->
-                  LL.cons i1 <$> foldr1I LL.cons LL.empty (sep *> item)
+sepBy1 item sep = item >>= LL.cons >$> foldr1I LL.cons LL.empty (sep *> item)
 
 endBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
           Iter t m a -> Iter t m b -> Iter t m f
@@ -188,9 +210,8 @@ endBy1 item sep = foldr1I LL.cons LL.empty (item <* sep)
 
 sepEndBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
              Iter t m a -> Iter t m b -> Iter t m f
-sepEndBy1 item sep = item >>= nextItem
-    where nextItem i = LL.cons i <$> (sep `orEmpty` nextSep)
-          nextSep _  = item `orEmpty` nextItem
+sepEndBy1 item sep =
+    item >>= LL.cons >$> sep `orEmpty` (\_ -> sepEndBy item sep)
 
                  
 -- | Read the next input element if it satisfies some predicate.
