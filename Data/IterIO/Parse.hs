@@ -92,21 +92,16 @@ many1 v = foldr1I LL.cons LL.empty v
 -- | Read the next input element if it satisfies some predicate.
 satisfy :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m e
-satisfy test = headLikeI >>= check
-    where
-      check e | test e    = return e
-              | otherwise = fail "satisfy failed"
+satisfy test = do
+  e <- headLikeI
+  if test e then return e else expectedI "satify predicate"
 
--- | Read input that exactly matches a character, or else fail.
+-- | Read input that exactly matches a character.
 char :: (ChunkData t, LL.ListLike t e, Eq e, Enum e, Monad m) =>
         Char -> Iter t m e
-char target = headLikeI >>= check
-    where
-      t = toEnum (fromEnum target)
-      check c | c == t    = return c
-              | otherwise = fail $ "expected '" ++ target:"'"
+char target = satisfy (toEnum (fromEnum target) ==) <?> [target]
 
--- | Read input that exactly matches a string, or else fail.
+-- | Read input that exactly matches a string.
 string :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
           String -> Iter t m t
 string fulltarget = doMatch ft
@@ -117,4 +112,4 @@ string fulltarget = doMatch ft
         m <- stringMaxI $ LL.length target
         if not (LL.null m) && LL.isPrefixOf m target
           then doMatch $ LL.drop (LL.length m) target
-          else fail $ "expected " ++ show fulltarget
+          else expectedI fulltarget
