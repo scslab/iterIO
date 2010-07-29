@@ -71,7 +71,6 @@
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI, Codec, CodecR(..)
-    , IterNoParse(..), IterEOF(..), IterExpected(..)
     -- * Core functions
     , (|$)
     , runIter, run
@@ -83,15 +82,17 @@ module Data.IterIO.Base
     -- * Enumerator construction functions
     , chunkerToCodec, iterToCodec
     , enumO, enumO', enumObracket, enumI, enumI'
-    -- * Predicates on iteratees
+    -- * Exception and error functions
+    , IterNoParse(..), IterEOF(..), IterExpected(..)
     , isIterError, isEnumError
+    , ifParse, ifNoParse
+    , throwI, throwEOFI, expectedI
+    , tryI, backtrackI, catchI, handlerI
+    , resumeI, verboseResumeI, mapExceptionI
     -- * Other functions
     , iterLoop
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
-    , throwI, throwEOFI, expectedI
-    , tryI, backtrackI, catchI, handlerI
-    , resumeI, verboseResumeI, mapExceptionI
     , nullI, dataI, chunkI
     , wrapI, runI, joinI, returnI
     , headI, safeHeadI
@@ -503,6 +504,39 @@ run (Done a _)      = return a
 run (IterFail e)    = throw $ unIterEOF e
 run (EnumOFail e _) = throw $ unIterEOF e
 run (EnumIFail e _) = throw $ unIterEOF e
+
+
+--
+-- Exceptions
+--
+
+-- | @ifParse iter success failure@ runs @iter@, but saves a copy of
+-- all input consumed using 'backtrackI'.  (This means @iter@ must not
+-- consume unbounded amounts of input!)  If @iter@ suceeds, its result
+-- is passed to the function @success@.  If @iter@ throws an exception
+-- of class 'IterNoParse', then @failure@ is executed with the input
+-- re-wound (so that @failure@ is fed the same input that @iter@ was).
+ifParse :: (ChunkData t, Monad m) =>
+           Iter t m a           -- ^ @iter@ to run with backtracking
+        -> (a -> Iter t m b)    -- ^ @success@ function
+        -> Iter t m b           -- ^ @failure@ action
+        -> Iter t m b
+ifParse iter yes no = do
+  ea <- backtrackI iter
+  case ea of
+    Right a -> yes a
+    Left (IterNoParse err, _) -> 
+        case cast err of
+          Just (IterExpected e1) -> mapExceptionI (combine e1) no
+          _ -> no
+    where
+      combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
+
+-- | This function is just 'ifParse' with the second and third
+-- arguments reversed.
+ifNoParse :: (ChunkData t, Monad m) =>
+             Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
+ifNoParse iter no yes = ifParse iter yes no
 
 
 --

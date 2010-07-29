@@ -6,8 +6,9 @@
 -- associativity.  (The @'Alternative'@ class's @\<|\>@ operator is
 -- left associative, which would be very inefficient with iteratees.)
 
-module Data.IterIO.Parse (ifParse, ifNoParse, char, string
-                         , (<?>), (<|>), many, many1
+module Data.IterIO.Parse (foldrI, foldr1I, many, many1
+                         , satisfy, char, string
+                         , (<?>), (<|>)
                          , (<$>), (<$), Applicative(..), (<**>)
                          ) where
 
@@ -22,7 +23,7 @@ import System.IO.Error (isEOFError)
 
 import Data.IterIO
 
--- | Infix synonym for 'mplus'.  Note that 'mplus' for the 'Iter'
+-- x Infix synonym for 'mplus'.  Note that 'mplus' for the 'Iter'
 -- 'MonadPlus' uses @'backtrackI'@, which keeps a copy of all input
 -- data around until the iteratee finishes.  Thus, @\<|\>@ should not
 -- be used with iteratees that consume lots of input.
@@ -39,8 +40,22 @@ import Data.IterIO
 -- Note that we specifically don't use the 'Alternative' class because
 -- the @\<|\>@ method of 'Alternative' has left fixity instead of
 -- right fixity (which would be very expensive).
-(<|>) :: (MonadPlus m) => m a -> m a -> m a
-(<|>) = mplus
+
+-- | @a1 \<|\> a2@ is a convenient infix wrapper around 'ifParse' that
+-- executes @a1@ (saving a copy of all input), and if @a1@ throws an
+-- exception of class 'IterNoParse', falls back to executing @a2@ with
+-- the same input @a1@ just failed on.  Equivalent to:
+--
+-- @
+--   a1 \<|\> a2 = 'ifParse' a1 'return' a2
+-- @
+--
+-- Has fixity:
+--
+-- > infixr 1 <|>
+--
+(<|>) :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
+a <|> b = ifParse a return b
 infixr 1 <|>
 
 -- | @iter \<?\> token@ replaces any kind of parse failure in @iter@
@@ -50,50 +65,29 @@ iter <?> expected =
     mapExceptionI (\(IterNoParse _) -> IterExpected [expected]) iter
 infix 0 <?>
 
--- | @ifParse iter success failure@ runs @iter@, but saves a copy of
--- all input consumed.  (This means @iter@ must not consume unbounded
--- amounts of input!)  If @iter@ suceeds, its result is passed to the
--- function @success@.  If @iter@ throws an exception of class
--- 'IterNoParse', then @failure@ is executed with the input re-wound
--- (so that @failure@ is fed the same input that @iter@ was).
-ifParse :: (ChunkData t, Monad m) =>
-           Iter t m a           -- ^ @iter@ to run with backtracking
-        -> (a -> Iter t m b)    -- ^ @success@ function
-        -> Iter t m b           -- ^ @failure@ action
-        -> Iter t m b
-ifParse iter yes no = do
-  ea <- backtrackI iter
-  case ea of
-    Right a -> yes a
-    Left (IterNoParse err, _) -> 
-        case cast err of
-          Just (IterExpected exp) -> mapExceptionI (combine exp) no
-          _ -> no
-    where
-      combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
-
--- | This function is just 'ifParse' with the second and third
--- arguments reversed.
-ifNoParse :: (ChunkData t, Monad m) =>
-             Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
-ifNoParse iter no yes = ifParse iter yes no
-
--- | Super inefficient--Yucko
-foldrMany :: (ChunkData t, Monad m) =>
-             (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldrMany f z iter =
+-- | Repeatedly invoke an Iteratee, and right fold a function over the
+-- results.
+foldrI :: (ChunkData t, Monad m) =>
+          (a -> b -> b) -> b -> Iter t m a -> Iter t m b
+foldrI f z iter =
     let foldNext = ifNoParse iter (return z) $ \a -> f a <$> foldNext
     in foldNext
 
+-- | Repeatedly invoke an Iteratee, and right fold a function over the
+-- results.  Requires the Iteratee to succeed at least once.
+foldr1I :: (ChunkData t, Monad m) =>
+          (a -> b -> b) -> b -> Iter t m a -> Iter t m b
+foldr1I f z iter = iter >>= \a -> f a <$> foldrI f z iter
+
 -- | Run an iteratee zero or more times (until it fails) and return a
 -- list-like container of the results.
-many :: (LL.ListLike f a, MonadPlus m) => m a -> m f
-many v = many1 v <|> return LL.empty
+many :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
+many v = foldrI LL.cons LL.empty v
 
 -- | Run an iteratee one or more times (until it fails) and return a
 -- list-like container of the results.
-many1 :: (LL.ListLike f a, MonadPlus m) => m a -> m f
-many1 v = liftM LL.cons v `ap` many v
+many1 :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
+many1 v = foldr1I LL.cons LL.empty v
 
 -- | Read the next input element if it satisfies some predicate.
 satisfy :: (ChunkData t, LL.ListLike t e, Monad m) =>
@@ -124,4 +118,3 @@ string fulltarget = doMatch ft
         if not (LL.null m) && LL.isPrefixOf m target
           then doMatch $ LL.drop (LL.length m) target
           else fail $ "expected " ++ show fulltarget
-
