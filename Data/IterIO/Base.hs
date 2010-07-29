@@ -315,7 +315,7 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
     pure   = return
     (<*>)  = ap
     (*>)   = (>>)
-    a <* b = do r <- a; b; return r
+    a <* b = do r <- a; _ <- b; return r
 
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
