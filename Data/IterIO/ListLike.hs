@@ -34,8 +34,9 @@ import qualified Data.ListLike as LL
 import Data.IterIO.Base
 import Data.IterIO.Extra
 
-echr :: (Enum e) => e -> Char
-echr = chr . fromEnum
+echr :: (Enum e) => Char -> e
+echr = toEnum . ord
+
 
 -- | Turn data into a 'Chunk'.  Set the EOF marker when the data is
 -- null.
@@ -71,10 +72,10 @@ safeLineI :: (Monad m, LL.ListLike t e, Eq t, Enum e, Eq e) =>
              Iter t m (Maybe t)
 safeLineI = IterF $ return . doline LL.empty
     where
-      cr = LL.singleton $ toEnum $ fromEnum '\r'
-      nl = LL.singleton $ toEnum $ fromEnum '\n'
+      cr = LL.singleton $ echr '\r'
+      nl = LL.singleton $ echr '\n'
       crnl = LL.append cr nl
-      eol c = echr c == '\n' || echr c == '\r'
+      eol c = c == echr '\n' || c == echr '\r'
       doline acc (Chunk t eof) =
           let acc' = LL.append acc t
               (l, r) = LL.break eol acc'

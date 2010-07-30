@@ -4,10 +4,11 @@
 -- "Data.Applicative" and inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
-                          (>$>), (<|>), (\/), orI, orEmpty, (<?>)
+                          (<|>), (\/), orI, orEmpty, (<?>)
                          , foldrI, foldr1I, foldlI, foldl1I
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
+                         , (>$>), (<++>)
                          -- * Parsing Iteratees
                          -- $Parseclike
                          , many, skipMany, sepBy, endBy, sepEndBy
@@ -16,14 +17,11 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          ) where
 
 import Prelude hiding (null)
-import Control.Applicative (Applicative(..), (<**>))
-import Control.Exception (SomeException, Exception(..))
-import Control.Monad
+import Control.Applicative (Applicative(..), (<**>), liftA2)
+import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
-import Data.Maybe
 import Data.Monoid
-import Data.Typeable
 
 import Data.IterIO.Base
 import Data.IterIO.ListLike
@@ -135,10 +133,6 @@ orEmpty :: (ChunkData t, Monad m, Monoid b) =>
 orEmpty = (\/ return mempty)
 infixr 3 `orEmpty`
 
-myMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m [a]
-myMany iter = iter `orEmpty` (:) >$> myMany iter
-
-
 -- | @iter \<?\> token@ replaces any kind of parse failure in @iter@
 -- with an exception equivalent to calling @'expectedI' token@.
 --
@@ -179,6 +173,14 @@ foldl1I :: (ChunkData t, Monad m) =>
            (b -> a -> b) -> b -> Iter t m a -> Iter t m b
 foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
 
+-- | Concatenate the result of two 'Applicative' types returning
+-- 'LL.ListLike' types (@\<++> = 'liftA2' 'LL.append'@).  Has the same
+-- fixity as '++', namely:
+--
+-- > infixr 5 <++>
+(<++>) :: (Applicative f, LL.ListLike t e) => f t -> f t -> f t
+(<++>) = liftA2 LL.append
+infixr 5 <++>
 
 -- $Parseclike
 --
@@ -240,7 +242,7 @@ satisfy test = do
 -- | Read input that exactly matches a character.
 char :: (ChunkData t, LL.ListLike t e, Eq e, Enum e, Monad m) =>
         Char -> Iter t m e
-char target = satisfy (toEnum (fromEnum target) ==) <?> [target]
+char target = satisfy (toEnum (ord target) ==) <?> [target]
 
 -- | Read input that exactly matches a string.
 string :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
