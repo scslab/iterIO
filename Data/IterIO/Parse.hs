@@ -18,10 +18,12 @@ module Data.IterIO.Parse (-- * Iteratee combinators
 
 import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>), liftA2)
+import Control.Exception
 import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
 import Data.Monoid
+import Data.Typeable
 
 import Data.IterIO.Base
 import Data.IterIO.ListLike
@@ -46,7 +48,11 @@ a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= return . check c
       check c a1@(IterF _) | not (null c) = a1
                            | otherwise    = a1 <|> b
       check c a1 = a1 <|> (Done () c >> b)
-a <|> b = a `catchI` \(IterNoParse _) _ -> b
+a <|> b = a `catchI` \(IterNoParse e) _ -> runb (cast e)
+    where
+      runb (Just (IterExpected e1)) = mapExceptionI (combine e1) b
+      runb _                        = b
+      combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
 infixr 3 <|>
 
 -- | @(f >$> a) t@ is equivelent to @f t '<$>' a@.  Particularly
@@ -155,7 +161,7 @@ foldrI f z iter = iter \/ return z $ f >$> foldrI f z iter
 -- results.  Requires the Iteratee to succeed at least once.
 foldr1I :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldr1I f z iter = f <$> iter <*> foldr1I f z iter
+foldr1I f z iter = f <$> iter <*> foldrI f z iter
 
 -- | Strict left fold over an iteratee (until it throws an
 -- 'IterNoParse' exception).  @foldlI f z iter@ is sort of equivalent
