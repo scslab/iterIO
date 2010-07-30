@@ -18,7 +18,6 @@ module Data.IterIO.Parse (-- * Iteratee combinators
 
 import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>), liftA2)
-import Control.Exception
 import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL

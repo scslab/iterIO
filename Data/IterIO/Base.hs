@@ -122,6 +122,7 @@ import System.IO
 import System.IO.Error (mkIOError, eofErrorType, isEOFError)
 import System.IO.Unsafe
 
+
 --
 -- Iteratee types
 --
@@ -507,7 +508,7 @@ ifParse iter yes no = do
   ea <- tryBI iter
   case ea of
     Right a -> yes a
-    Left (IterNoParse err) -> 
+    Left (IterNoParse err) ->
         case cast err of
           Just (IterExpected e1) -> mapExceptionI (combine e1) no
           _ -> no
@@ -578,9 +579,9 @@ copyInput :: (ChunkData t, Monad m) =>
        -> Iter t m (Iter t m a, Chunk t)
 copyInput iter1 = doit mempty iter1
     where
-      doit acc iter@(IterF _)  =
+      doit acc iter@(IterF _) =
           IterF $ \c -> runIter iter c >>= return . doit (mappend acc c)
-      doit acc (Done a c) = Done (Done a c, acc) c
+      doit acc (Done a c) = Done (return a, acc) c
       doit acc iter       = return (iter, acc)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
