@@ -40,7 +40,7 @@ import Data.IterIO.ListLike
 --
 -- @\<|\>@ has fixity:
 --
--- > infixr 2 <|>
+-- > infixr 3 <|>
 --
 (<|>) :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
 a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= return . check c
@@ -49,10 +49,10 @@ a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= return . check c
                            | otherwise    = a1 <|> b
       check c a1 = a1 <|> (Done () c >> b)
 a <|> b = a `catchI` \(IterNoParse _) _ -> b
-infixr 2 <|>
+infixr 3 <|>
 
 -- | @(f >$> a) t@ is equivelent to @f t '<$>' a@.  Particularly
--- useful with infix combinators such as '\\/' and ``orEmpty`` for
+-- useful with infix combinators such as '\/' and ``orEmpty`` for
 -- chaining a bunch of parse actions.  (See the example at 'orEmpty'.)
 --
 -- Has fixity:
@@ -65,17 +65,17 @@ infixr 3 >$>
 
 -- | An infix synonym for 'ifNoParse' that allows LL(*) parsing, while
 -- keeping input data copies to places that might require
--- backgracking.  The code:
+-- backtracking.  The code:
 --
 -- >     iter \/ failIter $ \res ->
 -- >     doSomethingWith res
 --
--- Executes @iter@ (saving copying the input for backgracking).  If
--- @iter@ fails with an exception of class 'IterNoParse', then this
--- code re-winds the input and executes @failIter@ on the same input.
--- On the other hand, if @iter@ succeeds and returns @res@, then the
--- processed input is discarded and the result of @iter@ is fed to
--- function @doSomethingWith@.
+-- Executes @iter@ (saving a copy of the input for backtracking).  If
+-- @iter@ fails with an exception of class 'IterNoParse', then the
+-- input is re-wound and fed to @failIter@.  On the other hand, if
+-- @iter@ succeeds and returns @res@, then the processed input is
+-- discarded and the result of @iter@ is fed to function
+-- @doSomethingWith@.
 --
 -- For example, to build up a list of results of executing @iter@, one
 -- could implement a type-restricted version of 'many' as follows:
@@ -106,7 +106,7 @@ infix 2 \/
 -- (@ma@), then it is preferable to use '\/', as in:
 --
 -- @
---   a '\/' b '$' k
+--   ma '\/' b '$' k
 -- @
 --
 -- Has fixity:
@@ -117,7 +117,7 @@ orI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
 orI a b = ifParse a return b
 infixr 3 `orI`
 
--- | Defined as @orEmpty = ('\\/ return 'mempty')@, and useful when
+-- | Defined as @orEmpty = ('\/' return 'mempty')@, and useful when
 -- parse failures should just return an empty 'Monoid'.  For example,
 -- a type-restricted 'many' can be implemented as:
 --
@@ -167,9 +167,7 @@ foldr1I f z iter = f <$> iter <*> foldr1I f z iter
 -- 'IterNoParse' exception).  @foldlI f z iter@ is sort of equivalent
 -- to:
 --
--- @
---   f z <$> iter <*> iter <*> iter <*> ...
--- @
+-- > ... (f <$> (f <$> (f z <$> iter) <*> iter) <*> iter) ...
 foldlI :: (ChunkData t, Monad m) =>
           (b -> a -> b) -> b -> Iter t m a -> Iter t m b
 foldlI f z0 iter = foldNext z0
@@ -178,7 +176,7 @@ foldlI f z0 iter = foldNext z0
 -- | A version of 'foldlI' that fails if the Iteratee argument does
 -- not succeed at least once.
 foldl1I :: (ChunkData t, Monad m) =>
-          (b -> a -> b) -> b -> Iter t m a -> Iter t m b
+           (b -> a -> b) -> b -> Iter t m a -> Iter t m b
 foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
 
 
