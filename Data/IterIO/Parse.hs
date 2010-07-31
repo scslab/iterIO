@@ -29,8 +29,6 @@ import Data.Typeable
 import Data.IterIO.Base
 import Data.IterIO.ListLike
 
-import Debug.Trace
-
 -- | LL(1) parser alternative.  @a \<|\> b@ starts by executing @a@.
 -- If @a@ throws an exception of class 'IterNoParse' /and/ @a@ has not
 -- consumed any input, then @b@ is executed.  (@a@ has consumed input
@@ -45,6 +43,12 @@ import Debug.Trace
 --
 -- > infixr 3 <|>
 --
+{-
+
+This is what we want, but to avoid bugs that only get triggered on
+certain input boundaries, we actually always just feed the first
+character in.
+
 (<|>) :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
 a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= check c
     where
@@ -52,6 +56,25 @@ a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= check c
       check c a1@(IterF _) | not (null c) = return a1
                            | otherwise    = return $ a1 <|> b
       check c a1 = runIter (a1 <|> b) c
+-}
+
+(<|>) :: (ChunkData t, LL.ListLike t e, Monad m) =>
+         Iter t m a -> Iter t m a -> Iter t m a
+a@(IterF _) <|> b = IterF dorun
+    where
+      dorun c@(Chunk t eof)
+          | LL.null t || LL.null (LL.tail t) = runIter a c >>= check c
+          | otherwise                        = do
+        let ch = Chunk (LL.singleton $ LL.head t) False
+            ct = Chunk (LL.tail t) eof
+        a2 <- runIter a ch >>= check ch
+        runIter a2 ct
+
+      check _ a1@(Done _ _) = return a1
+      check c a1@(IterF _) | not (null c) = return a1
+                           | otherwise    = return $ a1 <|> b
+      check c a1 = runIter (a1 <|> b) c
+
 a <|> b = a `catchI` \(IterNoParse e) _ -> runb (cast e)
     where
       runb (Just (IterExpected e1)) = mapExceptionI (combine e1) b
