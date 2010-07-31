@@ -181,8 +181,8 @@ foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
 
 -- | Discard the result of executing an Iteratee once.  Throws an
 -- error if the Iteratee fails.  (Short for @skip = (>> return ())@.)
-skip :: Applicative f => f a -> m ()
-skip = (*> return ())
+skip :: Applicative f => f a -> f ()
+skip = (*> pure ())
 
 -- | Concatenate the result of two 'Applicative' types returning
 -- 'LL.ListLike' types (@\<++> = 'liftA2' 'LL.append'@).  Has the same
