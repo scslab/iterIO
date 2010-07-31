@@ -181,7 +181,7 @@ foldl1I :: (ChunkData t, Monad m) =>
 foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
 
 -- | Discard the result of executing an Iteratee once.  Throws an
--- error if the Iteratee fails.  (Like @skip x = x >> return ())@.)
+-- error if the Iteratee fails.  (Like @skip x = x >> return ()@.)
 skipI :: Applicative f => f a -> f ()
 skipI = (() <$)
 
@@ -223,7 +223,7 @@ whileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t
 whileI test = more LL.empty
     where
       more t0 = IterF $ \(Chunk t eof) ->
-                return $ case LL.break test t of
+                return $ case LL.span test t of
                          (t1, t2) | not (LL.null t2) || eof ->
                                       Done (LL.append t0 t1) $ Chunk t2 eof
                          (t1, _) -> more (LL.append t0 t1)
