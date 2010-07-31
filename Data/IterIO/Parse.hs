@@ -6,7 +6,8 @@
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orI, orEmpty, (<?>)
                          , foldrI, foldr1I, foldlI, foldl1I
-                         , skip
+                         , skipI, ensure
+                         , skipWhileI, skipWhile1I, whileI, while1I
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
                          , (>$>), (<++>)
@@ -180,10 +181,52 @@ foldl1I :: (ChunkData t, Monad m) =>
 foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
 
 -- | Discard the result of executing an Iteratee once.  Throws an
--- error if the Iteratee fails.  (Short for @skip = (>> return ())@.)
-skip :: Applicative f => f a -> f ()
-skip = (*> pure ())
+-- error if the Iteratee fails.  (Like @skip x = x >> return ())@.)
+skipI :: Applicative f => f a -> f ()
+skipI = (() <$)
 
+-- | Ensures the next input element satisfies a predicate or throws a
+-- parse error.  Does not consume any input.
+ensure :: (ChunkData t, LL.ListLike t e, Monad m) =>
+          (e -> Bool) -> Iter t m ()
+ensure test = IterF $ \c@(Chunk t eof) ->
+              return $ case () of
+                         _ | not (LL.null t) && test (LL.head t) -> Done () c
+                         _ | LL.null t && not eof -> ensure test
+                         _ -> expectedI "ensure predicate"
+
+-- | Skip all input elements encountered until an element is found
+-- that does not match the specified predicate.
+skipWhileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m ()
+skipWhileI test = IterF $ \(Chunk t eof) ->
+                  return $ case LL.dropWhile test t of
+                             t1 | LL.null t1 && not eof -> skipWhileI test
+                             t1 -> Done () $ Chunk t1 eof
+
+-- | Like 'skipWhileI', but fails if at least one element does not
+-- satisfy the predicate.  Safe for use with '<|>'.
+skipWhile1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
+               (e -> Bool) -> Iter t m ()
+skipWhile1I test = ensure test >> skipWhileI test <?> "skipWhile1I"
+
+-- | Return all input elements up to the first one that does not match
+-- the specified predicate.
+whileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t
+whileI test = more LL.empty
+    where
+      more t0 = IterF $ \(Chunk t eof) ->
+                return $ case LL.break test t of
+                         (t1, t2) | not (LL.null t2) || eof ->
+                                      Done (LL.append t0 t1) $ Chunk t2 eof
+                         (t1, _) -> more (LL.append t0 t1)
+
+-- | Like 'whileI', but fails if at least one element does not satisfy
+-- the predicate.  Safe for use with '<|>'.
+while1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
+           (e -> Bool) -> Iter t m t
+while1I test = ensure test >> whileI test <?> "while1I"
+
+                               
 -- | Concatenate the result of two 'Applicative' types returning
 -- 'LL.ListLike' types (@\<++> = 'liftA2' 'LL.append'@).  Has the same
 -- fixity as '++', namely:

@@ -328,7 +328,7 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
                   case m' of
                     IterF _   -> return $ m' >>= k
                     Done a c' -> runIter (k a) c'
-                    err       -> return $ IterFail $ getIterError err
+                    _         -> return $ IterFail $ getIterError m'
     fail msg = IterFail $ mkError msg
     -- fail msg = IterFail (toException (IterError msg))
 
