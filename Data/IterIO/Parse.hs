@@ -6,6 +6,7 @@
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orI, orEmpty, (<?>)
                          , foldrI, foldr1I, foldlI, foldl1I
+                         , skip
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
                          , (>$>), (<++>)
@@ -177,6 +178,11 @@ foldlI f z0 iter = foldNext z0
 foldl1I :: (ChunkData t, Monad m) =>
            (b -> a -> b) -> b -> Iter t m a -> Iter t m b
 foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
+
+-- | Discard the result of executing an Iteratee once.  Throws an
+-- error if the Iteratee fails.  (Short for @skip = (>> return ())@.)
+skip :: Applicative f => f a -> m ()
+skip = (*> return ())
 
 -- | Concatenate the result of two 'Applicative' types returning
 -- 'LL.ListLike' types (@\<++> = 'liftA2' 'LL.append'@).  Has the same
