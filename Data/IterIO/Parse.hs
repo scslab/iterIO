@@ -6,7 +6,7 @@
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orI, orEmpty, (<?>)
                          , foldrI, foldr1I, foldlI, foldl1I
-                         , skipI, ensure
+                         , peekI, skipI, ensureI
                          , skipWhileI, skipWhile1I, whileI, while1I
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
@@ -185,15 +185,23 @@ foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
 skipI :: Applicative f => f a -> f ()
 skipI = (() <$)
 
+-- | Peeks at the next input element without consuming it.  Throws an
+-- 'IterEOF' exception if an end of file is encountered.
+peekI :: (LL.ListLike t e, Monad m) => Iter t m e
+peekI = IterF $ \c@(Chunk t eof) -> return $
+        if LL.null t
+        then if eof
+             then throwEOFI "peekI"
+             else peekI
+        else Done (LL.head t) c
+
 -- | Ensures the next input element satisfies a predicate or throws a
 -- parse error.  Does not consume any input.
-ensure :: (ChunkData t, LL.ListLike t e, Monad m) =>
-          (e -> Bool) -> Iter t m ()
-ensure test = IterF $ \c@(Chunk t eof) ->
-              return $ case () of
-                         _ | not (LL.null t) && test (LL.head t) -> Done () c
-                         _ | LL.null t && not eof -> ensure test
-                         _ -> expectedI "ensure predicate"
+ensureI :: (ChunkData t, LL.ListLike t e, Monad m) =>
+           (e -> Bool) -> Iter t m ()
+ensureI test = do
+  e <- peekI
+  if test e then return () else expectedI "ensureI predicate"
 
 -- | Skip all input elements encountered until an element is found
 -- that does not match the specified predicate.
@@ -207,7 +215,7 @@ skipWhileI test = IterF $ \(Chunk t eof) ->
 -- satisfy the predicate.  Safe for use with '<|>'.
 skipWhile1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
                (e -> Bool) -> Iter t m ()
-skipWhile1I test = ensure test >> skipWhileI test <?> "skipWhile1I"
+skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
 
 -- | Return all input elements up to the first one that does not match
 -- the specified predicate.
@@ -224,7 +232,7 @@ whileI test = more LL.empty
 -- the predicate.  Safe for use with '<|>'.
 while1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
-while1I test = ensure test >> whileI test <?> "while1I"
+while1I test = ensureI test >> whileI test <?> "while1I"
 
                                
 -- | Concatenate the result of two 'Applicative' types returning
