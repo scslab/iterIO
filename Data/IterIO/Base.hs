@@ -152,7 +152,11 @@ instance ChunkData () where
 -- end-of-file condition.  An iteratee that receives a @Chunk@ with
 -- EOF 'True' must return a result (or failure); it is an error to
 -- demand more data after an EOF.
-data Chunk t = Chunk t Bool deriving (Eq, Show)
+data Chunk t = Chunk t Bool deriving (Eq)
+
+instance (Show t) => Show (Chunk t) where
+    showsPrec _ (Chunk t eof) rest =
+        "Chunk " ++ show t ++ if eof then "+EOF" ++ rest else rest
 
 -- | Constructor function that builds a chunk containing data and a
 -- 'False' EOF flag.

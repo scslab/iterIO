@@ -29,6 +29,8 @@ import Data.Typeable
 import Data.IterIO.Base
 import Data.IterIO.ListLike
 
+import Debug.Trace
+
 -- | LL(1) parser alternative.  @a \<|\> b@ starts by executing @a@.
 -- If @a@ throws an exception of class 'IterNoParse' /and/ @a@ has not
 -- consumed any input, then @b@ is executed.  (@a@ has consumed input
@@ -44,11 +46,12 @@ import Data.IterIO.ListLike
 -- > infixr 3 <|>
 --
 (<|>) :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
-a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= return . check c
+a@(IterF _) <|> b = IterF $ \c -> runIter a c >>= check c
     where
-      check c a1@(IterF _) | not (null c) = a1
-                           | otherwise    = a1 <|> b
-      check c a1 = a1 <|> (Done () c >> b)
+      check _ a1@(Done _ _) = return a1
+      check c a1@(IterF _) | not (null c) = return a1
+                           | otherwise    = return $ a1 <|> b
+      check c a1 = runIter (a1 <|> b) c
 a <|> b = a `catchI` \(IterNoParse e) _ -> runb (cast e)
     where
       runb (Just (IterExpected e1)) = mapExceptionI (combine e1) b
@@ -219,10 +222,10 @@ skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
 
 -- | Return all input elements up to the first one that does not match
 -- the specified predicate.
-whileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t
+whileI :: (Show t, LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t
 whileI test = more LL.empty
     where
-      more t0 = IterF $ \(Chunk t eof) ->
+      more t0 = IterF $ \c@(Chunk t eof) ->
                 return $ case LL.span test t of
                          (t1, t2) | not (LL.null t2) || eof ->
                                       Done (LL.append t0 t1) $ Chunk t2 eof
@@ -230,7 +233,7 @@ whileI test = more LL.empty
 
 -- | Like 'whileI', but fails if at least one element does not satisfy
 -- the predicate.  Safe for use with '<|>'.
-while1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
+while1I :: (Show t, ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
 while1I test = ensureI test >> whileI test <?> "while1I"
 
