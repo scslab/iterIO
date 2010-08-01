@@ -209,7 +209,7 @@ skipWhileI test = IterF $ \(Chunk t eof) ->
                              t1 -> Done () $ Chunk t1 eof
 
 -- | Like 'skipWhileI', but fails if at least one element does not
--- satisfy the predicate.  Safe for use with '<|>'.
+-- satisfy the predicate.
 skipWhile1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
                (e -> Bool) -> Iter t m ()
 skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
@@ -226,7 +226,7 @@ whileI test = more LL.empty
                          (t1, _) -> more (LL.append t0 t1)
 
 -- | Like 'whileI', but fails if at least one element does not satisfy
--- the predicate.  Safe for use with '<|>'.
+-- the predicate.
 while1I :: (Show t, ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
 while1I test = ensureI test >> whileI test <?> "while1I"
@@ -244,10 +244,11 @@ concat1I :: (ChunkData t, Monoid s, Monad m) =>
 concat1I iter = foldr1I mappend mempty iter
                                
                                
--- | This Iteratee parses a 'LL.StringLike' input.  It does not
+-- | This Iteratee parses a 'LL.StringLike' argument.  It does not
 -- consume any Iteratee input.  The only reason it is an Iteratee is
--- so that it can throw an Iteratee parse error if it fails to parse
--- the input (or if the input has an ambiguous parse).
+-- so that it can throw an Iteratee parse error should it fail to
+-- parse the argument string (or should the argument yield an
+-- ambiguous parse).
 readI :: (ChunkData t, LL.StringLike s, Monad m, Read a) => 
          s -> Iter t m a
 readI s' = let s = LL.toString s'
