@@ -1,7 +1,7 @@
 
 -- | This module contains functions to help parsing input from within
 -- iteratees.  Many of the operators are either imported from
--- "Data.Applicative" and inspired by "Text.Parsec".
+-- "Data.Applicative" or inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (<&>), (\/), orI, orEmpty, (<?>)
@@ -68,10 +68,11 @@ paranoidLL1 a b = a `catchI` \err _ -> combineExpected err b
 -- if it returns in the 'IterF' state after being fed a non-empty
 -- 'Chunk'.)
 --
--- It is sometimes difficult to tell if Iteratee @a@ will always
--- consume input before failing.  For this reason, it is usually safer
--- to use 'orI', the '\/' operator, or the '<&>' operator, all of
--- which supports unlimited lookahead in different ways.
+-- Use of this combinator is somewhat error-prone, because it may be
+-- difficult to tell whether Iteratee @a@ will ever consume input
+-- before failing.  For this reason, it is safer to use 'orI', the
+-- '\/' operator, or the '<&>' operator, all of which support
+-- unlimited lookahead (LL(*) parsing) in different ways.
 --
 -- @\<|\>@ has fixity:
 --
@@ -90,8 +91,9 @@ infixr 3 <|>
 -- backtracking by running @a@ and @b@ in parallel on input as it
 -- arrives.  More specifically, @a \<&> b@ behaves as follows:
 --
---  * If @a@ throws a parse error, then returns the result of having
---    executed @b@ concurrently on the same input.
+--  * If @a@ throws a parse error (exception of type 'IterNoParse'),
+--    then returns the result of having executed @b@ concurrently on
+--    the same input.
 --
 --  * Otherwise, if @a@ succeeds or throws any other kind of error,
 --    returns (or throws) the result of executing @a@.  However, in
@@ -99,7 +101,7 @@ infixr 3 <|>
 --    input.
 --
 -- Because the second iteratee (@b@) may partially execute, it is a
--- bad idea to use @\<&>@ if @b@ has any monatic side effects.  If @b@
+-- bad idea to use @\<&>@ if @b@ has any monadic side effects.  If @b@
 -- has side effects, you may want to use '\/' to execute the two
 -- Iteratees in strict sequence (but with '\/' you will have to be
 -- careful to avoid storing unbounded inputs in memory).
@@ -155,7 +157,7 @@ infixr 3 >$>
 -- result is fed to @(:) '>$>' myMany iter@, which is equivalent to:
 --
 -- @
---   \iterResult -> (iterResult :) ``fmap`` myMany iter
+--     \\iterResult -> (iterResult :) ``fmap`` myMany iter
 -- @
 --
 -- @\\/@ has fixity:
@@ -334,7 +336,7 @@ many :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
 many = foldrI LL.cons LL.empty
 
 skipMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
-skipMany = foldrI (\_ _ -> ()) ()
+skipMany = foldlI (\_ _ -> ()) ()
 
 sepBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
          Iter t m a -> Iter t m b -> Iter t m f
@@ -357,7 +359,7 @@ many1 :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
 many1 = foldr1I LL.cons LL.empty
 
 skipMany1 :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
-skipMany1 = foldr1I (\_ _ -> ()) ()
+skipMany1 = foldl1I (\_ _ -> ()) ()
 
 sepBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
           Iter t m a -> Iter t m b -> Iter t m f
