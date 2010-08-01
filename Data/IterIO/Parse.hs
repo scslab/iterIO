@@ -4,11 +4,11 @@
 -- "Data.Applicative" or inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
-                          (<|>), (\/), orI, orEmpty, (<?>)
+                          (<|>), (\/), orEmpty, (<?>)
                          , foldrI, foldr1I, foldlI, foldl1I
                          , peekI, skipI, ensureI
                          , skipWhileI, skipWhile1I, whileI, while1I
-                         , readI
+                         , concatI, readI
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
                          , (>$>), (<++>)
@@ -29,26 +29,23 @@ import Data.Monoid
 import Data.IterIO.Base
 import Data.IterIO.ListLike
 
+-- | An infix synonym for 'multiParse' that allows LL(*) parsing of
+-- alternatives by executing both Iteratees on input chunks as they
+-- arrive.
+--
+-- Has fixity:
+--
+-- > infixr 3 <|>
 (<|>) :: (ChunkData t, Monad m) =>
          Iter t m a -> Iter t m a -> Iter t m a
 (<|>) = multiParse
 infixr 3 <|>
 
--- | @(f >$> a) t@ is equivelent to @f t '<$>' a@.  Particularly
--- useful with infix combinators such as '\/' and ``orEmpty`` for
--- chaining a bunch of parse actions.  (See the example at 'orEmpty'.)
---
--- Has fixity:
---
--- > infixl 3 >$>
---
-(>$>) :: (Functor f) => (t -> a -> b) -> f a -> t -> f b
-(>$>) f a t = f t <$> a
-infixr 3 >$>
-
 -- | An infix synonym for 'ifNoParse' that allows LL(*) parsing of
--- alternatives, while keeping a copy of input data consumed by an
--- Iteratee that might require backtracking.  The code:
+-- alternatives by keeping a copy of input data consumed by the first
+-- Iteratee so as to backtrack and execute the second Iteratee if the
+-- first one fails.  Returns a function that takes a continuation for
+-- the first Iteratee, should it succeed.  The code:
 --
 -- >     iter1 \/ iter2 $ \iter1Result -> doSomethingWith iter1Result
 --
@@ -84,6 +81,20 @@ infixr 3 >$>
 (\/) = ifNoParse
 infix 2 \/
 
+-- | @(f >$> a) t@ is equivelent to @f t '<$>' a@.  Particularly
+-- useful with infix combinators such as '\/' and ``orEmpty`` for
+-- chaining a bunch of parse actions.  (See the example at 'orEmpty'.)
+--
+-- Has fixity:
+--
+-- > infixl 3 >$>
+--
+(>$>) :: (Functor f) => (t -> a -> b) -> f a -> t -> f b
+(>$>) f a t = f t <$> a
+infixr 3 >$>
+
+
+{-
 -- | @orI@ is a version of '<|>' with infinite backtracking, allowing
 -- LL(*) instead of LL(1) parsing.  @orI a b@ executes @a@, keeping a
 -- copy of all input consumed.  If @a@ throws an exception of class
@@ -106,6 +117,7 @@ infix 2 \/
 orI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
 orI a b = ifParse a return b
 infixr 3 `orI`
+-}
 
 -- | Defined as @orEmpty = ('\/' return 'mempty')@, and useful when
 -- parse failures should just return an empty 'Monoid'.  For example,
@@ -219,6 +231,12 @@ while1I :: (Show t, ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
 while1I test = ensureI test >> whileI test <?> "while1I"
 
+-- | Repeatedly execute an 'Iter' returning a 'Monoid' and 'mappend'
+-- all the results in a right fold.
+concatI :: (ChunkData t, Monoid s, Monad m) =>
+           Iter t m s -> Iter t m s
+concatI iter = foldrI mappend mempty iter
+                               
 -- | This Iteratee parses a 'LL.StringLike' input.  It does not
 -- consume any Iteratee input.  The only reason it is an Iteratee is
 -- so that it can throw an Iteratee parse error if it fails to parse
@@ -230,14 +248,14 @@ readI s' = let s = LL.toString s'
                 [a] -> return a
                 []  -> throwI $ IterParseErr $ "readI can't parse: " ++ s
                 _   -> throwI $ IterParseErr $ "readI ambiguous: " ++ s
-                               
--- | Concatenate the result of two 'Applicative' types returning
--- 'LL.ListLike' types (@\<++> = 'liftA2' 'LL.append'@).  Has the same
--- fixity as '++', namely:
+
+-- | 'mappend' the result of two 'Applicative' types returning
+-- 'Monoid' types (@\<++> = 'liftA2' 'mappend'@).  Has the same fixity
+-- as '++', namely:
 --
 -- > infixr 5 <++>
-(<++>) :: (Applicative f, LL.ListLike t e) => f t -> f t -> f t
-(<++>) = liftA2 LL.append
+(<++>) :: (Applicative f, Monoid t) => f t -> f t -> f t
+(<++>) = liftA2 mappend
 infixr 5 <++>
 
 -- $Parseclike
