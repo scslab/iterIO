@@ -101,6 +101,8 @@ module Data.IterIO.Base
     , enumPure
     , enumCatch, enumHandler, inumCatch
     , inumNop, inumSplit
+    -- * Internal use functions
+    , getIterError, combineExpected
     ) where
 
 import Prelude hiding (null)
@@ -497,6 +499,23 @@ run (EnumIFail e _) = throw $ unIterEOF e
 -- Exceptions
 --
 
+-- | Run an Iteratee, and if it throws a parse error by calling
+-- 'expectedI', then combine the exptected tokens with those of a
+-- previous parse error.
+combineExpected :: (ChunkData t, Monad m) =>
+                   IterNoParse
+                -- ^ Previous parse error
+                -> Iter t m a
+                -- ^ Iteratee to run and, if it fails, combine with
+                -- previous error
+                -> Iter t m a
+combineExpected (IterNoParse e) iter =
+    case cast e of
+      Just (IterExpected e1) -> mapExceptionI (combine e1) iter
+      _                      -> iter
+    where
+      combine e1 (IterExpected e2) = IterExpected $ e1 ++ e2
+
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
 -- all input consumed using 'tryBI'.  (This means @iter@ must not
 -- consume unbounded amounts of input!)  If @iter@ suceeds, its result
@@ -511,13 +530,16 @@ ifParse :: (ChunkData t, Monad m) =>
 ifParse iter yes no = do
   ea <- tryBI iter
   case ea of
-    Right a -> yes a
+    Right a  -> yes a
+    Left err -> combineExpected err no
+{-
     Left (IterNoParse err) ->
         case cast err of
           Just (IterExpected e1) -> mapExceptionI (combine e1) no
           _ -> no
     where
       combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
+-}
 
 -- | This function is just 'ifParse' with the second and third
 -- arguments reversed.
