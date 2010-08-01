@@ -14,7 +14,7 @@ module Data.IterIO
 
 -- import Prelude hiding (catch)
 import Data.IterIO.Base hiding (null, run -- names that might collide
-                               , getIterError, combineExpected)
+                               )
 import Data.IterIO.ListLike
 
 {- $Overview

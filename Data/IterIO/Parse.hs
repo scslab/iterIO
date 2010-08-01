@@ -4,7 +4,7 @@
 -- "Data.Applicative" or inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
-                          (<|>), (<&>), (\/), orI, orEmpty, (<?>)
+                          (<|>), (\/), orI, orEmpty, (<?>)
                          , foldrI, foldr1I, foldlI, foldl1I
                          , peekI, skipI, ensureI
                          , skipWhileI, skipWhile1I, whileI, while1I
@@ -17,13 +17,10 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , many, skipMany, sepBy, endBy, sepEndBy
                          , many1, skipMany1, sepBy1, endBy1, sepEndBy1
                          , satisfy, char, string
-                         -- * Internal use functions
-                         , fastLL1, paranoidLL1
                          ) where
 
 import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>), liftA2)
-import Control.Exception (Exception(..))
 import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
@@ -32,92 +29,10 @@ import Data.Monoid
 import Data.IterIO.Base
 import Data.IterIO.ListLike
 
-fastLL1 :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
-fastLL1 a@(IterF _) b = IterF $ \c -> runIter a c >>= check c
-    where
-      check _ a1@(Done _ _) = return a1
-      check c a1@(IterF _) | not (null c) = return a1
-                           | otherwise    = return $ fastLL1 a1 b
-      check c a1 = runIter (fastLL1 a1 b) c
-fastLL1 a b = a `catchI` \err _ -> combineExpected err b
-
-
--- | To catch bugs that only get triggered on certain input
--- boundaries, this version of @<|>@ always just feeds the first
--- character to Iteratees.
-paranoidLL1 :: (ChunkData t, LL.ListLike t e, Monad m) =>
-               Iter t m a -> Iter t m a -> Iter t m a
-paranoidLL1 a@(IterF _) b = IterF dorun
-    where
-      dorun c@(Chunk t eof)
-          | LL.null t || LL.null (LL.tail t) = runIter a c >>= check c
-          | otherwise                        = do
-        let ch = Chunk (LL.singleton $ LL.head t) False
-            ct = Chunk (LL.tail t) eof
-        a2 <- runIter a ch >>= check ch
-        runIter a2 ct
-      check _ a1@(Done _ _) = return a1
-      check c a1@(IterF _) | not (null c) = return a1
-                           | otherwise    = return $ paranoidLL1 a1 b
-      check c a1 = runIter (paranoidLL1 a1 b) c
-paranoidLL1 a b = a `catchI` \err _ -> combineExpected err b
-
--- | LL(1) parser alternative.  @a \<|\> b@ starts by executing @a@.
--- If @a@ throws an exception of class 'IterNoParse' /and/ @a@ has not
--- consumed any input, then @b@ is executed.  (@a@ has consumed input
--- if it returns in the 'IterF' state after being fed a non-empty
--- 'Chunk'.)
---
--- Use of this combinator is somewhat error-prone, because it may be
--- difficult to tell whether Iteratee @a@ will ever consume input
--- before failing.  For this reason, it is safer to use 'orI', the
--- '\/' operator, or the '<&>' operator, all of which support
--- unlimited lookahead (LL(*) parsing) in different ways.
---
--- @\<|\>@ has fixity:
---
--- > infixr 3 <|>
-
-(<|>) :: (ChunkData t, LL.ListLike t e, Monad m) =>
+(<|>) :: (ChunkData t, Monad m) =>
          Iter t m a -> Iter t m a -> Iter t m a
-(<|>) = paranoidLL1
+(<|>) = multiParse
 infixr 3 <|>
-
--- | An alternative to the LL(1) function '<|>' and the LL(*)
--- functions '\/', 'orI', and 'ifParse' (which copy input for
--- backtracking and hence pose problems for unbounded input).
--- @a \<&>  b@ is an LL(*) parser that succeeds if either @a@ or @b@
--- does, but avoids keeping a copy of all input data around for
--- backtracking by running @a@ and @b@ in parallel on input as it
--- arrives.  More specifically, @a \<&> b@ behaves as follows:
---
---  * If @a@ throws a parse error (exception of type 'IterNoParse'),
---    then returns the result of having executed @b@ concurrently on
---    the same input.
---
---  * Otherwise, if @a@ succeeds or throws any other kind of error,
---    returns (or throws) the result of executing @a@.  However, in
---    this case @b@ may have partially executed on some portion of the
---    input.
---
--- Because the second iteratee (@b@) may partially execute, it is a
--- bad idea to use @\<&>@ if @b@ has any monadic side effects.  If @b@
--- has side effects, you may want to use '\/' to execute the two
--- Iteratees in strict sequence (but with '\/' you will have to be
--- careful to avoid storing unbounded inputs in memory).
-(<&>) :: (ChunkData t, Monad m) =>
-         Iter t m a -> Iter t m a -> Iter t m a
-a@(IterF _) <&> b =
-    IterF $ \c -> do
-      a1 <- runIter a c
-      case (a1, b) of
-        (Done _ _, _)      -> return a1
-        (IterF _, IterF _) -> runIter b c >>= return . (a1 <&>)
-        _ -> case fromException $ getIterError a1 of
-               Just e  -> runIter b c >>= return . combineExpected e
-               Nothing -> return a1
-a <&> b = a `catchI` \err _ -> combineExpected err b
-
 
 -- | @(f >$> a) t@ is equivelent to @f t '<$>' a@.  Particularly
 -- useful with infix combinators such as '\/' and ``orEmpty`` for
@@ -304,7 +219,7 @@ while1I :: (Show t, ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
 while1I test = ensureI test >> whileI test <?> "while1I"
 
--- | This iteratee parses a 'LL.StringLike' input.  It does not
+-- | This Iteratee parses a 'LL.StringLike' input.  It does not
 -- consume any Iteratee input.  The only reason it is an Iteratee is
 -- so that it can throw an Iteratee parse error if it fails to parse
 -- the input (or if the input has an ambiguous parse).

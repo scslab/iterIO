@@ -85,12 +85,12 @@ module Data.IterIO.Base
     -- * Exception and error functions
     , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
     , isIterError, isEnumError
-    , ifParse, ifNoParse
     , throwI, throwEOFI, expectedI
     , tryI, tryBI, catchI, catchBI, handlerI, handlerBI
     , resumeI, verboseResumeI, mapExceptionI
     -- * Other functions
     , iterLoop
+    , ifParse, ifNoParse, multiParse
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
     , nullI, dataI, chunkI
@@ -101,8 +101,6 @@ module Data.IterIO.Base
     , enumPure
     , enumCatch, enumHandler, inumCatch
     , inumNop, inumSplit
-    -- * Internal use functions
-    , getIterError, combineExpected
     ) where
 
 import Prelude hiding (null)
@@ -516,30 +514,129 @@ combineExpected (IterNoParse e) iter =
     where
       combine e1 (IterExpected e2) = IterExpected $ e1 ++ e2
 
+-- | Try two Iteratees and return the result of executing the second
+-- if the first one throws an 'IterNoParse' exception.  The statement
+-- @multiParse (a >>= f) b@ is somewhat similar to
+-- @'ifParse' a f b@, but the two functions operate differently.
+-- Depending on the situation, only one of the two
+-- formulations is correct.  Specifically:
+-- 
+--  * @'ifParse' a f b@ works by first executing @a@, saving a copy of
+--    all input consumed by @a@.  If @a@ throws a parse error, the
+--    saved input is used to backtrack and execute @b@ on the same
+--    input that @a@ just rejected.  If @a@ suceeds, @b@ is never run,
+--    @a@'s result is fed to @f@, and the resulting action is executed
+--    without backtracking (so any error thrown within @f@ will not be
+--    caught by this 'ifParse' expression).
+--
+--    The main restriction of 'ifParse' is that @a@ must not consume
+--    unbounded amounts of input, or the program may exhaust memory
+--    saving the input for backtracking.  Note that the second
+--    argument to 'ifParse' (in this case 'return') is a continuation
+--    for @a@ when @a@ succeeds.
+--
+--  * @multiParse (a >>= f) b@ avoids the unbounded input problem by
+--    executing both @(a >>= f)@ and @b@ concurrently on input chunks
+--    as they arrive.  If @a@ throws a parse error, then the result of
+--    executing @b@ is returned.  If @a@ either succeeds or throws an
+--    exception not of class 'IterNoParse', then the result of running
+--    @a@ is returned.  However, in this case, even though @a@'s
+--    result is returned, @b@ may have been fed some of the input
+--    data.  (Specifically, @b@ will be fed all but the last chunk
+--    processed by @a@.)
+--
+--    The main restriction on @multiParse@ is that the second
+--    argument, @b@, must not have monadic side effects.  Otherwise,
+--    the result of executing @b@ on some partial input when @a@
+--    succeeds can leave the process in an inconsistent state.
+--
+-- The big advantage of @multiParse@ is that it can avoid storing
+-- unbounded amounts of input for backtracking purposes.  Another
+-- advantage is that sometimes it is not convenient to break the parse
+-- target into an action to execute with backtracking (@a@) and a
+-- continuation to execute without (@f@).  @multiParse@ avoids the
+-- need to do this, since it does not do backtracking.
+--
+-- However, it is important to note that it is still possible to end
+-- up storing unbounded amounts with @multiParse@.  For example,
+-- consider the following code:
+--
+-- > total :: (Monad m) => Iter String m Int
+-- > total = multiParse parseAndSumIntegerList (return -1) -- Bad
+--
+-- Here the intent is for @parseAndSumIntegerList@ to parse a
+-- (possibly huge) list of integers and return their sum.  If there is
+-- a parse error at any point in the input, then the result is
+-- identical to having defined @total = return -1@.  But @return -1@
+-- succeeds immediately, consuming no input, which means that @total@
+-- must return all left-over input for the next monad (i.e., @next@ in
+-- @total >>= next@).  Since @total@ has to look arbitrarily far into
+-- the input to determine that @parseAndSumIntegerList@ fails, in
+-- practice @total@ will have to save all input until it knows that
+-- @parseAndSumIntegerList@ suceeds.
+--
+-- A better approach might be:
+--
+-- @
+--   total = multiParse parseAndSumIntegerList ('nullI' >> return -1)
+-- @
+--
+-- Here 'nullI' discards all input until an EOF is encountered, so
+-- there is no need to keep a copy of the input around.  This makes
+-- sense so long as @total@ is the last or only Iteratee run on the
+-- input stream.  (Otherwise, 'nullI' would have to be replaced with
+-- an Iteratee that discards input up to some end-of-list marker.)
+--
+-- Another approach might be to avoid parsing combinators entirely and
+-- use:
+--
+-- @
+--   total = parseAndSumIntegerList ``catchI`` handler
+--       where handler \('IterNoParse' _) _ = return -1
+-- @
+--
+-- This last definition of @total@ may leave the input in some
+-- partially consumed state (including input beyond the parse error
+-- that just happened to be in the chunk that caused the parse error).
+-- But this is fine so long as @total@ is the last Iteratee executed
+-- on the input stream.
+multiParse :: (ChunkData t, Monad m) =>
+              Iter t m a -> Iter t m a -> Iter t m a
+multiParse a@(IterF _) b =
+    IterF $ \c -> do
+      a1 <- runIter a c
+      case (a1, b) of
+        (Done _ _, _)      -> return a1
+        (IterF _, IterF _) -> runIter b c >>= return . multiParse a1
+        _ -> case fromException $ getIterError a1 of
+               Just e  -> runIter b c >>= return . combineExpected e
+               Nothing -> return a1
+multiParse a b = a `catchI` \err _ -> combineExpected err b
+
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
 -- all input consumed using 'tryBI'.  (This means @iter@ must not
--- consume unbounded amounts of input!)  If @iter@ suceeds, its result
--- is passed to the function @success@.  If @iter@ throws an exception
--- of class 'IterNoParse', then @failure@ is executed with the input
--- re-wound (so that @failure@ is fed the same input that @iter@ was).
+-- consume unbounded amounts of input!  See 'multiParse' for such
+-- cases.)  If @iter@ suceeds, its result is passed to the function
+-- @success@.  If @iter@ throws an exception of type 'IterNoParse',
+-- then @failure@ is executed with the input re-wound (so that
+-- @failure@ is fed the same input that @iter@ was).  If @iter@ throws
+-- any other type of exception, @ifParse@ passes the exception back
+-- and does not execute @failure@.
+--
 ifParse :: (ChunkData t, Monad m) =>
-           Iter t m a           -- ^ @iter@ to run with backtracking
-        -> (a -> Iter t m b)    -- ^ @success@ function
-        -> Iter t m b           -- ^ @failure@ action
+           Iter t m a
+        -- ^ Iteratee @iter@ to run with backtracking
+        -> (a -> Iter t m b)
+        -- ^ @success@ function
         -> Iter t m b
+        -- ^ @failure@ action
+        -> Iter t m b
+        -- ^ result
 ifParse iter yes no = do
   ea <- tryBI iter
   case ea of
     Right a  -> yes a
     Left err -> combineExpected err no
-{-
-    Left (IterNoParse err) ->
-        case cast err of
-          Just (IterExpected e1) -> mapExceptionI (combine e1) no
-          _ -> no
-    where
-      combine e1 (IterExpected e2) = IterExpected (e1 ++ e2)
--}
 
 -- | This function is just 'ifParse' with the second and third
 -- arguments reversed.
@@ -547,6 +644,57 @@ ifNoParse :: (ChunkData t, Monad m) =>
              Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
 ifNoParse iter no yes = ifParse iter yes no
 
+{-
+-- | LL(1) parser alternative.  @a \<|\> b@ starts by executing @a@.
+-- If @a@ throws an exception of class 'IterNoParse' /and/ @a@ has not
+-- consumed any input, then @b@ is executed.  (@a@ has consumed input
+-- if it returns in the 'IterF' state after being fed a non-empty
+-- 'Chunk'.)
+--
+-- Use of this combinator is somewhat error-prone, because it may be
+-- difficult to tell whether Iteratee @a@ will ever consume input
+-- before failing.  For this reason, it is safer to use 'orI', the
+-- '\/' operator, or the '<&>' operator, all of which support
+-- unlimited lookahead (LL(*) parsing) in different ways.
+--
+-- @\<|\>@ has fixity:
+--
+-- > infixr 3 <|>
+(<|>) :: (ChunkData t, LL.ListLike t e, Monad m) =>
+         Iter t m a -> Iter t m a -> Iter t m a
+(<|>) = paranoidLL1
+infixr 3 <|>
+
+fastLL1 :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
+fastLL1 a@(IterF _) b = IterF $ \c -> runIter a c >>= check c
+    where
+      check _ a1@(Done _ _) = return a1
+      check c a1@(IterF _) | not (null c) = return a1
+                           | otherwise    = return $ fastLL1 a1 b
+      check c a1 = runIter (fastLL1 a1 b) c
+fastLL1 a b = a `catchI` \err _ -> combineExpected err b
+
+
+-- | To catch bugs that only get triggered on certain input
+-- boundaries, this version of @<|>@ always just feeds the first
+-- character to Iteratees.
+paranoidLL1 :: (ChunkData t, LL.ListLike t e, Monad m) =>
+               Iter t m a -> Iter t m a -> Iter t m a
+paranoidLL1 a@(IterF _) b = IterF dorun
+    where
+      dorun c@(Chunk t eof)
+          | LL.null t || LL.null (LL.tail t) = runIter a c >>= check c
+          | otherwise                        = do
+        let ch = Chunk (LL.singleton $ LL.head t) False
+            ct = Chunk (LL.tail t) eof
+        a2 <- runIter a ch >>= check ch
+        runIter a2 ct
+      check _ a1@(Done _ _) = return a1
+      check c a1@(IterF _) | not (null c) = return a1
+                           | otherwise    = return $ paranoidLL1 a1 b
+      check c a1 = runIter (paranoidLL1 a1 b) c
+paranoidLL1 a b = a `catchI` \err _ -> combineExpected err b
+-}
 
 --
 -- Some super-basic Iteratees
@@ -563,9 +711,12 @@ ifNoParse iter no yes = ifParse iter yes no
 throwI :: (Exception e) => e -> Iter t m a
 throwI e = IterFail $ toException e
 
--- | Throw an 'IOError' of type EOF, which will be interpreted by
--- 'enumO' and 'enumI' as an end of file chunk when thrown by the
--- generator/codec.
+-- | Throw an exception of type 'IterEOF'.  This will be interpreted
+-- by 'enumO' and 'enumI' as an end of file chunk when thrown by the
+-- generator/codec.  It will also be interpreted by 'ifParse' and
+-- 'multiParse' as an exception of type 'IterNoParse'.  If not caught
+-- within the 'Iter' monad, the exception will be rethrown by 'run'
+-- (and hence '|$') as an 'IOError' of type EOF.
 throwEOFI :: String -> Iter t m a
 throwEOFI loc = throwI $ IterEOF $ mkIOError eofErrorType loc Nothing Nothing
 
@@ -1350,7 +1501,7 @@ iterLoop :: (MonadIO m, ChunkData t, Show t) =>
 iterLoop = do
   -- The loopback is implemented with an MVar (MVar Chunk).  The
   -- enumerator waits on the inner MVar, while the iteratee uses the outer 
-  -- iteratee to avoid races when appending to the stored chunk.
+  -- MVar to avoid races when appending to the stored chunk.
   pipe <- liftIO $ newEmptyMVar >>= newMVar
   return (IterF $ iterf pipe, enum pipe)
     where
