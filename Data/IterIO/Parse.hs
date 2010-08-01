@@ -8,7 +8,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , foldrI, foldr1I, foldlI, foldl1I
                          , peekI, skipI, ensureI
                          , skipWhileI, skipWhile1I, whileI, while1I
-                         , concatI, readI
+                         , concatI, concat1I, readI
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
                          , (>$>), (<++>)
@@ -236,6 +236,13 @@ while1I test = ensureI test >> whileI test <?> "while1I"
 concatI :: (ChunkData t, Monoid s, Monad m) =>
            Iter t m s -> Iter t m s
 concatI iter = foldrI mappend mempty iter
+
+-- | Like 'concatI', but fails if the Iteratee doesn't return at least
+-- once.
+concat1I :: (ChunkData t, Monoid s, Monad m) =>
+           Iter t m s -> Iter t m s
+concat1I iter = foldr1I mappend mempty iter
+                               
                                
 -- | This Iteratee parses a 'LL.StringLike' input.  It does not
 -- consume any Iteratee input.  The only reason it is an Iteratee is
