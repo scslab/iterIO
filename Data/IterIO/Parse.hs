@@ -11,7 +11,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , concatI, concat1I, readI
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
-                         , (>$>), (<++>)
+                         , (>$>), (<++>), (<:>)
                          -- * Parsing Iteratees
                          -- $Parseclike
                          , many, skipMany, sepBy, endBy, sepEndBy
@@ -31,9 +31,10 @@ import Data.IterIO.ListLike
 
 -- | An infix synonym for 'multiParse' that allows LL(*) parsing of
 -- alternatives by executing both Iteratees on input chunks as they
--- arrive.
---
--- Has fixity:
+-- arrive.  Note this is similar to @\<|>@ method of the
+-- @'Alternative'@ class in "Control.Applicative", but the
+-- @'Alternative'@ operator has left fixity, while for efficiency this
+-- one has:
 --
 -- > infixr 3 <|>
 (<|>) :: (ChunkData t, Monad m) =>
@@ -265,6 +266,15 @@ readI s' = let s = LL.toString s'
 (<++>) :: (Applicative f, Monoid t) => f t -> f t -> f t
 (<++>) = liftA2 mappend
 infixr 5 <++>
+
+-- | 'LL.cons' an 'Applicative' type onto an an 'Applicative'
+-- 'LL.ListLike' type (@\<:> = liftA2 'LL.cons'@).  Has the same
+-- fixity as @:@, namely:
+--
+-- > infixr 5 <:>
+(<:>) :: (LL.ListLike t e, Applicative f) => f e -> f t -> f t
+(<:>) = liftA2 LL.cons
+infixr 5 <:>
 
 -- $Parseclike
 --
