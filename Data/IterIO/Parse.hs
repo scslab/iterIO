@@ -282,7 +282,7 @@ readI s' = let s = LL.toString s'
 infixr 5 <++>
 
 -- | 'LL.cons' an 'Applicative' type onto an an 'Applicative'
--- 'LL.ListLike' type (@\<:> = liftA2 'LL.cons'@).  Has the same
+-- 'LL.ListLike' type (@\<:> = 'liftA2' 'LL.cons'@).  Has the same
 -- fixity as @:@, namely:
 --
 -- > infixr 5 <:>
@@ -305,18 +305,36 @@ nil = pure mempty
 many :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
 many = foldrI LL.cons LL.empty
 
+-- | Repeatedly run an Iteratee until it fails, and discard all the
+-- results.
 skipMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
 skipMany = foldlI (\_ _ -> ()) ()
 
+-- | Parses a sequence of the form
+-- /Item1 Separator Item2 Separator ... Separator ItemN/
+-- and returns the list @[@/Item1/@,@ /Item2/@,@ ...@,@ /ItemN/@]@
+-- or a 'LL.ListLike' equivalent.
 sepBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
-         Iter t m a -> Iter t m b -> Iter t m f
+         Iter t m a             -- ^ Item to parse
+      -> Iter t m b             -- ^ Separator between items
+      -> Iter t m f             -- ^ Returns 'LL.ListLike' list of items
 sepBy item sep =
     item `orEmpty` LL.cons >$> foldr1I LL.cons LL.empty (sep *> item)
 
+-- | Like 'sepBy', but expects a separator after the final item.  In
+-- other words, parses a sequence of the form
+-- /Item1 Separator Item2 Separator ... Separator ItemN Separator/
+-- and returns the list @[@/Item1/@,@ /Item2/@,@ ...@,@ /ItemN/@]@ or
+-- a 'LL.ListLike' equivalent.
 endBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
-         Iter t m a -> Iter t m b -> Iter t m f
+         Iter t m a             -- ^ Item to parse
+      -> Iter t m b             -- ^ Separator that must follow each item
+      -> Iter t m f             -- ^ Returns 'LL.ListLike' list of items
 endBy item sep = foldrI LL.cons LL.empty (item <* sep)
 
+-- | Accepts items that would be parsed by either 'sepBy' or 'endBy'.
+-- Essentially a version of 'endBy' in which the final separator is
+-- optional.
 sepEndBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m f
 sepEndBy item sep =
@@ -328,17 +346,25 @@ sepEndBy item sep =
 many1 :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
 many1 = foldr1I LL.cons LL.empty
 
+-- | A variant of 'skipMany' that throws a parse error if the Iteratee
+-- does not succeed at least once.
 skipMany1 :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
 skipMany1 = foldl1I (\_ _ -> ()) ()
 
+-- | A variant of 'sepBy' that throws a parse error if it cannot
+-- return at least one item.
 sepBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
           Iter t m a -> Iter t m b -> Iter t m f
 sepBy1 item sep = item >>= LL.cons >$> foldr1I LL.cons LL.empty (sep *> item)
 
+-- | A variant of 'endBy' that throws a parse error if it cannot
+-- return at least one item.
 endBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
           Iter t m a -> Iter t m b -> Iter t m f
 endBy1 item sep = foldr1I LL.cons LL.empty (item <* sep)
 
+-- | A variant of 'sepEndBy' that throws a parse error if it cannot
+-- return at least one item.
 sepEndBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
              Iter t m a -> Iter t m b -> Iter t m f
 sepEndBy1 item sep =
