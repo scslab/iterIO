@@ -64,9 +64,10 @@ hexTab = listArray (0,127) $ fmap digit ['\0'..'\177']
 hex :: (Monad m) => Iter S m Int
 hex = headLikeI >>= digit <?> "hex digit"
     where
-      digit c = case hexTab ! c of
-                  -1 -> expectedI "hex digit"
-                  n  -> return $ fromIntegral n
+      digit c | c > 127   = expectedI "hex digit"
+              | otherwise = case hexTab ! c of
+                              -1 -> expectedI "hex digit"
+                              n  -> return $ fromIntegral n
 
 -- | Parse a raw hexadecimal number (no "0x..." prefix).
 hexInt :: (Monad m) => Iter S m Int
@@ -83,7 +84,7 @@ tokenTab = listArray (0,127) $ fmap isTokenChar [0..127]
       separators = "()<>@,;:\\\"/[]?={} \t\177"
 
 token :: (Monad m) => Iter S m S
-token = while1I (tokenTab !) <?> "token"
+token = while1I (\c -> c < 127 && tokenTab ! c) <?> "token"
 
 quoted_pair :: (Monad m) => Iter S m S
 quoted_pair = char '\\' <:> headLikeI <:> nil
