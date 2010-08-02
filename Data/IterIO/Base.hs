@@ -113,6 +113,7 @@ import Control.Monad
 import Control.Monad.Fix
 import Control.Monad.Trans
 import Data.IORef
+import Data.List (intercalate)
 import Data.Monoid
 import Data.Typeable
 import qualified Data.ByteString as S
@@ -212,8 +213,11 @@ unIterEOF e = case fromException e of
 -- | Iteratee expected particular input and did not receive it.
 data IterExpected = IterExpected [String] deriving (Typeable)
 instance Show IterExpected where
+    showsPrec _ (IterExpected [token]) rest =
+        "Iteratee expected " ++ token ++ rest
     showsPrec _ (IterExpected tokens) rest =
-        "Iteratee expected one of " ++ show tokens ++ rest
+        "Iteratee expected one of ["
+        ++ intercalate ", " tokens ++ "]" ++ rest
 instance Exception IterExpected where
     toException = noParseToException
     fromException = noParseFromException

@@ -341,7 +341,7 @@ satisfy test = do
 -- | Read input that exactly matches a character.
 char :: (ChunkData t, LL.ListLike t e, Eq e, Enum e, Monad m) =>
         Char -> Iter t m e
-char target = satisfy (toEnum (ord target) ==) <?> [target]
+char target = satisfy (toEnum (ord target) ==) <?> show target
 
 -- | Read input that exactly matches a string.
 string :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
@@ -354,4 +354,4 @@ string fulltarget = doMatch ft
         m <- stringMaxI $ LL.length target
         if not (LL.null m) && LL.isPrefixOf m target
           then doMatch $ LL.drop (LL.length m) target
-          else expectedI fulltarget
+          else expectedI $ show fulltarget
