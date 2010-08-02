@@ -125,7 +125,7 @@ instance SendRecvString L.ByteString where
 -- to read data in an 'EnumO' and to write data in an 'Iter'.  Proper
 -- protocol functioning may require the 'Iter' to send an EOF over the
 -- socket, but the 'EnumO' may still be reading from the socket in a
--- differen tthread.
+-- different thread.
 hShutdown                            :: Handle -> CInt -> IO Int
 
 #if __GLASGOW_HASKELL__ <= 611

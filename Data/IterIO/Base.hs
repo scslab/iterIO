@@ -1224,9 +1224,8 @@ infixl 5 ..|..
 -- @tOut@.  Has fixity:
 --
 -- > infixr 4 ..|
-(..|) :: (ChunkData tOut, ChunkData tIn, Monad m
-         , Show tOut, Show tIn, Show a) =>
-         EnumI tOut tIn m a
+(..|) :: (ChunkData tOut, ChunkData tIn, Monad m) =>
+         EnumI tOut tIn m a     -- ^
       -> Iter tIn m a
       -> Iter tOut m a
 (..|) inner iter = wrapI (runI . joinI) $ inner iter
