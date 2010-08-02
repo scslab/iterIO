@@ -609,12 +609,12 @@ multiParse :: (ChunkData t, Monad m) =>
 multiParse a@(IterF _) b =
     IterF $ \c -> do
       a1 <- runIter a c
-      case (a1, b) of
-        (Done _ _, _)      -> return a1
-        (IterF _, IterF _) -> runIter b c >>= return . multiParse a1
-        _ -> case fromException $ getIterError a1 of
-               Just e  -> runIter b c >>= return . combineExpected e
-               Nothing -> return a1
+      case a1 of
+        Done _ _ -> return a1
+        IterF _  -> runIter b c >>= return . multiParse a1
+        _        -> case fromException $ getIterError a1 of
+                      Just e  -> runIter b c >>= return . combineExpected e
+                      Nothing -> return a1
 multiParse a b = a `catchI` \err _ -> combineExpected err b
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
