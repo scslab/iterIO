@@ -5,7 +5,7 @@
 
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orEmpty, (<?>)
-                         , foldrI, foldr1I, foldlI, foldl1I
+                         , foldrI, foldr1I, foldlI, foldl1I, foldMI, foldM1I
                          , peekI, skipI, ensureI
                          , skipWhileI, skipWhile1I, whileI, while1I
                          , concatI, concat1I, readI
@@ -21,6 +21,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
 
 import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>), liftA2)
+import Control.Monad
 import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
@@ -177,6 +178,19 @@ foldlI f z0 iter = foldNext z0
 foldl1I :: (ChunkData t, Monad m) =>
            (b -> a -> b) -> b -> Iter t m a -> Iter t m b
 foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
+
+-- | @foldMI@ is to 'foldlI' as 'foldM' is to @`foldl'`@.
+foldMI :: (ChunkData t, Monad m) =>
+           (b -> a -> Iter t m b) -> b -> Iter t m a -> Iter t m b
+foldMI f z0 iter = foldNext z0
+    where foldNext z = iter \/ return z $ f z >=> foldNext
+
+-- | A variant of 'foldMI' that requires the Iteratee to succeed at
+-- least once.
+foldM1I :: (ChunkData t, Monad m) =>
+           (b -> a -> Iter t m b) -> b -> Iter t m a -> Iter t m b
+foldM1I f z0 iter = iter >>= f z0 >>= \z -> foldMI f z iter
+
 
 -- | Discard the result of executing an Iteratee once.  Throws an
 -- error if the Iteratee fails.  (Like @skip x = x >> return ()@.)
