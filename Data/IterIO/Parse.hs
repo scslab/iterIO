@@ -11,7 +11,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , concatI, concat1I, readI
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
-                         , (>$>), (<++>), (<:>)
+                         , (>$>), (<++>), (<:>), nil
                          -- * Parsing Iteratees
                          -- $Parseclike
                          , many, skipMany, sepBy, endBy, sepEndBy
@@ -275,6 +275,11 @@ infixr 5 <++>
 (<:>) :: (LL.ListLike t e, Applicative f) => f e -> f t -> f t
 (<:>) = liftA2 LL.cons
 infixr 5 <:>
+
+-- | @nil = 'pure' 'mempty'@ -- An empty 'Monoid' injected into an
+-- 'Applicative' type.
+nil :: (Applicative f, Monoid t) => f t
+nil = pure mempty
 
 -- $Parseclike
 --
