@@ -83,7 +83,7 @@ infixr 3 <|>
 (\/) = ifNoParse
 infix 2 \/
 
--- | @(f >$> a) t@ is equivelent to @f t '<$>' a@.  Particularly
+-- | @(f >$> a) t@ is equivalent to @f t '<$>' a@.  Particularly
 -- useful with infix combinators such as '\/' and ``orEmpty`` for
 -- chaining a bunch of parse actions.  (See the example at 'orEmpty'.)
 --

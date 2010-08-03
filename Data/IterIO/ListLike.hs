@@ -205,7 +205,7 @@ enumFile path =
 
 -- | This inner enumerator is like 'inumNop' in that it passes
 -- unmodified 'Chunk's straight through to an iteratee.  However, it
--- also logs the 'Chunk's to a file (which can optionally be trucated
+-- also logs the 'Chunk's to a file (which can optionally be truncated
 -- or appended to, based on the second argument).
 inumLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            FilePath             -- ^ Path to log to

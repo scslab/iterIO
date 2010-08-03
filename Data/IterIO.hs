@@ -111,7 +111,7 @@ type of 'lineI' in the above example is @'Iter' String m String@.  The
 @lines2I@ function executes 'lineI' twice using monadic @do@ syntax to
 bind the results to @line1@ and @line2@.  The monadic bind operator
 hides the details of IO chunk boundaries.  If, for instance, 'lineI'
-needs more input because a newline character has not yet yet been
+needs more input because a newline character has not yet been
 read, 'lineI' returns to the containing enumerator asking for more
 data.  If the first 'lineI' receives more than a line of input, it
 simply passes the unused input on to the next invocation of 'lineI'.
