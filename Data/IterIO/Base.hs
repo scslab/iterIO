@@ -400,20 +400,11 @@ isIterEOFError err = case fromException $ getIterError err of
                        Just (IterEOF _) -> True
                        _                -> False
 
-{-
--- | True if an iteratee is in an error state caused by an EOF
--- exception, the monadic 'fail' operator, or the 'expectedI'
--- function.
-isIterParseError :: Iter t m a -> Bool
-isIterParseError (IterF _)                = False
-isIterParseError (Done _ _)               = False
-isIterParseError err | isIterEOFError err = True
-isIterParseError err                      =
-    case fromException $ getIterError err of
-      Just (IterError _)    -> True
-      Just (IterExpected _) -> True
-      _                     -> False
--}
+-- | True if an iteratee is in the 'IterF' state (and hence can
+-- process more input).
+isIterF :: Iter t m a -> Bool
+isIterF (IterF _) = True
+isIterF _         = False
 
 mkError :: String -> SomeException
 mkError msg = toException $ ErrorCall msg
@@ -1378,35 +1369,29 @@ enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
          Codec tOut m tIn
       -- ^ Codec to be invoked to produce transcoded chunks.
       -> EnumI tOut tIn m a
-enumI codec0 iter0@(IterF _) = IterF $ feedCodec codec0 iter0
+enumI codec0 iter0@(IterF _) = IterF $ \cOut -> do
+  codec <- runIter codec0 cOut
+  case codec of
+    IterF _                        -> return $ enumI codec iter0
+    Done CodecX cOut'              -> return $ Done iter0 cOut'
+    Done (CodecE dat) cOut'        -> do iter' <- runIter iter0 (chunk dat)
+                                         return $ Done iter' cOut'
+    Done (CodecF codec' dat) cOut' -> do iter' <- runIter iter0 (chunk dat)
+                                         check codec' cOut' iter'
+    _ | isIterEOFError codec       -> return $ return iter0
+    _                              -> return $ EnumIFail
+                                               (getIterError codec) iter0
     where
-      feedCodec codec iter cOut = do
-        codec' <- runIter codec cOut
-        case codec' of
-          IterF _ ->
-              return $ enumI codec' iter
-          Done CodecX cOut' ->
-              return $ Done iter cOut'
-          Done (CodecE dat) cOut' ->
-              runIter iter (chunk dat) >>= return . flip Done cOut'
-          Done (CodecF nextCodec dat) cOut' ->
-              runIter iter (chunk dat) >>= check nextCodec cOut'
-          _ | isIterEOFError codec' -> return $ return iter
-          _ -> return $ EnumIFail (getIterError codec') iter
-
-      check codec cOut iter@(IterF _)
-          | null cOut = return $ enumI codec iter
-          | otherwise = feedCodec codec iter cOut
       check codec cOut@(Chunk _ eof) iter
-          | eof       = return $ Done iter cOut
-          | otherwise = runIter (enumI codec iter) cOut
+            | eof && not (isIterF iter) = return $ Done iter cOut
+            | otherwise                 = runIter (enumI codec iter) cOut
+-- If iter finished, still must feed EOF to codec before returning iter
+enumI codec iter = IterF $ \(Chunk t eof) -> do
+  codec' <- runIter codec (Chunk t True)
+  return $ case codec' of
+             Done _ (Chunk t' _) -> Done iter (Chunk t' eof)
+             _ -> EnumIFail (getIterError codec') iter
 
-enumI codec iter = wrapI fixfail (runI codec)
-    where
-      -- XXX Need to think more about what the right left over data is
-      fixfail (Done _ (Chunk dat _)) = Done iter (chunk dat)
-      fixfail codec' = EnumIFail (getIterError codec') iter
-    
 -- | Transcode (until codec throws an EOF error, or until after it has
 -- received EOF).
 enumI' :: (Monad m, ChunkData tOut, ChunkData tIn) =>
