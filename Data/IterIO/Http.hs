@@ -4,6 +4,7 @@ module Data.IterIO.Http where
 import Control.Monad.Trans
 import Data.Array.Unboxed
 import Data.Bits
+import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.ByteString.Internal (w2c, c2w)
 import Data.Char
@@ -12,6 +13,8 @@ import Data.Word
 import Data.IterIO
 import Data.IterIO.Parse
 import Text.Printf
+
+import Data.ByteString.Lazy.Search
 
 import System.IO
 
@@ -136,6 +139,13 @@ inumFromChunks = enumI getsize
         crlf
         return $ CodecE L8.empty
 
+-- | Mime boundary characters
+bcharTab :: UArray Word8 Bool
+bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
+    where
+      isBChar c = isAlphaNum c || elem c otherBChars
+      otherBChars = "'()/+_,-./:=? "
+
 
 hTTPvers :: (Monad m) => Iter S m (Int, Int)
 hTTPvers = do
@@ -150,6 +160,49 @@ hdrLine = lineI <++> foldrI L8.append L8.empty contLine
     where contLine = lws <++> lineI
 
 
+safePrefix :: S8.ByteString -> S8.ByteString -> Int
+safePrefix delim input =
+    case S8.findSubstring delim input of
+      Just n  -> n
+      Nothing -> checksuffix $ max 0 $ ilen - dlen
+    where
+      ilen = S8.length input
+      dlen = S8.length delim
+      checksuffix n | n >= ilen = n
+                    | otherwise = if S8.drop n input `S8.isPrefixOf` delim
+                                  then n
+                                  else checksuffix $ n + 1
+      
+
+
+{-
+breakC :: (Monad m) => S -> Codec S m S
+breakC pat0 = search
+    where
+      patstrict = strictify pat0
+      dobreak = breakOn patstrict
+      pattern = L8.fromChunks [patstrict]
+      patlen  = L8.length pattern
+
+      search = do
+        (Chunk t eof) <- chunkI
+        let (payload, more) = dobreak t
+        case () of
+          _ | not (L8.null more) ->
+                Done (CodecE payload) (chunk $ L8.drop patlen more)
+          _ | eof -> expectedI $ show $ unpack pattern
+          _ -> codecf payload
+
+      codecf p =
+          let plen = L8.length p
+              start = if plen <= patlen then 0 else plen - patlen
+              stop = cut start $ L8.drop start p
+              (payload, more) = if stop == plen
+
+      cut n p | L8.null p                 = n
+      cut n p | p `L8.isPrefixOf` pattern = n
+      cut n p | otherwise                 = cut (n+1) (L8.tail p)
+-}
 
 
 hdr :: (Monad m) => Iter S m [S]
