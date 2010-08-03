@@ -304,6 +304,31 @@ instance (Show t, Show a) => Show (Iter t m a) where
 --     2. An 'Iter' returning 'Done' must not set the EOF bit if it
 --        did not receive the EOF bit.
 --
+-- It /is/, however, okay for an 'Iter' to return 'Done' without the
+-- EOF bit even if the EOF bit was set on its input chunk, as
+-- @runIter@ will just propagate the EOF bit.  For instance, the
+-- following code is valid:
+--
+-- @
+--      runIter (return ()) 'chunkEOF'
+-- @
+--
+-- Even though it is equivalent to:
+--
+-- @
+--      runIter ('Done' () ('Chunk' 'mempty' True)) ('Chunk' 'mempty' False)
+-- @
+--
+-- in which the first argument to @runIter@ appears to be discarding
+-- the EOF bit from the input chunk.  @runIter@ will propagate the EOF
+-- bit, making the above code equivalent to to @'Done' () 'chunkEOF'@.
+--
+-- On the other hand, the following code is illegal, as it violates
+-- invariant 2 above:
+--
+-- @
+--      runIter ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
+-- @
 runIter :: (ChunkData t, Monad m) =>
            Iter t m a
         -> Chunk t
@@ -1252,9 +1277,14 @@ data CodecR tArg m tRes = CodecF { unCodecF :: (Codec tArg m tRes)
                           -- processing further input.
                         | CodecE { unCodecR :: tRes }
                           -- ^ This constructor is used if the 'Codec'
-                          -- is returning for the last time and cannot
-                          -- provide another 'Codec' to process
-                          -- further input.
+                          -- is ending--i.e., returning for the last
+                          -- time--and thus cannot provide another
+                          -- 'Codec' to process further input.
+                        | CodecX
+                          -- ^ An alternative to 'CodecE' when the
+                          -- 'Codec' is ending and additionally did
+                          -- not receive enough input to produce one
+                          -- last item.
 
 -- | Transform an ordinary 'Iter' into a stateless 'Codec'.
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
@@ -1348,35 +1378,35 @@ enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
          Codec tOut m tIn
       -- ^ Codec to be invoked to produce transcoded chunks.
       -> EnumI tOut tIn m a
-enumI startCodec = enumI1 startCodec
+enumI codec0 iter0@(IterF _) = IterF $ feedCodec codec0 iter0
     where
-      enumI1 codec iter@(IterF _) = IterF $ feedCodec codec iter
-      enumI1 _ iter               = return iter
-
       feedCodec codec iter cOut = do
         codec' <- runIter codec cOut
         case codec' of
-          IterF _ -> return $ enumI1 codec' iter
-          Done codecr cOut' ->
-              runIter iter (chunk $ unCodecR codecr) >>= check codecr cOut'
+          IterF _ ->
+              return $ enumI codec' iter
+          Done CodecX cOut' ->
+              return $ Done iter cOut'
+          Done (CodecE dat) cOut' ->
+              runIter iter (chunk dat) >>= return . flip Done cOut'
+          Done (CodecF nextCodec dat) cOut' ->
+              runIter iter (chunk dat) >>= check nextCodec cOut'
           _ | isIterEOFError codec' -> return $ return iter
           _ -> return $ EnumIFail (getIterError codec') iter
 
-      check (CodecE _) cOut iter       = return $ Done iter cOut
-      check _ cOut@(Chunk _ True) iter = return $ Done iter cOut
-      check (CodecF codec _) cOut iter@(IterF _)
-          | null cOut                  = return $ enumI1 codec iter
-          | otherwise                  = feedCodec codec iter cOut
-      -- If the iteratee has finished, have to send EOF to the codec
-      check (CodecF codec _) cOut iter =
-        do codec' <- runIter codec chunkEOF
-           if isIterError codec' && not (isIterEOFError codec')
-            then return $ EnumIFail (getIterError codec') iter
-            -- We are returning cOut, but should we return cOut'
-            -- in the event that codec' is Done _ cOut'?  Probably
-            -- doesn't matter.
-            else return $ Done iter cOut
+      check codec cOut iter@(IterF _)
+          | null cOut = return $ enumI codec iter
+          | otherwise = feedCodec codec iter cOut
+      check codec cOut@(Chunk _ eof) iter
+          | eof       = return $ Done iter cOut
+          | otherwise = runIter (enumI codec iter) cOut
 
+enumI codec iter = wrapI fixfail (runI codec)
+    where
+      -- XXX Need to think more about what the right left over data is
+      fixfail (Done _ (Chunk dat _)) = Done iter (chunk dat)
+      fixfail codec' = EnumIFail (getIterError codec') iter
+    
 -- | Transcode (until codec throws an EOF error, or until after it has
 -- received EOF).
 enumI' :: (Monad m, ChunkData tOut, ChunkData tIn) =>

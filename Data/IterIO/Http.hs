@@ -14,9 +14,9 @@ import Data.IterIO
 import Data.IterIO.Parse
 import Text.Printf
 
-import Data.ByteString.Lazy.Search
-
 import System.IO
+
+import Debug.Trace
 
 type S = L8.ByteString
 
@@ -159,21 +159,43 @@ hdrLine :: (Monad m) => Iter S m S
 hdrLine = lineI <++> foldrI L8.append L8.empty contLine
     where contLine = lws <++> lineI
 
-
-safePrefix :: S8.ByteString -> S8.ByteString -> Int
-safePrefix delim input =
-    case S8.findSubstring delim input of
-      Just n  -> n
-      Nothing -> checksuffix $ max 0 $ ilen - dlen
+safePrefix1 :: S8.ByteString -> S8.ByteString -> (S8.ByteString, S8.ByteString)
+safePrefix1 delim input =
+    case S8.breakSubstring delim input of
+      (prefix, rest) | not (S8.null rest) -> (prefix, rest)
+      _ -> checksuffix $ S8.length input - S8.length delim + 1
     where
-      ilen = S8.length input
-      dlen = S8.length delim
-      checksuffix n | n >= ilen = n
-                    | otherwise = if S8.drop n input `S8.isPrefixOf` delim
-                                  then n
-                                  else checksuffix $ n + 1
-      
+      checksuffix n | n < 0 = checksuffix 0
+      checksuffix n = if S8.drop n input `S8.isPrefixOf` delim
+                      then S8.splitAt n input
+                      else checksuffix $ n + 1
 
+safePrefix2 :: S8.ByteString -> S8.ByteString -> S8.ByteString
+            -> (S8.ByteString, S8.ByteString)
+safePrefix2 delim input1 input2 = check 0
+    where
+      i1len    = S8.length input1
+      dlen     = S8.length delim
+      pref s1 s2 | S8.length s1 <= S8.length s2 = S8.isPrefixOf s1 s2
+                 | otherwise                    = S8.isPrefixOf s2 s1
+      check n | n >= i1len =
+          case safePrefix1 delim input2 of
+            (prefix, rest) -> (S8.append input1 prefix, rest)
+      check n =
+          case S8.splitAt n input1 of
+            (prefix, rest)
+                | pref delim rest && pref (S8.drop (i1len - n) delim) input2
+                -> (prefix, S8.append rest input2)
+            _ -> check (n + 1)
+
+{-
+safePrefix :: L8.ByteString -> L8.ByteString -> (L8.ByteString, L8.ByteString)
+safePrefix delim' input' = process L8.empty $ L8.toChunks input'
+    where
+      delim = S8.concat $ L8.fromChunks delim'
+      process output [] = output
+      process output (i:t)  = xxx
+-}
 
 {-
 breakC :: (Monad m) => S -> Codec S m S
