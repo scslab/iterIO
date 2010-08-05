@@ -84,7 +84,7 @@ module Data.IterIO.Base
     , enumO, enumO', enumObracket, enumI, enumI'
     -- * Exception and error functions
     , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
-    , isIterError, isEnumError
+    , isIterActive, isIterError, isEnumError
     , throwI, throwEOFI, expectedI
     , tryI, tryBI, catchI, catchBI, handlerI, handlerBI
     , resumeI, verboseResumeI, mapExceptionI
@@ -93,7 +93,7 @@ module Data.IterIO.Base
     , ifParse, ifNoParse, multiParse
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
-    , nullI, dataI, chunkI
+    , nullI, dataI, chunkI, resultI
     , wrapI, runI, joinI, returnI
     , headI, safeHeadI
     , putI, sendI
@@ -371,6 +371,14 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
 
     fail msg = IterFail $ mkError msg
 
+-- | True if an iteratee /or/ an enclosing enumerator has experienced
+-- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
+-- 'True', but the converse is not true.)
+isIterActive :: Iter t m a -> Bool
+isIterActive (IterF _) = False
+isIterActive (IterM _) = False
+isIterActive _         = True
+
 getIterError                 :: Iter t m a -> SomeException
 getIterError (IterFail e)    = e
 getIterError (EnumOFail e _) = e
@@ -382,10 +390,10 @@ getIterError _               = error "getIterError: no error to extract"
 -- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
 -- 'True', but the converse is not true.)
 isIterError :: Iter t m a -> Bool
-isIterError (IterF _)       = False
-isIterError (IterM _)       = False
-isIterError (Done _ _)      = False
-isIterError _               = True
+isIterError (IterF _)  = False
+isIterError (IterM _)  = False
+isIterError (Done _ _) = False
+isIterError _          = True
 
 -- | True if an enumerator enclosing an iteratee has experienced a
 -- failure (but not if the iteratee itself failed).
@@ -1003,14 +1011,13 @@ wrapI :: (ChunkData t, Monad m) =>
       -> Iter t m b                 -- ^ Returns an 'Iter' whose
                                     -- result will be transformed by
                                     -- the transformation function
-wrapI f (IterM m)      = IterM $ m >>= return . wrapI f
-wrapI f iter@(IterF _) =
-    IterF $ \c@(Chunk _ eof) -> runIter iter c >>= rewrap eof
+wrapI f (IterM m) = IterM $ m >>= return . wrapI f
+wrapI f iter0@(IterF _) = IterF $ runIter iter0 >=> rewrap
     where
-      rewrap _ iter'@(IterF _) = return $ wrapI f iter'
-      rewrap eof iter'         = finish eof $ f iter'
-      finish True fiter@(IterF _) = runIter fiter chunkEOF
-      finish _ fiter              = return fiter
+      rewrap iter@(IterF _)               = return $ wrapI f iter
+      -- Can't return IterF state after EOF, so re-run output of f
+      rewrap iter@(Done _ (Chunk _ True)) = runIter (f iter) chunkEOF
+      rewrap iter                         = return $ f iter
 wrapI f iter = f iter
 
 -- | Runs an Iteratee from within another iteratee (feeding it EOF if
@@ -1056,6 +1063,12 @@ returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
 returnI (IterM m)      = lift m >>= returnI
 returnI iter@(IterF _) = lift $ runIter iter mempty
 returnI iter           = return iter
+
+-- | Run an 'Iter' until it is no longer active (in the 'IterF' or
+-- | 'IterM' state), then return its state.
+resultI :: (ChunkData t, Monad m) =>
+           Iter t m a -> Iter t m (Iter t m a)
+resultI = wrapI return
 
 -- | Return the the first element when the Iteratee data type is a list.
 headI :: (Monad m) => Iter [a] m a
@@ -1341,17 +1354,16 @@ enumO :: (Monad m, ChunkData t) =>
       -> EnumO t m a
          -- ^ Returns an outer enumerator that feeds input chunks
          -- (obtained from the first argument) into an iteratee.
-enumO codec0 (IterM m)      = IterM $ m >>= return . enumO codec0
-enumO codec0 iter@(IterF _) = (lift $ runIter codec0 chunkEOF) >>= check
+enumO codec0 iter@(IterF _) = IterM $ runIter codec0 chunkEOF >>= check
     where
-      check (Done (CodecE t) _) =
-          lift (runIter iter $ chunk t) >>= id
+      check (Done (CodecE t) _) = runIter iter $ chunk t
       check (Done (CodecF codec t) _) =
-          lift (runIter iter $ chunk t) >>= enumO codec
+          runIter iter (chunk t) >>= return . enumO codec
       check codec
-          | isIterEOFError codec = iter
-          | otherwise            = EnumOFail (getIterError codec) iter
-enumO _ iter                = iter
+          | isIterEOFError codec = return iter
+          | otherwise            = return $ EnumOFail (getIterError codec) iter
+enumO codec0 (IterM m) = IterM $ m >>= return . enumO codec0
+enumO _ iter           = iter
 
 -- | Like 'enumO', but the input function returns raw data, not
 -- 'Chunk's.  The only way to signal EOF is therefore to raise an
@@ -1371,7 +1383,7 @@ enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
          Codec tOut m tIn
       -- ^ Codec to be invoked to produce transcoded chunks.
       -> EnumI tOut tIn m a
-
+enumI codec0 (IterM m) = IterM $ m >>= return . enumI codec0
 enumI codec0 iter0@(IterF _) = IterF $ \c -> runIter codec0 c >>= nextCodec
     where
       nextCodec codec@(IterF _)    = return $ enumI codec iter0
@@ -1387,8 +1399,8 @@ enumI codec0 iter0@(IterF _) = IterF $ \c -> runIter codec0 c >>= nextCodec
       nextIter (CodecF codec dat) cOut@(Chunk _ eof) = do
         iter <- runIter iter0 (chunk dat)
         if eof then return $ Done iter cOut
-               else return $ Done () cOut >> enumI codec iter
-               -- else runIter (enumI codec iter) cOut
+               else runIter (enumI codec iter) cOut
+
 -- If iter finished, still must feed EOF to codec before returning iter
 enumI codec0 iter = IterF $ \(Chunk t eof) -> do
   codec <- runIter codec0 (Chunk t True)
