@@ -481,7 +481,7 @@ instance (ChunkData t, MonadIO m) => MonadFix (Iter t m) where
     mfix f = fixMonadIO f
 
 instance (ChunkData t) => MonadTrans (Iter t) where
-    lift m = IterM $ m >>= return . flip Done mempty
+    lift m = IterM $ m >>= return . return
 
 -- | Lift an IO operation into an 'Iter' monad, but if the IO
 -- operation throws an error, catch the exception and return it as a
@@ -1341,6 +1341,7 @@ enumO :: (Monad m, ChunkData t) =>
       -> EnumO t m a
          -- ^ Returns an outer enumerator that feeds input chunks
          -- (obtained from the first argument) into an iteratee.
+enumO codec0 (IterM m)      = IterM $ m >>= return . enumO codec0
 enumO codec0 iter@(IterF _) = (lift $ runIter codec0 chunkEOF) >>= check
     where
       check (Done (CodecE t) _) =
@@ -1350,7 +1351,7 @@ enumO codec0 iter@(IterF _) = (lift $ runIter codec0 chunkEOF) >>= check
       check codec
           | isIterEOFError codec = iter
           | otherwise            = EnumOFail (getIterError codec) iter
-enumO _ iter = iter
+enumO _ iter                = iter
 
 -- | Like 'enumO', but the input function returns raw data, not
 -- 'Chunk's.  The only way to signal EOF is therefore to raise an
