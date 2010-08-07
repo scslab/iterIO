@@ -13,7 +13,7 @@ import System.Time
 import TM
 import Arc4
 import Data.IterIO
--- import Data.IterIO.Extra
+import Data.IterIO.Extra
 
 type NetSim a = EnumI [L.ByteString] [L.ByteString] TM a
 type NetSimM = Iter [L.ByteString] TM

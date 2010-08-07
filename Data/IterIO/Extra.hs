@@ -5,8 +5,8 @@
 -- | This module contains deprecated functions plus a few pieces of
 -- functionality that are missing from the standard Haskell libraries.
 module Data.IterIO.Extra
-    ( -- * Deprecated function
-      feed
+    ( -- * Deprecated functions
+      chunkerToCodec, feed
       -- * Functionality missing from system libraries
     , SendRecvString(..)
     , hShutdown
@@ -44,6 +44,16 @@ foreign import ccall unsafe "sys/socket.h shutdown"
 --
 -- Deprecated
 --
+
+-- | Creates a 'Codec' from an 'Iter' @iter@ that returns 'Chunk's.
+-- The 'Codec' returned will keep offering to translate more input
+-- until @iter@ returns a 'Chunk' with the EOF bit set.
+chunkerToCodec :: (ChunkData t, Monad m) => Iter t m (Chunk a) -> Codec t m a
+chunkerToCodec iter = do
+  Chunk d eof <- iter
+  if eof
+   then return $ CodecE d
+   else return $ CodecF (chunkerToCodec iter) d
 
 -- | Feed pure data directly to an iteratee.
 feed :: (Monad m, ChunkData t) => t -> Iter t m a -> m (Iter t m a)

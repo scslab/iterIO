@@ -81,7 +81,7 @@ module Data.IterIO.Base
     -- * Fusing operators
     , (|..), (..|..), (..|)
     -- * Enumerator construction functions
-    , chunkerToCodec, iterToCodec
+    , iterToCodec
     , enumO, enumO', enumObracket, enumI, enumI'
     -- * Exception and error functions
     , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
@@ -95,7 +95,7 @@ module Data.IterIO.Base
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
     , nullI, dataI, chunkI
-    , wrapI, runI, joinI, returnI
+    , wrapI, runI, joinI, returnI, resultI
     , headI, safeHeadI
     , putI, sendI
     -- * Some basic Enumerators
@@ -991,10 +991,13 @@ nullI = IterF $ return . check
       check _              = nullI
 
 
--- | Returns any non-empty amount of input data.
+-- | Returns any non-empty amount of input data, or throws an
+-- exception if EOF is encountered and there is no data..
 dataI :: (Monad m, ChunkData t) => Iter t m t
-dataI = IterF $ \(Chunk d eof) -> return $
-        if null d then dataI else Done d (Chunk mempty eof)
+dataI = IterF $ return . nextChunk
+    where
+      nextChunk (Chunk d True) | null d = throwEOFI "dataI"
+      nextChunk (Chunk d _)             = return d
 
 -- | Returns a non-empty 'Chunk' or an EOF 'Chunk'.
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
@@ -1052,29 +1055,33 @@ joinI (IterFail e)    = IterFail e
 joinI (EnumIFail e i) = EnumOFail e i
 joinI (EnumOFail e i) = EnumOFail e $ joinI i
 
-{-
 -- | Allows you to look at the state of an 'Iter' by returning it into
 -- an 'Iter' monad.  This is just like the monadic 'return' method,
--- except that if the 'Iter' is in the 'IterF' state, then @returnI@
--- additionally feeds it one (empty) chunk.  Thus, 'Iter's that do not
--- require data, such as @returnI $ liftIO $ ...@, can execute and
--- return a result (possibly reflecting exceptions) immediately.
+-- except that if the 'Iter' is in the 'IterM' state, it is executed
+-- until it enters another state.  If it is in the 'IterF' state, it
+-- is fed an empty input chunk, to give it a chance to execute monadic
+-- actions.  Thus, 'Iter's that do not require data, such as
+-- @returnI $ liftIO $ ...@, can execute and return a result (possibly
+-- reflecting exceptions) immediately.
 returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
            Iter tIn m a
         -> Iter tOut m (Iter tIn m a)
-returnI (IterM m)      = lift m >>= returnI
-returnI iter@(IterF _) = lift $ runIter iter mempty
+returnI iter@(IterF _) = lift $ runIter iter (chunk mempty)
+returnI iter@(IterM _) = lift $ execIter iter
 returnI iter           = return iter
--}
 
--- | Run an 'Iter' until it is no longer active (in the 'IterF' or
--- 'IterM' state), then return its state.  This allows you to look at
--- the state of an 'Iter' by returning it into an 'Iter' monad, just
--- like calling the monadic 'return' method, except you don't need to
--- worry about handling the 'IterM' and 'IterF' states.
-returnI :: (ChunkData t, Monad m) =>
+-- | @resultI@ is like a version of 'returnI' that additionally
+-- ensures the returned 'Iter' is not in the 'IterF' state.  Moreover,
+-- if the returned 'Iter' is in the 'Done' state, then the left over
+-- data will be pulled up to the enclosing 'Iter', so that the
+-- returned 'Iter' always has 'mempty' data.  (The @eof@ flag is
+-- preserved, however.)
+resultI :: (ChunkData t, Monad m) =>
            Iter t m a -> Iter t m (Iter t m a)
-returnI = wrapI return
+resultI = wrapI fixdone
+    where
+      fixdone (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
+      fixdone iter                     = return iter
 
 -- | Return the the first element when the Iteratee data type is a list.
 headI :: (Monad m) => Iter [a] m a
@@ -1228,7 +1235,7 @@ catI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
      -> EnumI tOut tIn m a
      -> EnumI tOut tIn m a
 catI a b iter = do
-  iter' <- returnI $ a iter
+  iter' <- resultI $ a iter
   if isIterError iter' then iter' else (b . joinI) iter'
 infixr 3 `catI`
 
@@ -1301,16 +1308,6 @@ data CodecR tArg m tRes = CodecF { unCodecF :: (Codec tArg m tRes)
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
 iterToCodec iter = iter >>= return . CodecF (iterToCodec iter)
 
--- | Creates a 'Codec' from an 'Iter' @iter@ that returns 'Chunk's.
--- The 'Codec' returned will keep offering to translate more input
--- until @iter@ returns a 'Chunk' with the EOF bit set.
-chunkerToCodec :: (ChunkData t, Monad m) => Iter t m (Chunk a) -> Codec t m a
-chunkerToCodec iter = do
-  Chunk d eof <- iter
-  if eof
-   then return $ CodecE d
-   else return $ CodecF (chunkerToCodec iter) d
-
 -- | Build an 'EnumO' from a @before@ action, an @after@ function, and
 -- an @input@ function in a manner analogous to the IO 'bracket'
 -- function.  For instance, you could implement @`enumFile'`@ as
@@ -1331,11 +1328,20 @@ enumObracket :: (Monad m, ChunkData t) =>
              -- ^ Before action
              -> (b -> Iter () m c)
              -- ^ After action, as function of before action result
-             -> (b -> Iter () m (Chunk t))
+             -> (b -> (Codec () m t))
              -- ^ Chunk generating function, as a funciton of before
              -- aciton result
              -> EnumO t m a
-enumObracket before after input iter = do
+enumObracket before after codec iter0 = tryI (runI before) >>= checkBefore
+    where
+      checkBefore (Left (e,_)) = EnumOFail e iter0
+      checkBefore (Right b)    = resultI (enumO (codec b) iter0) >>= checkMain b
+      checkMain b iter = tryI (runI $ after b) >>= checkAfter iter
+      checkAfter iter (Left (e,_)) | not (isIterError iter) = EnumOFail e iter
+      checkAfter iter _                                     = iter 
+
+
+{-
   eb <- tryI $ runI before
   case eb of
     Left (e,_) -> EnumOFail e iter
@@ -1345,9 +1351,10 @@ enumObracket before after input iter = do
             case ec of
               Left (e,_) | not $ isIterError iter' -> EnumOFail e iter'
               _                                    -> iter'
+-}
 
--- | Construct an outer enumerator given a function that produces
--- 'Chunk's of type @t@.
+-- | Construct an outer enumerator given a 'Codec' that generates data
+-- of type @t@.
 enumO :: (Monad m, ChunkData t) =>
          Codec () m t
          -- ^ This is the computation that produces input.  It is run
@@ -1360,16 +1367,17 @@ enumO :: (Monad m, ChunkData t) =>
       -> EnumO t m a
          -- ^ Returns an outer enumerator that feeds input chunks
          -- (obtained from the first argument) into an iteratee.
-enumO codec0 iter@(IterF _) = IterM $ runIter codec0 chunkEOF >>= check
-    where
-      check (Done (CodecE t) _) = runIter iter $ chunk t
-      check (Done (CodecF codec t) _) =
-          runIter iter (chunk t) >>= return . enumO codec
-      check codec
-          | isIterEOFError codec = return iter
-          | otherwise            = return $ EnumOFail (getIterError codec) iter
-enumO codec0 (IterM m) = IterM $ m >>= return . enumO codec0
-enumO _ iter           = iter
+enumO codec0 (IterM m)      = IterM $ m >>= return . enumO codec0
+enumO codec0 iter@(IterF _) = resultI (runI codec0) >>= nextCodec
+    where     
+      nextCodec codec@(Done _ _) = codec >>= check
+      nextCodec codec
+          | isIterEOFError codec = iter
+          | otherwise            = EnumOFail (getIterError codec) iter 
+      check CodecX           = iter
+      check (CodecE t)       = IterM $ runIter iter (chunk t)
+      check (CodecF codec t) = lift (runIter iter (chunk t)) >>= enumO codec
+enumO _ iter                = iter
 
 -- | Like 'enumO', but the input function returns raw data, not
 -- 'Chunk's.  The only way to signal EOF is therefore to raise an
@@ -1551,14 +1559,13 @@ iterLoop = do
                     putMVar p $ case mp of
                                   Nothing -> c
                                   Just c' -> mappend c' c
-             return $ if eof
-                      then Done () chunkEOF
-                      else IterF $ iterf pipe
+             return $ if eof then Done () chunkEOF else IterF $ iterf pipe
 
-      enum pipe = enumO $ chunkerToCodec $ do
-                    p <- liftIO $ readMVar pipe
-                    c <- liftIO $ takeMVar p
-                    return c
+      enum pipe = let codec = do
+                        p <- liftIO $ readMVar pipe
+                        Chunk c eof <- liftIO $ takeMVar p
+                        return $ if eof then CodecE c else CodecF codec c
+                  in enumO codec
 
 --
 -- Basic inner enumerators
@@ -1567,7 +1574,7 @@ iterLoop = do
 -- | The null 'EnumI', which passes data through to another iteratee
 -- unmodified.
 inumNop :: (ChunkData t, Monad m) => EnumI t t m a
-inumNop = enumI $ chunkerToCodec chunkI
+inumNop = enumI' dataI
 
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an

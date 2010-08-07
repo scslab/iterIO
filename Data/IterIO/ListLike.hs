@@ -38,11 +38,6 @@ echr :: (Enum e) => Char -> e
 echr = toEnum . ord
 
 
--- | Turn data into a 'Chunk'.  Set the EOF marker when the data is
--- null.
-dataToChunk :: (ChunkData t) => t -> Chunk t
-dataToChunk t = Chunk t $ null t
-
 --
 -- Iters
 --
@@ -155,9 +150,9 @@ sockDgramI s mdest = do
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> EnumO [t] m a
-enumDgram sock = enumO $ chunkerToCodec $ do
+enumDgram sock = enumO $ iterToCodec $ do
   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
-  return $ if r < 0 then chunkEOF else chunk [msg]
+  if r < 0 then throwEOFI "enumDgram" else return [msg]
 
 
 -- | Read datagrams from a socket and feed a list of (Bytestring,
@@ -165,9 +160,9 @@ enumDgram sock = enumO $ chunkerToCodec $ do
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> EnumO [(t, SockAddr)] m a
-enumDgramFrom sock = enumO $ chunkerToCodec $ do
+enumDgramFrom sock = enumO $ iterToCodec $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
-  return $ if r < 0 then chunkEOF else chunk [(msg, addr)]
+  if r < 0 then throwEOFI "enumDgramFrom" else return [(msg, addr)]
 
 -- | Feed data from a file handle into an 'Iter' in Lazy
 -- 'L.ByteString' format.
@@ -179,10 +174,10 @@ enumHandle' = enumHandle
 enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                Handle
             -> EnumO t m a
-enumHandle h = enumO $ chunkerToCodec $ do
+enumHandle h = enumO $ iterToCodec $ do
   _ <- liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
-  return $ dataToChunk buf
+  if null buf then throwEOFI "enumHandle" else return buf
 
 -- | Enumerate the contents of a file as a series of lazy
 -- 'L.ByteString's.
@@ -194,9 +189,10 @@ enumFile' = enumFile
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
              FilePath
           -> EnumO t m a
-enumFile path =
-    enumObracket (liftIO $ openBinaryFile path ReadMode) (liftIO . hClose) $
-        \h -> liftIO (LL.hGet h defaultChunkSize) >>= return . dataToChunk
+enumFile path = enumObracket (liftIO $ openBinaryFile path ReadMode)
+                (liftIO . hClose) codec
+    where
+      codec h = CodecF (codec h) `liftM` liftIO (LL.hGet h defaultChunkSize)
 
 
 --
@@ -221,11 +217,10 @@ inumLog path trunc iter = do
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle
          -> EnumI t t m a
-inumhLog h =
-    enumI $ chunkerToCodec $ do
-      c@(Chunk buf eof) <- chunkI
-      liftIO $ do
-        unless (null buf) $ LL.hPutStr h buf `onException` hClose h
-        when eof $ hClose h
-      return c
+inumhLog h = enumI $ iterToCodec $ do
+               Chunk buf eof <- chunkI
+               liftIO $ do
+                 unless (null buf) $ LL.hPutStr h buf `onException` hClose h
+               when eof $ liftIO $ hClose h
+               return buf
 
