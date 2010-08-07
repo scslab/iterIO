@@ -180,7 +180,9 @@ enumHandle h = enumO $ iterToCodec $ do
   if null buf then throwEOFI "enumHandle" else return buf
 
 -- | Enumerate the contents of a file as a series of lazy
--- 'L.ByteString's.
+-- 'L.ByteString's.  Note that the enumerator does not change the mode
+-- of the handle before reading from it.  Thus, you will often want to
+-- call @'hSetBinaryMode' h 'True'@ before using @enumHandle h@.
 enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
 enumFile' = enumFile
 

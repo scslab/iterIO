@@ -81,6 +81,8 @@ sendStr s t = genSendTo s t Nothing
 
 test :: Bool -> Int -> SeqNo -> SockAddr -> SockAddr -> IO ()
 test d t w l r = do
+  hSetBinaryMode stdin True
+  hSetBinaryMode stdout True
   hSetBuffering stdout NoBuffering
   sock <- socket AF_INET Datagram 0
   bindSocket sock l
