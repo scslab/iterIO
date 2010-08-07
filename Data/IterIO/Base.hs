@@ -2,13 +2,15 @@
 {-# LANGUAGE ExistentialQuantification #-}
 
 
-{-   Alternate Enumerator/Iteratee take by David Mazieres.
+{- | This module contains the base Enumerator/Iteratee IO
+     abstractions.  See the documentation in the "Data.IterIO" module
+     for a high-level tutorial on these abstractions.
 
      An iteratee is a data sink that is fed chunks of data.  It may
-     return a useful result, or its use may like in the side-effects
-     it has, such as storing the data to a file.  Iteratees are
-     represented by the type @'Iter' t m a@.  @t@ is the type of the
-     data chunks (which must be a 'ChunkData', such as 'String' or
+     return a useful result, or its use may lie in monadic
+     side-effects, such as storing received data to a file.  Iteratees
+     are represented by the type @'Iter' t m a@.  @t@ is the type of
+     the data chunks (which must be a 'ChunkData', such as 'String' or
      lazy 'L.ByteString').  @m@ is the 'Monad' in which the iteratee
      runs--for instance 'IO' (or an instance of 'MonadIO') for the
      iteratee to perform IO.  @a@ is the result type of the iteratee,
@@ -19,32 +21,34 @@
 
        * An /outer enumerator/, represented by the type 'EnumO',
          generates data from some external source, such as IO (or
-         potentially some internal state such as a somepseudo-random
+         potentially some internal state such as a pseudo-random
          generator).  Outer enumerators are generally constructed
-         using 'enumO', which repeatedly runs a computation that
-         generates chunks of data.  When the enumerator is out of
-         data, data generating computation returns an EOF chunk, and
-         'enumO' returns the iteratee so that it can potentially be
-         passed to a different enumerator for more data.  (An
-         enumerator should not feed 'EOF' to an iteratee--only the
-         '|$' operator, 'run', and 'runI' functions do this.)  If the
-         iteratee returns a result or fails, the enumerator also
-         returns it immediately.
+         using 'enumO', which repeatedly runs a degenerate 'Codec'
+         that outputs data.  (The 'Codec' is degenerate because its
+         input type is @()@--meaning it converts nothing to some kind
+         of output data.)  When the 'Codec' can produce no more data,
+         it signals this by returning in the 'CodecE' state, which
+         causes 'enumO' to return the iteratee so that it can
+         potentially be passed to a different enumerator for more
+         data.  (An enumerator should not feed 'EOF' to an
+         iteratee--only the '|$' operator, 'run', and 'runI' functions
+         do this.)  If the iteratee returns a result or fails, the
+         enumerator also returns it immediately.
 
        * An /inner enumerator/, represented by the type 'EnumI', gets
-         its data from another enumerator, then feeds this to an
-         iteratee.  Thus, an 'EnumI' behaves as an iteratee when
-         interfacing to the outer enumerator, and behaves as an
-         enumerator when feeding data to some \"inner\" iteratee.
-         Inner are build using the function 'enumI', which is
-         analogous to 'enumO' for outer enumerators, except that the
-         chunk generating computation can use iteratees to process
-         data from the outer enumerator.  An inner enumerator, when
-         done, returns the inner iteratee's state, as well as its own
-         Iteratee state.  An inner enumerator that receives EOF should
-         /not/ feed the EOF to its iteratee, as the iteratee may
-         subsequently be passed to another enumerator for more input.
-         (This is convention is respected by the 'enumI' function.)
+         its data from another enumerator, then feeds some transformed
+         version of the data to an iteratee.  Thus, an 'EnumI' behaves
+         as an iteratee when interfacing to the outer enumerator, and
+         behaves as an enumerator when feeding data to some \"inner\"
+         iteratee.  Inner enumerators are built using the function
+         'enumI', which is analogous to 'enumO' for outer enumerators,
+         except that the 'Codec' actually processes meaningful input
+         data.  An inner enumerator, when done, returns the inner
+         iteratee's state, as well as its own Iteratee state.  An
+         inner enumerator that receives EOF should /not/ feed the EOF
+         to its iteratee, as the iteratee may subsequently be passed
+         to another enumerator for more input.  (This convention is
+         respected by the 'enumI' function.)
 
     IO is performed by applying an outer enumerator to an iteratee,
     using the '|$' (\"pipe apply\") binary operator.
@@ -57,17 +61,14 @@
     @enumi '..|' iter@.  Finally, two inner enumerators may be fused
     into one with the '..|..' operator.
 
-    Enumerators may also be concatenated.  Two outer enumerators may
-    be concatenated using the 'cat' function.  Thus,
-    @enumO1 ``cat`` enumO2@ produces an outer enumerator whose effect
-    is to feed first @enumO1@'s data then @enumO2@'s data to an
-    iteratee.  Inner enumerators may similarly be concatenated using
-    the 'catI' function.
-
+    Enumerators can also be concatenated.  Two outer enumerators may
+    be concatenated using the 'cat' function.  Thus, @enumO1 ``cat``
+    enumO2@ produces an outer enumerator whose effect is to feed first
+    @enumO1@'s data then @enumO2@'s data to an iteratee.  Inner
+    enumerators may similarly be concatenated using the 'catI'
+    function.
 -}
 
--- | Enumerator/Iteratee IO abstractions.  See the documentation for
--- "Data.IterIO" for a high-level overview of these abstractions.
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), Iter(..), EnumO, EnumI, Codec, CodecR(..)
@@ -93,7 +94,7 @@ module Data.IterIO.Base
     , ifParse, ifNoParse, multiParse
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
-    , nullI, dataI, chunkI, resultI
+    , nullI, dataI, chunkI
     , wrapI, runI, joinI, returnI
     , headI, safeHeadI
     , putI, sendI
@@ -1051,6 +1052,7 @@ joinI (IterFail e)    = IterFail e
 joinI (EnumIFail e i) = EnumOFail e i
 joinI (EnumOFail e i) = EnumOFail e $ joinI i
 
+{-
 -- | Allows you to look at the state of an 'Iter' by returning it into
 -- an 'Iter' monad.  This is just like the monadic 'return' method,
 -- except that if the 'Iter' is in the 'IterF' state, then @returnI@
@@ -1063,12 +1065,16 @@ returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
 returnI (IterM m)      = lift m >>= returnI
 returnI iter@(IterF _) = lift $ runIter iter mempty
 returnI iter           = return iter
+-}
 
 -- | Run an 'Iter' until it is no longer active (in the 'IterF' or
--- | 'IterM' state), then return its state.
-resultI :: (ChunkData t, Monad m) =>
+-- 'IterM' state), then return its state.  This allows you to look at
+-- the state of an 'Iter' by returning it into an 'Iter' monad, just
+-- like calling the monadic 'return' method, except you don't need to
+-- worry about handling the 'IterM' and 'IterF' states.
+returnI :: (ChunkData t, Monad m) =>
            Iter t m a -> Iter t m (Iter t m a)
-resultI = wrapI return
+returnI = wrapI return
 
 -- | Return the the first element when the Iteratee data type is a list.
 headI :: (Monad m) => Iter [a] m a
@@ -1141,25 +1147,45 @@ sendI sendfn = do
 -- function, which takes care of most of the error-handling details.
 type EnumO t m a = Iter t m a -> Iter t m a
 
--- | Concatenate two outer enumerators, forcing them to be executed in
--- turn in the monad @m@.  Note that the deceptively simple definition:
+-- | An inner enumerator or transcoder.  Such a function accepts data
+-- from some outer enumerator (acting like an Iteratee), then
+-- transcodes the data and feeds it to another Iter (hence also acting
+-- like an enumerator towards that inner Iter).  Note that data is
+-- viewed as flowing inwards from the outermost enumerator to the
+-- innermost iteratee.  Thus @tOut@, the \"outer type\", is actually
+-- the type of input fed to an @EnumI@, while @tIn@ is what the
+-- @EnumI@ feeds to an iteratee.
 --
---  >  cat a b = b . a
+-- As with @EnumO@, an @EnumI@ is a function from iteratees to
+-- iteratees.  However, an @EnumI@'s input and output types are
+-- different.  A simpler alternative to @EnumI@ might have been:
 --
--- wouldn't necessarily do the right thing, as in this case @a@'s
--- monadic actions would not actually get to run until @b@ executess
--- a, and @b@ might start out, before feeding any input to its
--- iteratee, by waiting for some event that is triggered by a
--- side-effect of @a@.  Has fixity:
+-- > type EnumI' tOut tIn m a = Iter tIn m a -> Iter tOut m a
 --
--- > infixr 3 `cat`
-cat :: (Monad m, ChunkData t) => EnumO t m a -> EnumO t m a -> EnumO t m a
-cat a b iter = do
-  iter' <- returnI $ a iter
-  case iter' of
-    IterF _ -> b iter'
-    _       -> iter'
-infixr 3 `cat`
+-- In fact, given an @EnumI@ object @inum@, it is possible to
+-- construct a function of type @EnumI'@ as @(enumI '..|')@.  But
+-- sometimes one might like to concatenate @EnumI@s.  For instance,
+-- consider a network protocol that changes encryption or compression
+-- modes midstream.  Transcoding is done by @EnumI@s.  To change
+-- transcoding methods after applying an @EnumI@ to an iteratee
+-- requires the ability to \"pop\" the iteratee back out of the
+-- @EnumI@ so as to be able to hand it to another @EnumI@.  The
+-- 'joinI' function provides this popping function in its most general
+-- form, though, if one only needs 'EnumI' concatenation, the simpler
+-- 'catI' function serves this purpose.
+--
+-- As with 'EnumO's, an @EnumI@ must never feed an EOF chunk to its
+-- iteratee.  Instead, upon receiving EOF, the @EnumI@ should simply
+-- return the state of the inner iteratee (this is how \"popping\" the
+-- iteratee back out works).  An @EnumI@ should also return when the
+-- iteratee returns a result or fails, or when the @EnumI@ fails.  An
+-- @EnumI@ may return the state of the iteratee earlier, if it has
+-- reached some logical message boundary (e.g., many protocols finish
+-- processing headers upon reading a blank line).
+--
+-- @EnumI@s are generally constructed with the 'enumI' function, which
+-- hides most of the error handling details.
+type EnumI tOut tIn m a = Iter tIn m a -> Iter tOut m (Iter tIn m a)
 
 -- | Run an outer enumerator on an iteratee.  Any errors in inner
 -- enumerators that have been fused to the iteratee (in the second
@@ -1176,45 +1202,23 @@ infixr 3 `cat`
 -- failures.
 infixr 2 |$
 
--- | An inner enumerator or transcoder.  Such a function accepts data
--- from some outer enumerator (acting like an Iteratee), then
--- transcodes the data and feeds it to another Iter (hence also acting
--- like an enumerator towards that inner Iter).  Note that data is
--- viewed as flowing inwards from the outermost enumerator to the
--- innermost iteratee.  Thus @tOut@, the \"outer type\", is actually
--- the type of input fed to an @EnumI@, while @tIn@ is what the
--- @EnumI@ feeds to an iteratee.
+-- | Concatenate two outer enumerators, forcing them to be executed in
+-- turn in the monad @m@.  Note that the deceptively simple definition:
 --
--- As with @EnumO@, an @EnumI@ is a function from iteratees to
--- iteratees.  However, an @EnumI@'s input and output types are
--- different.  A simpler alternative to @EnumI@ might have been:
+--  >  cat a b = b . a
 --
--- > type EnumI' tOut tIn m a = Iter tIn m a -> Iter tOut m a
+-- wouldn't necessarily do the right thing, as in this case @a@'s
+-- monadic actions would not actually get to run until @b@ executess
+-- a, and @b@ might start out, before feeding any input to its
+-- iteratee, by waiting for some event that is triggered by a
+-- side-effect of @a@.  Has fixity:
 --
--- In fact, given an @EnumI@ object @enumI@, it is possible to
--- construct such a function as @(enumI '..|')@.  But sometimes one
--- might like to concatenate @EnumI@s.  For instance, consider a
--- network protocol that changes encryption or compression modes
--- midstream.  Transcoding is done by @EnumI@s.  To change transcoding
--- methods after applying an @EnumI@ to an iteratee requires the
--- ability to \"pop\" the iteratee back out of the @EnumI@ so as to be
--- able to hand it to another @EnumI@.  The 'joinI' function provides
--- this popping function in its most general form, though if one only
--- needs 'EnumI' concatenation, the simpler 'catI' function serves
--- this purpose.
---
--- As with 'EnumO's, an @EnumI@ must never feed an EOF chunk to its
--- iteratee.  Instead, upon receiving EOF, the @EnumI@ should simply
--- return the state of the inner iteratee (this is how \"popping\" the
--- iteratee back out works).  An @EnumI@ should also return when the
--- iteratee returns a result or fails, or when the @EnumI@ fails.  An
--- @EnumI@ may return the state of the iteratee earlier, if it has
--- reached some logical message boundary (e.g., many protocols finish
--- processing headers upon reading a blank line).
---
--- @EnumI@s are generally constructed with the 'enumI' function, which
--- hides most of the error handling details.
-type EnumI tOut tIn m a = Iter tIn m a -> Iter tOut m (Iter tIn m a)
+-- > infixr 3 `cat`
+cat :: (Monad m, ChunkData t) => EnumO t m a -> EnumO t m a -> EnumO t m a
+cat a b iter = do
+  iter' <- returnI $ a iter
+  if isIterError iter' then iter' else b iter'
+infixr 3 `cat`
 
 -- | Concatenate two inner enumerators.  Has fixity:
 --
@@ -1223,7 +1227,9 @@ catI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
         EnumI tOut tIn m a      -- ^
      -> EnumI tOut tIn m a
      -> EnumI tOut tIn m a
-catI a b = a >=> b
+catI a b iter = do
+  iter' <- returnI $ a iter
+  if isIterError iter' then iter' else (b . joinI) iter'
 infixr 3 `catI`
 
 -- | Fuse an outer enumerator, producing chunks of some type @tOut@,
