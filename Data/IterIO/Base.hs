@@ -372,13 +372,12 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
 
     fail msg = IterFail $ mkError msg
 
--- | True if an iteratee /or/ an enclosing enumerator has experienced
--- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
--- 'True', but the converse is not true.)
+-- | True if an iteratee is in the 'IterF' or 'IterM' state, and thus
+-- could still potentially consume input.
 isIterActive :: Iter t m a -> Bool
-isIterActive (IterF _) = False
-isIterActive (IterM _) = False
-isIterActive _         = True
+isIterActive (IterF _) = True
+isIterActive (IterM _) = True
+isIterActive _         = False
 
 getIterError                 :: Iter t m a -> SomeException
 getIterError (IterFail e)    = e
@@ -1380,6 +1379,24 @@ enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
          Codec tOut m tIn
       -- ^ Codec to be invoked to produce transcoded chunks.
       -> EnumI tOut tIn m a
+enumI codec0 (IterM m)      = IterM $ enumI codec0 `liftM` m
+enumI codec0 iter@(IterF _) = resultI codec0 >>= nextCodec
+    where
+      nextCodec (Done codecr (Chunk _ eof))  = nextIter codecr eof
+      nextCodec codec | isIterEOFError codec = return iter
+                      | otherwise         = EnumIFail (getIterError codec) iter
+      nextIter CodecX _                 = return iter
+      nextIter (CodecF codec dat) False = feed dat >>= enumI codec
+      nextIter codecr _                 = feed $ unCodecR codecr
+      feed dat = lift $ runIter iter (chunk dat)
+-- If iter finished, still must feed EOF to codec before returning
+enumI codec0 iter           = lift (runIter codec0 chunkEOF) >>= check
+    where
+      check codec | isIterEOFError codec = return iter
+                  | isIterError codec    = EnumIFail (getIterError codec) iter
+                  | otherwise            = return iter
+
+{-
 enumI codec0 (IterM m) = IterM $ m >>= return . enumI codec0
 enumI codec0 iter0@(IterF _) = IterF $ \c -> runIter codec0 c >>= nextCodec
     where
@@ -1404,6 +1421,7 @@ enumI codec0 iter = IterF $ \(Chunk t eof) -> do
   case codec of
     Done _ (Chunk t' _) -> return $ Done iter (Chunk t' eof)
     _                   -> return $ EnumIFail (getIterError codec) iter
+-}
 
 -- | Transcode (until codec throws an EOF error, or until after it has
 -- received EOF).
