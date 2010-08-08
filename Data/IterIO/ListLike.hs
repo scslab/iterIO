@@ -178,6 +178,8 @@ enumHandle h = enumO $ iterToCodec $ do
   _ <- liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
   if null buf then throwEOFI "enumHandle" else return buf
+-- Note that hGet can block when there is some (but not enough) data
+-- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
 
 -- | Enumerate the contents of a file as a series of lazy
 -- 'L.ByteString's.  Note that the enumerator does not change the mode

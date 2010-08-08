@@ -1308,51 +1308,6 @@ data CodecR tArg m tRes = CodecF { unCodecF :: (Codec tArg m tRes)
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
 iterToCodec iter = iter >>= return . CodecF (iterToCodec iter)
 
--- | Build an 'EnumO' from a @before@ action, an @after@ function, and
--- an @input@ function in a manner analogous to the IO 'bracket'
--- function.  For instance, you could implement @`enumFile'`@ as
--- follows:
---
--- >   enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
--- >   enumFile' path =
--- >     enumObracket (liftIO $ openFile path ReadMode) (liftIO . hClose) doGet
--- >       where
--- >         doGet h = do
--- >           buf <- liftIO $ L.hGet h 8192
--- >           if (L.null buf)
--- >             then return chunkEOF
--- >             else return $ chunk buf
---
-enumObracket :: (Monad m, ChunkData t) =>
-                (Iter () m b)
-             -- ^ Before action
-             -> (b -> Iter () m c)
-             -- ^ After action, as function of before action result
-             -> (b -> (Codec () m t))
-             -- ^ Chunk generating function, as a funciton of before
-             -- aciton result
-             -> EnumO t m a
-enumObracket before after codec iter0 = tryI (runI before) >>= checkBefore
-    where
-      checkBefore (Left (e,_)) = EnumOFail e iter0
-      checkBefore (Right b)    = resultI (enumO (codec b) iter0) >>= checkMain b
-      checkMain b iter = tryI (runI $ after b) >>= checkAfter iter
-      checkAfter iter (Left (e,_)) | not (isIterError iter) = EnumOFail e iter
-      checkAfter iter _                                     = iter 
-
-
-{-
-  eb <- tryI $ runI before
-  case eb of
-    Left (e,_) -> EnumOFail e iter
-    Right b    -> do
-            iter' <- returnI $ enumO (chunkerToCodec $ input b) iter
-            ec <- tryI $ runI (after b)
-            case ec of
-              Left (e,_) | not $ isIterError iter' -> EnumOFail e iter'
-              _                                    -> iter'
--}
-
 -- | Construct an outer enumerator given a 'Codec' that generates data
 -- of type @t@.
 enumO :: (Monad m, ChunkData t) =>
@@ -1385,7 +1340,35 @@ enumO _ iter                = iter
 enumO' :: (Monad m, ChunkData t) =>
           Iter () m t
        -> EnumO t m a
-enumO' input iter = enumO (iterToCodec input) iter
+enumO' = enumO . iterToCodec
+
+-- | Build an 'EnumO' from a @before@ action, an @after@ function, and
+-- an @input@ 'Codec' in a manner analogous to the IO @'bracket'@
+-- function.  For instance, you could implement @`enumFile'`@ as
+-- follows:
+--
+-- >   enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
+-- >   enumFile' path = enumObracket (liftIO $ openBinaryFile path ReadMode)
+-- >                                 (liftIO . hClose) doGet
+-- >       where
+-- >         doGet h = do
+-- >           buf <- liftIO $ hWaitForInput h (-1) >> L.hGetNonBlocking h 8192
+-- >           return $ if null buf then CodecX else CodecF (doGet h) buf
+enumObracket :: (Monad m, ChunkData t) =>
+                (Iter () m b)
+             -- ^ Before action
+             -> (b -> Iter () m c)
+             -- ^ After action, as a function of before action result
+             -> (b -> (Codec () m t))
+             -- ^ Input 'Codec', as a funciton of before aciton result
+             -> EnumO t m a
+enumObracket before after codec iter0 = tryI (runI before) >>= checkBefore
+    where
+      checkBefore (Left (e,_)) = EnumOFail e iter0
+      checkBefore (Right b)    = resultI (enumO (codec b) iter0) >>= checkMain b
+      checkMain b iter = tryI (runI $ after b) >>= checkAfter iter
+      checkAfter iter (Left (e,_)) | not (isIterError iter) = EnumOFail e iter
+      checkAfter iter _                                     = iter 
 
 -- | Build an inner enumerator given a 'Codec' that returns chunks of
 -- the appropriate type.  Makes an effort to send an EOF to the codec
