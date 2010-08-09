@@ -95,7 +95,7 @@ module Data.IterIO.Base
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
     , nullI, dataI, chunkI
-    , wrapI, runI, joinI, returnI, resultI
+    , wrapI, runI, popI, joinI, returnI, resultI
     , headI, safeHeadI
     , putI, sendI
     -- * Some basic Enumerators
@@ -365,7 +365,7 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
 
-    m@(IterF _) >>= k = IterF $ \c -> runIter m c >>= return . (>>= k)
+    m@(IterF _) >>= k = IterF $ runIter m >=> return . (>>= k)
     (IterM m)   >>= k = IterM $ m >>= return . (>>= k)
     (Done a c)  >>= k = IterM $ runIter (k a) c
     err         >>= _ = IterFail $ getIterError err
@@ -1041,17 +1041,32 @@ runI (IterFail e)    = IterFail e
 runI (EnumIFail e i) = EnumIFail e i
 runI (EnumOFail e i) = runI i >>= EnumIFail e
 
--- | Pop an 'Iter' back out of an 'EnumI', propagating any failure.
+-- | Pop an 'Iter' back out of an 'EnumI', propagating any failure,
 -- Any enumerator failure ('EnumIFail' or 'EnumOFail') will be
 -- translated to an 'EnumOFail' state.
+popI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+          Iter tOut m (Iter tIn m a)
+       -> Iter tIn m a
+popI (IterM m)       = lift m >>= popI
+popI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= popI
+popI (Done i _)      = i
+popI (IterFail e)    = IterFail e
+popI (EnumIFail e i) = EnumOFail e i
+popI (EnumOFail e i) = EnumOFail e $ popI i
+
+-- | Join the result of an inner enumerator, so that the result of the
+-- inner 'Iter' becomes the result in the outer 'Iter' Monad.  This is
+-- similar to 'popI', but where 'popI' returns an 'Iter' taking the
+-- inner input type, @joinI@ returns an 'Iter' of the outer input
+-- type.
 joinI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-         Iter tOut m (Iter tIn m a)
-      -> Iter tIn m a
+        Iter tOut m (Iter tIn m a)
+     -> Iter tOut m a
 joinI (IterM m)       = lift m >>= joinI
 joinI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= joinI
-joinI (Done i _)      = i
+joinI (Done i c)      = runI i >>= flip Done c
 joinI (IterFail e)    = IterFail e
-joinI (EnumIFail e i) = EnumOFail e i
+joinI (EnumIFail e i) = EnumOFail e $ runI i
 joinI (EnumOFail e i) = EnumOFail e $ joinI i
 
 -- | Allows you to look at the state of an 'Iter' by returning it into
@@ -1235,7 +1250,7 @@ catI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
      -> EnumI tOut tIn m a
 catI a b iter = do
   iter' <- resultI $ a iter
-  if isIterError iter' then iter' else (b . joinI) iter'
+  if isIterError iter' then iter' else b (popI iter')
 infixr 3 `catI`
 
 -- | Fuse an outer enumerator, producing chunks of some type @tOut@,
@@ -1248,7 +1263,7 @@ infixr 3 `catI`
          EnumO tOut m (Iter tIn m a) -- ^
       -> EnumI tOut tIn m a
       -> EnumO tIn m a
-(|..) outer inner iter = joinI $ outer $ inner iter
+(|..) outer inner iter = popI $ outer $ inner iter
 infixl 4 |..
 
 -- | Fuse two inner enumerators into one.  Has fixity:
@@ -1258,7 +1273,9 @@ infixl 4 |..
            EnumI tOut tMid m (Iter tIn m a) -- ^
         -> EnumI tMid tIn m a
         -> EnumI tOut tIn m a
-(..|..) outer inner iter = wrapI (return . joinI . joinI) $ outer $ inner iter
+(..|..) outer inner iter = wrapI joinI (outer $ inner iter)
+-- wrapI joinI $ outer $ wrapI popI $ inner iter
+-- = wrapI (return . joinI . joinI) $ outer $ inner iter
 infixl 5 ..|..
 
 -- | Fuse an inner enumerator that transcodes @tOut@ to @tIn@ with an
@@ -1270,7 +1287,19 @@ infixl 5 ..|..
          EnumI tOut tIn m a     -- ^
       -> Iter tIn m a
       -> Iter tOut m a
-(..|) inner iter = wrapI (runI . joinI) $ inner iter
+(..|) inner iter = wrapI joinI (inner iter)
+-- 
+-- Some alternate but less good implementations might be:
+-- 
+--  * inner ..| iter = inner iter >>= runI
+--      But the >>= operation would convert an EnumIFail into an
+--      IterFail, discarding information.
+--
+--  * inner ..| iter = wrapI (runI . popI) $ inner iter
+--      But this would discard left-over input if the inner enumerator
+--      just returns an unfinished iter upon hitting some input
+--      boundary.
+-- 
 infixr 4 ..|
 
 -- | A @Codec@ is an 'Iter' that tranlates data from some input type
@@ -1395,33 +1424,6 @@ enumI codec0 iter           = lift (runIter codec0 chunkEOF) >>= check
       check codec | isIterEOFError codec = return iter
                   | isIterError codec    = EnumIFail (getIterError codec) iter
                   | otherwise            = return iter
-
-{-
-enumI codec0 (IterM m) = IterM $ m >>= return . enumI codec0
-enumI codec0 iter0@(IterF _) = IterF $ \c -> runIter codec0 c >>= nextCodec
-    where
-      nextCodec codec@(IterF _)    = return $ enumI codec iter0
-      nextCodec (Done codecr cOut) = nextIter codecr cOut
-      nextCodec codec
-          | isIterEOFError codec   = return $ return iter0
-          | otherwise              = return $ EnumIFail (getIterError codec)
-                                                        iter0
-      nextIter CodecX cOut = return $ Done iter0 cOut
-      nextIter (CodecE dat) cOut = do
-        iter <- runIter iter0 (chunk dat)
-        return $ Done iter cOut
-      nextIter (CodecF codec dat) cOut@(Chunk _ eof) = do
-        iter <- runIter iter0 (chunk dat)
-        if eof then return $ Done iter cOut
-               else runIter (enumI codec iter) cOut
-
--- If iter finished, still must feed EOF to codec before returning iter
-enumI codec0 iter = IterF $ \(Chunk t eof) -> do
-  codec <- runIter codec0 (Chunk t True)
-  case codec of
-    Done _ (Chunk t' _) -> return $ Done iter (Chunk t' eof)
-    _                   -> return $ EnumIFail (getIterError codec) iter
--}
 
 -- | Transcode (until codec throws an EOF error, or until after it has
 -- received EOF).

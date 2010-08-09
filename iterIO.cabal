@@ -42,12 +42,13 @@ Description:
 
 Library
   Build-Depends: base >= 4 && < 5,
-                 binary >= 0.5 && < 1,
-                 bytestring >= 0.9 && < 1.0,
+                 binary >= 0.5 && < 2,
+                 bytestring >= 0.9 && < 2,
+		 stringsearch >= 0.3 && < 2,
                  mtl >= 1.1.0.2 && < 2,
                  network >= 2.2 && < 3.0,
                  ListLike >= 1.0 && < 2.0,
-                 directory >=1.0 && < 2.0
+                 directory >= 1.0 && < 2.0
   Exposed-modules:
     Data.IterIO, Data.IterIO.Base, Data.IterIO.ListLike,
     Data.IterIO.Extra, Data.IterIO.Parse
