@@ -1061,7 +1061,13 @@ popI (EnumOFail e i) = EnumOFail e $ popI i
 -- inner 'Iter' becomes the result in the outer 'Iter' Monad.  This is
 -- similar to 'popI', but where 'popI' returns an 'Iter' taking the
 -- inner input type, @joinI@ returns an 'Iter' of the outer input
--- type.
+-- type.  Note that the behavior of @joinI@ is very similar to what
+-- one would obtain by defining @joinI iter = iter >>= 'runI'@, with
+-- one big difference:  In @iter >>= 'runI'@, the @>>=@ operator will
+-- translate any enumerator ('EnumOFail' or 'EnumIFail') failure into
+-- an 'IterFail' failure.  By contrast, @joinI@ converts both types of
+-- enumerator failure into an 'EnumOFail', thereby preserving the
+-- state of the iteratee for possible resumption by 'resumeI'.
 joinI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Iter tOut m (Iter tIn m a)
      -> Iter tOut m a
@@ -1077,9 +1083,10 @@ joinI (EnumOFail e i) = EnumOFail e $ joinI i
 -- except that if the 'Iter' is in the 'IterM' state, it is executed
 -- until it enters another state.  If it is in the 'IterF' state, it
 -- is fed an empty input chunk, to give it a chance to execute monadic
--- actions.  Thus, 'Iter's that do not require data, such as
--- @returnI $ liftIO $ ...@, can execute and return a result (possibly
--- reflecting exceptions) immediately.
+-- actions.  [Though the latter behavior may change for 'IterF', since
+-- 'IterM' processing might be sufficient.]  Thus, 'Iter's that do not
+-- require data, such as @returnI $ liftIO $ ...@, can execute and
+-- return a result (possibly reflecting exceptions) immediately.
 returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
            Iter tIn m a
         -> Iter tOut m (Iter tIn m a)
@@ -1091,8 +1098,8 @@ returnI iter           = return iter
 -- ensures the returned 'Iter' is not in the 'IterF' state.  Moreover,
 -- if the returned 'Iter' is in the 'Done' state, then the left over
 -- data will be pulled up to the enclosing 'Iter', so that the
--- returned 'Iter' always has 'mempty' data.  (The @eof@ flag is
--- preserved, however.)
+-- returned 'Iter' always has 'mempty' data.  (The EOF flag in the
+-- left-over 'Chunk' is preserved, however.)
 resultI :: (ChunkData t, Monad m) =>
            Iter t m a -> Iter t m (Iter t m a)
 resultI = wrapI fixdone
