@@ -792,12 +792,13 @@ copyInput iter1 = doit mempty iter1
       doit acc iter       = return (iter, acc)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
--- 'Iter', and rewinds the input if the 'Iter' fails.  Thus, if it
--- returns @'Left' exception@, the next 'Iter' to be invoked will see
--- the same input that caused the previous 'Iter' to fail.  (For this
--- reason, it makes no sense ever to call 'resumeI' on the 'Iter' you
--- get back from @backtrackI@, and @tryBI@ thus does not return the
--- failing Iteratee the way 'tryI' does.)
+-- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
+-- @tryBI@ stands for \"backtracking\".)  Thus, if @tryBI@ returns
+-- @'Left' exception@, the next 'Iter' to be invoked will see the same
+-- input that caused the previous 'Iter' to fail.  (For this reason,
+-- it makes no sense ever to call 'resumeI' on the 'Iter' you get back
+-- from @tryBI@, which is why @tryBI@ does not return the failing
+-- Iteratee the way 'tryI' does.)
 --
 -- Because @tryBI@ saves a copy of all input, it can consume a lot of
 -- memory and should only be used when the 'Iter' argument is known to
@@ -860,8 +861,8 @@ tryBI iter1 = copyInput iter1 >>= errToEither
 --
 -- Another subtlety to keep in mind is that, when fusing enumerators,
 -- the type of the outer enumerator must reflect the fact that it is
--- wrapped around an inner numerator.  Consider the following test, in
--- which an exception thrown by an inner enumerator is caught:
+-- wrapped around an inner enumerator.  Consider the following test,
+-- in which an exception thrown by an inner enumerator is caught:
 --
 -- > inumBad :: (ChunkData t, Monad m) => EnumI t t m a
 -- > inumBad = enumI' $ fail "inumBad"
@@ -1192,10 +1193,10 @@ type EnumO t m a = Iter t m a -> Iter t m a
 -- modes midstream.  Transcoding is done by @EnumI@s.  To change
 -- transcoding methods after applying an @EnumI@ to an iteratee
 -- requires the ability to \"pop\" the iteratee back out of the
--- @EnumI@ so as to be able to hand it to another @EnumI@.  The
--- 'joinI' function provides this popping function in its most general
--- form, though, if one only needs 'EnumI' concatenation, the simpler
--- 'catI' function serves this purpose.
+-- @EnumI@ so as to be able to hand it to another @EnumI@.  The 'popI'
+-- function provides this function in its most general form, though,
+-- if one only needs 'EnumI' concatenation, the simpler 'catI'
+-- function serves this purpose.
 --
 -- As with 'EnumO's, an @EnumI@ must never feed an EOF chunk to its
 -- iteratee.  Instead, upon receiving EOF, the @EnumI@ should simply
@@ -1311,7 +1312,9 @@ infixr 4 ..|
 -- This convention allows @Codec@s to maintain state from one
 -- invocation to the next by currying the state into the codec
 -- function the next time it is invoked.  A @Codec@ that cannot
--- process more input returns a 'CodecR' in the 'CodecE' state.
+-- process more input returns a 'CodecR' in the 'CodecE' state, if
+-- there is some final output, or the 'CodecX' state, if there is
+-- nothing more to feed to the 'Iter'.
 type Codec tArg m tRes = Iter tArg m (CodecR tArg m tRes)
 
 -- | The result type of a 'Codec' that translates from type @tArg@ to
@@ -1332,7 +1335,7 @@ data CodecR tArg m tRes = CodecF { unCodecF :: (Codec tArg m tRes)
                           -- ^ An alternative to 'CodecE' when the
                           -- 'Codec' is ending and additionally did
                           -- not receive enough input to produce one
-                          -- last item.
+                          -- last output.
 
 -- | Transform an ordinary 'Iter' into a stateless 'Codec'.
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
@@ -1365,8 +1368,8 @@ enumO codec0 iter@(IterF _) = resultI (runI codec0) >>= nextCodec
 enumO _ iter                = iter
 
 -- | Like 'enumO', but the input function returns raw data, not
--- 'Chunk's.  The only way to signal EOF is therefore to raise an
--- EOF exception.
+-- 'Chunk's.  The only way to signal EOF is therefore to raise an EOF
+-- exception (either from within 'liftIO', or with 'throwEOFI').
 enumO' :: (Monad m, ChunkData t) =>
           Iter () m t
        -> EnumO t m a
