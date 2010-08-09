@@ -238,18 +238,20 @@ instance Exception IterParseErr where
 -- may execute actions (using the monad transformer 'lift' method),
 -- and @a@ is the result type of the iteratee.
 --
--- An @Iter@ is in one of three states:  it may require more input, it
--- may have produced a result, or it may have failed.  The first case
--- is signaled by the 'IterF' constructor, which contains a function
--- from a 'Chunk' of data to a new state of the iteratee (in monad
--- @m@).  The second case is signaled by the 'Done' constructor, which
--- returns both a result of type @a@, and a 'Chunk' containing any
--- residual input the iteratee did not consume.  Finally, failure is
--- signaled by either 'IterFail', 'EnumOFail', or 'EnumIFail',
--- depending on whether the failure occured in an iteratee, an outer
--- enumerator, or an inner enumerator.  (In the last two cases, when
--- an enumerator failed, the result also includes the state of the
--- iteratee, which usually has not failed.)
+-- An @Iter@ is in one of four states:  it may wish to execute monadic
+-- actions in the transformed monad, it may require more input, it may
+-- have produced a result, or it may have failed.  The first case is
+-- signaled by the 'IterM' constructor.  The second by the 'IterF'
+-- constructor, which contains a function from a 'Chunk' of data to a
+-- new state of the iteratee (in monad @m@).  The third case is
+-- signaled by the 'Done' constructor, which returns both a result of
+-- type @a@, and a 'Chunk' containing any residual input the iteratee
+-- did not consume.  Finally, failure is signaled by one of
+-- 'IterFail', 'EnumOFail', or 'EnumIFail', depending on whether the
+-- failure occured in an iteratee, an outer enumerator, or an inner
+-- enumerator.  (In the last two cases, when an enumerator failed, the
+-- result also includes the state of the iteratee, which usually has
+-- not failed.)
 --
 -- Note that @Iter t@ is a 'MonadTrans' and @Iter t m@ is a a 'Monad'
 -- (as discussed in the documentation for module "Data.IterIO").
