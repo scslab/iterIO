@@ -177,7 +177,18 @@ isChunkEOF (Chunk t eof) = eof && null t
 instance (ChunkData t) => Monoid (Chunk t) where
     mempty = Chunk mempty False
     mappend (Chunk a False) (Chunk b eof) = Chunk (mappend a b) eof
-    mappend a (Chunk b True) | null b     = a
+    -- We mostly want to avoid appending data to a Chunk that has the
+    -- EOF bit set, but make an exception for appending a null chunk,
+    -- so that code like the following will work:
+    --
+    -- execIter $ (Done (Done "" (Chunk "" True)) (Chunk "" False)) >>= id
+    --
+    -- While the above code may seem arcane, something similar happens
+    -- with, for instance:
+    --
+    -- do iter <- lift $ runIter (return "") chunkEOF
+    --    iter
+    mappend a (Chunk b _) | null b        = a
     mappend _ _                           = error "mappend to EOF"
 
 instance (ChunkData t) => ChunkData (Chunk t) where

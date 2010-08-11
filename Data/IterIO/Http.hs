@@ -1,13 +1,10 @@
 
-module Data.IterIO.Http (
-                        ) where
+module Data.IterIO.Http where
 
-import Control.Monad.Trans
 import Data.Array.Unboxed
 import Data.Bits
-import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy.Char8 as L8
-import Data.ByteString.Internal (w2c, c2w)
+import Data.ByteString.Internal (w2c)
 import Data.Char
 import Data.Int
 import Data.Word
@@ -15,11 +12,11 @@ import Text.Printf
 
 import Data.IterIO
 import Data.IterIO.Parse
-import Data.IterIO.Search
+-- import Data.IterIO.Search
 
 import System.IO
 
-import Debug.Trace
+-- import Debug.Trace
 
 type S = L8.ByteString
 
@@ -48,6 +45,9 @@ spaces = skipWhile1I (\c -> c == eord ' ' || c == eord '\t')
 
 lws :: (Monad m) => Iter S m S
 lws = optional crlf >> L8.singleton ' ' <$ spaces <?> "linear white space"
+
+olws :: (Monad m) => Iter S m S
+olws = lws <|> return L8.empty
 
 noctl :: (Monad m) => Iter S m S
 noctl = while1I (\c -> c >= 0x20 && c < 0x7f) <?> "non-control characters"
@@ -122,14 +122,14 @@ inumFromChunks :: (Monad m) => EnumI S S m a
 inumFromChunks = enumI getsize
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
-      chunk_ext_val = do char '"'; osp; token <|> quoted_string; osp
-      chunk_ext = do char ';'; osp; token; osp; optional chunk_ext_val
+      chunk_ext_val = do _ <- char '"'; osp; _ <- token <|> quoted_string; osp
+      chunk_ext = do _ <- char ';'; osp; _ <- token; osp; optional chunk_ext_val
 
       getsize = do
         size <- hexInt
         osp
         skipMany chunk_ext
-        crlf
+        _ <- crlf
         if size > 0 then getdata size else gettrailer
 
       getdata n = do
@@ -158,38 +158,34 @@ hTTPvers = do
   minor <- whileI (isDigit . w2c) >>= readI
   return (major, minor)
 
+request_line :: (Monad m) => Iter S m (String, String, Int, Int)
+request_line = do
+  method <- while1I (isUpper . w2c)
+  spaces
+  uri <- while1I (not . isSpace . w2c)
+  spaces
+  (major, minor) <- hTTPvers
+  optional spaces
+  crlf
+  return (unpack method, unpack uri, major, minor)
+
+qvalue :: (Monad m) => Iter S m Int
+qvalue = do char 'q'; olws; char '='; olws; frac <|> one
+    where
+      frac = do char '0'
+                char '.' \/ return 0 $ \_ ->
+                    whileMinMaxI 1 3 (isDigit . w2c) \/ return 0 $ readI
+      one = do char '1'
+               optional $ do char '.'
+                             optional $ whileMinMaxI 0 3 (== eord '0')
+               return 1000
+            
+
 hdrLine :: (Monad m) => Iter S m S
 hdrLine = lineI <++> foldrI L8.append L8.empty contLine
     where contLine = lws <++> lineI
 
-{-
-breakC :: (Monad m) => S -> Codec S m S
-breakC pat0 = search
-    where
-      patstrict = strictify pat0
-      dobreak = breakOn patstrict
-      pattern = L8.fromChunks [patstrict]
-      patlen  = L8.length pattern
 
-      search = do
-        (Chunk t eof) <- chunkI
-        let (payload, more) = dobreak t
-        case () of
-          _ | not (L8.null more) ->
-                Done (CodecE payload) (chunk $ L8.drop patlen more)
-          _ | eof -> expectedI $ show $ unpack pattern
-          _ -> codecf payload
-
-      codecf p =
-          let plen = L8.length p
-              start = if plen <= patlen then 0 else plen - patlen
-              stop = cut start $ L8.drop start p
-              (payload, more) = if stop == plen
-
-      cut n p | L8.null p                 = n
-      cut n p | p `L8.isPrefixOf` pattern = n
-      cut n p | otherwise                 = cut (n+1) (L8.tail p)
--}
 
 
 hdr :: (Monad m) => Iter S m [S]
