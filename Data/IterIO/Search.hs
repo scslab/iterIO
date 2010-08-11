@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Data.IterIO.Search (inumToString
+module Data.IterIO.Search (inumStopString
                           ) where
 
 import qualified Data.ByteString.Char8 as S8
@@ -9,15 +9,15 @@ import qualified Data.ByteString.Lazy.Search as Search
 
 import Data.IterIO
 
-import Control.Monad.Trans
-import System.IO
-
-type S = L8.ByteString
+-- import Control.Monad.Trans
+-- import System.IO
 
 -- | Feeds input to an Iteratee until some boundary string is found.
 -- The boundary string is then discarded.
-inumToString :: (Monad m) => S -> EnumI S S m a
-inumToString pat0 = enumI $ nextChunk L8.empty
+inumStopString :: (Monad m) =>
+                  L8.ByteString
+               -> EnumI L8.ByteString L8.ByteString m a
+inumStopString pat0 = enumI $ nextChunk L8.empty
     where
       spat = Search.strictify pat0
       lpat = L8.fromChunks [spat]
@@ -44,12 +44,10 @@ inumToString pat0 = enumI $ nextChunk L8.empty
           else firstPossibleMatch (n + 1) (L8.tail t)
 
 
+{-
 main :: IO ()
 main = enumHandle stdin |$ do
-         inumToString "TheEnd" ..| handleI stdout
-         -- inumToString "TheEnd" (handleI stdout) >>= id
+         inumStopString "TheEnd" ..| handleI stdout
          liftIO $ putStrLn "\n\n*** We have reached THE END #1 ***\n\n"
-         inumToString "TheEnd" ..| handleI stdout
-
-
-           
+         inumStopString "TheEnd" ..| handleI stdout
+-}

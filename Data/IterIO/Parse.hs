@@ -5,10 +5,13 @@
 
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orEmpty, (<?>)
-                         , foldrI, foldr1I, foldlI, foldl1I, foldMI, foldM1I
+                         , foldrI, foldr1I, foldrMinMaxI
+                         , foldlI, foldl1I, foldMI, foldM1I
                          , peekI, skipI, ensureI
-                         , skipWhileI, skipWhile1I, whileI, while1I
-                         , concatI, concat1I, readI
+                         , skipWhileI, skipWhile1I
+                         , whileI, while1I, whileMaxI, whileMinMaxI
+                         , concatI, concat1I, concatMinMaxI
+                         , readI
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
                          , (>$>), (<++>), (<:>), nil
@@ -163,6 +166,22 @@ foldr1I :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
 foldr1I f z iter = f <$> iter <*> foldrI f z iter
 
+-- | A version of 'foldrI' that must parse between a minimum and a
+-- maximum number of items.
+foldrMinMaxI :: (ChunkData t, Monad m) =>
+                Int             -- ^ Minimum number to parse
+             -> Int             -- ^ Maximum number to parse
+             -> (a -> b -> b)   -- ^ Folding function
+             -> b               -- ^ Rightmost value
+             -> Iter t m a      -- ^ Iteratee generating items to fold
+             -> Iter t m b
+foldrMinMaxI nmin nmax f z iter
+    | nmin > nmax = throwI $ IterParseErr "foldrMinMaxI: min > max"
+    | nmin > 0    = f <$> iter <*> foldrMinMaxI (nmin - 1) (nmax - 1) f z iter
+    | nmax == 0   = return z
+    | nmax < 0    = throwI $ IterParseErr "foldrMinMaxI: negative max"
+    | otherwise   = iter \/ return z $ f >$> foldrMinMaxI 0 (nmax - 1) f z iter
+
 -- | Strict left fold over an iteratee (until it throws an
 -- 'IterNoParse' exception).  @foldlI f z iter@ is sort of equivalent
 -- to:
@@ -179,9 +198,11 @@ foldl1I :: (ChunkData t, Monad m) =>
            (b -> a -> b) -> b -> Iter t m a -> Iter t m b
 foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
 
--- | @foldMI@ is to 'foldlI' as 'foldM' is to @`foldl'`@.
+-- | @foldMI@ is a left fold in which the folding function can execute
+-- monadic actions.  Essentially @foldMI@ is to 'foldlI' as 'foldM' is
+-- to @`foldl'`@ in the standard libraries.
 foldMI :: (ChunkData t, Monad m) =>
-           (b -> a -> Iter t m b) -> b -> Iter t m a -> Iter t m b
+          (b -> a -> Iter t m b) -> b -> Iter t m a -> Iter t m b
 foldMI f z0 iter = foldNext z0
     where foldNext z = iter \/ return z $ f z >=> foldNext
 
@@ -231,7 +252,7 @@ skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
 
 -- | Return all input elements up to the first one that does not match
 -- the specified predicate.
-whileI :: (Show t, LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t
+whileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t
 whileI test = more LL.empty
     where
       more t0 = IterF $ \(Chunk t eof) ->
@@ -242,9 +263,34 @@ whileI test = more LL.empty
 
 -- | Like 'whileI', but fails if at least one element does not satisfy
 -- the predicate.
-while1I :: (Show t, ChunkData t, LL.ListLike t e, Monad m) =>
+while1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
 while1I test = ensureI test >> whileI test <?> "while1I"
+
+-- | A variant of 'whileI' with a maximum number matches.
+whileMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
+             Int                  -- ^ Maximum number to match
+          -> (e -> Bool)          -- ^ Predicate test
+          -> Iter t m t
+whileMaxI nmax test = IterF $ \(Chunk t eof) -> return $
+        let s = LL.takeWhile test $ LL.take nmax t
+            slen = LL.length s
+            rest = LL.drop slen t
+        in if slen >= nmax || not (LL.null rest) || eof
+           then Done s $ Chunk rest eof
+           else LL.append s <$> whileMaxI (nmax - slen) test
+
+-- | A variant of 'whileI' with a minimum and maximum number matches.
+whileMinMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
+                Int                  -- ^ Minumum number
+             -> Int                  -- ^ Maximum number
+             -> (e -> Bool)          -- ^ Predicate test
+             -> Iter t m t
+whileMinMaxI nmin nmax test = do
+  result <- whileMaxI nmax test
+  if LL.length result >= nmin
+    then return result
+    else expectedI "whileMinMaxI minimum"
 
 -- | Repeatedly execute an 'Iter' returning a 'Monoid' and 'mappend'
 -- all the results in a right fold.
@@ -257,6 +303,15 @@ concatI iter = foldrI mappend mempty iter
 concat1I :: (ChunkData t, Monoid s, Monad m) =>
            Iter t m s -> Iter t m s
 concat1I iter = foldr1I mappend mempty iter
+
+-- | A version of 'concatI' that takes a minimum and maximum number of
+-- items to parse.
+concatMinMaxI :: (ChunkData t, Monoid s, Monad m) =>
+                 Int            -- ^ Minimum number to parse
+              -> Int            -- ^ Maximum number to parse
+              -> Iter t m s     -- ^ Iteratee whose results to concatenate
+              -> Iter t m s
+concatMinMaxI nmin nmax iter = foldrMinMaxI nmin nmax mappend mempty iter
                                
                                
 -- | This Iteratee parses a 'LL.StringLike' argument.  It does not

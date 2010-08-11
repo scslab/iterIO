@@ -1,5 +1,6 @@
 
-module Data.IterIO.Http where
+module Data.IterIO.Http (
+                        ) where
 
 import Control.Monad.Trans
 import Data.Array.Unboxed
@@ -10,9 +11,11 @@ import Data.ByteString.Internal (w2c, c2w)
 import Data.Char
 import Data.Int
 import Data.Word
+import Text.Printf
+
 import Data.IterIO
 import Data.IterIO.Parse
-import Text.Printf
+import Data.IterIO.Search
 
 import System.IO
 
@@ -150,10 +153,10 @@ bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
 hTTPvers :: (Monad m) => Iter S m (Int, Int)
 hTTPvers = do
   string "HTTP/"
-  maj <- whileI (isDigit . w2c) >>= readI
+  major <- whileI (isDigit . w2c) >>= readI
   char '.'
-  min <- whileI (isDigit . w2c) >>= readI
-  return (maj, min)
+  minor <- whileI (isDigit . w2c) >>= readI
+  return (major, minor)
 
 hdrLine :: (Monad m) => Iter S m S
 hdrLine = lineI <++> foldrI L8.append L8.empty contLine
