@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
 module Data.IterIO.Http where
 
@@ -46,8 +47,8 @@ spaces = skipWhile1I (\c -> c == eord ' ' || c == eord '\t')
 lws :: (Monad m) => Iter S m S
 lws = optional crlf >> L8.singleton ' ' <$ spaces <?> "linear white space"
 
-olws :: (Monad m) => Iter S m S
-olws = lws <|> return L8.empty
+olws :: (Monad m) => Iter S m ()
+olws = lws \/ return () $ const $ return ()
 
 noctl :: (Monad m) => Iter S m S
 noctl = while1I (\c -> c >= 0x20 && c < 0x7f) <?> "non-control characters"
@@ -122,14 +123,14 @@ inumFromChunks :: (Monad m) => EnumI S S m a
 inumFromChunks = enumI getsize
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
-      chunk_ext_val = do _ <- char '"'; osp; _ <- token <|> quoted_string; osp
-      chunk_ext = do _ <- char ';'; osp; _ <- token; osp; optional chunk_ext_val
+      chunk_ext_val = do char '"'; osp; token <|> quoted_string; osp
+      chunk_ext = do char ';'; osp; token; osp; optional chunk_ext_val
 
       getsize = do
         size <- hexInt
         osp
         skipMany chunk_ext
-        _ <- crlf
+        crlf
         if size > 0 then getdata size else gettrailer
 
       getdata n = do
@@ -139,7 +140,7 @@ inumFromChunks = enumI getsize
 
       gettrailer = do
         skipMany (noctl >> crlf)
-        crlf
+        skipI crlf
         return $ CodecE L8.empty
 
 -- | Mime boundary characters
@@ -160,13 +161,19 @@ hTTPvers = do
 
 request_line :: (Monad m) => Iter S m (String, String, Int, Int)
 request_line = do
+  -- Section 4.1 of RFC2616:  "In the interest of robustness, servers
+  -- SHOULD ignore any empty line(s) received where a Request-Line is
+  -- expected. In other words, if the server is reading the protocol
+  -- stream at the beginning of a message and receives a CRLF first,
+  -- it should ignore the CRLF."
+  skipMany crlf
   method <- while1I (isUpper . w2c)
   spaces
   uri <- while1I (not . isSpace . w2c)
   spaces
   (major, minor) <- hTTPvers
   optional spaces
-  crlf
+  skipI crlf
   return (unpack method, unpack uri, major, minor)
 
 qvalue :: (Monad m) => Iter S m Int
