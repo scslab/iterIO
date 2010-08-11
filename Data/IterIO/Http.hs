@@ -103,9 +103,10 @@ comment = char '('
           <?> "comment"
 
 quoted_string :: (Monad m) => Iter S m S
-quoted_string = char '"'
-                <:> concatI (text_except "\"" <|> quoted_pair)
-                <++> string "\""
+quoted_string = do char '"'
+                   ret <- concatI (text_except "\"" <|> quoted_pair)
+                   char '"'
+                   return ret
 
 inumToChunks :: (Monad m) => EnumI S S m a
 inumToChunks = enumI $ iterToCodec doChunk
@@ -159,7 +160,37 @@ hTTPvers = do
   minor <- whileI (isDigit . w2c) >>= readI
   return (major, minor)
 
-request_line :: (Monad m) => Iter S m (String, String, Int, Int)
+-- | RFC3986 unreserved characters
+isUnreserved :: Word8 -> Bool
+isUnreserved c | c > 0x7f  = False
+               | otherwise = unReservedTab ! c
+    where
+      unReservedTab :: UArray Word8 Bool
+      unReservedTab = listArray (0, 127) $ fmap pred ['\0'..'\177']
+      pred c = c `elem` "-._~" || isAlphaNum c
+
+{-
+uri :: Iter S m (String, String, String)
+uri = absUri
+    where
+      absUri = do
+        s <- scheme
+        char ':'
+      scheme = satisfy (isAlpha . w2c) <:>
+               many (satisfy (\c -> isAlphaNum c || c `elem` "+-.") . w2c)
+-}
+
+data HttpReq = HttpReq {
+      reqMethod :: String
+    , reqURI :: String
+    , reqHost :: String
+    , reqVersMaj :: Int
+    , reqVersMin :: Int
+    } deriving (Show)
+
+
+
+request_line :: (Monad m) => Iter S m HttpReq
 request_line = do
   -- Section 4.1 of RFC2616:  "In the interest of robustness, servers
   -- SHOULD ignore any empty line(s) received where a Request-Line is
@@ -169,12 +200,18 @@ request_line = do
   skipMany crlf
   method <- while1I (isUpper . w2c)
   spaces
-  uri <- while1I (not . isSpace . w2c)
+  host <- (while1I (isLower . w2c) <* string ":/") <|> return ""
+  uri <- char '/' <:> while1I (not . isSpace . w2c)
   spaces
   (major, minor) <- hTTPvers
   optional spaces
   skipI crlf
-  return (unpack method, unpack uri, major, minor)
+  return HttpReq { reqMethod = unpack $ method
+                 , reqURI = unpack $ uri
+                 , reqHost = ""
+                 , reqVersMaj = major
+                 , reqVersMin = minor
+                 }
 
 qvalue :: (Monad m) => Iter S m Int
 qvalue = do char 'q'; olws; char '='; olws; frac <|> one
@@ -186,6 +223,23 @@ qvalue = do char 'q'; olws; char '='; olws; frac <|> one
                optional $ do char '.'
                              optional $ whileMinMaxI 0 3 (== eord '0')
                return 1000
+
+kEqVal :: (Monad m) => Iter S m S -> Iter S m (S, S)
+kEqVal kiter = do
+  olws
+  k <- kiter
+  olws; char '='; olws
+  v <- token <|> quoted_string
+  return (k, v)
+
+cookie_hdr :: (Monad m) => Iter S m [(S, S)]
+cookie_hdr = do
+  string "Cookie:"
+  vers <- kEqVal $ string "$Version"
+  sep
+  sepBy1 (kEqVal token) sep <* (spaces >> crlf)
+    where
+      sep = do olws; char ';' <|> char ','
             
 
 hdrLine :: (Monad m) => Iter S m S
