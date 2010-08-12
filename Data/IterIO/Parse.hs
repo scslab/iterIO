@@ -10,6 +10,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , peekI, skipI, ensureI
                          , skipWhileI, skipWhile1I
                          , whileI, while1I, whileMaxI, whileMinMaxI
+                         , whileStateI
                          , concatI, concat1I, concatMinMaxI
                          , readI
                          -- * Applicative combinators
@@ -250,25 +251,28 @@ skipWhile1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
                (e -> Bool) -> Iter t m ()
 skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
 
-whileFoldI :: (LL.ListLike t e, Monad m, ChunkData t) =>
-              ((e, a) -> Either a a) -> a
-           -> Iter t m (t, a)
-whileFoldI f z0 = dochunk LL.empty z0
+-- | A variant of 'whileI' in which the predicate function can keep
+-- state.  The predicate function returns @'Right' state@ while it
+-- should accept elements, and @'Left' state@ when it hits the first
+-- character that should not be included in the returned string.
+whileStateI :: (LL.ListLike t e, Monad m, ChunkData t) =>
+               (a -> e -> Either a a) -- ^ Preidcate function
+            -> a                      -- ^ Initial state
+            -> Iter t m (t, a)        -- ^ (accepted input, modified state)
+whileStateI f z0 = dochunk id z0
     where
       dochunk acc z = do
         (Chunk t eof) <- chunkI
-        let (z', len) = scanchunk (z, 0) t
-            (a, b)    = LL.splitAt len t
-            t'        = mappend acc a
+        let (end, (z', len)) = LL.foldr ff ((,) True) t (z, 0)
+            (a, b)           = if end then (t, LL.empty) else LL.splitAt len t
+            t'               = acc . mappend a
         if LL.null b && not eof
           then dochunk t' z'
-          else Done (t', z') (Chunk b eof)
-      scanchunk (z, n) t
-          | LL.null t = (z, n)
-          | otherwise = case f (LL.head t, z) of
-                          Right z' -> scanchunk (z', n + 1) $ LL.tail t
-                          Left z'  -> (z', n)
-
+          else Done (t' LL.empty, z') (Chunk b eof)
+      ff e dorest = \(z, n) -> z `seq` n `seq`
+                  case f z e of
+                    Left z'  -> (False, (z', n))
+                    Right z' -> dorest (z', n + 1)
 
 -- | Return all input elements up to the first one that does not match
 -- the specified predicate.
