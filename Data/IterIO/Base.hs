@@ -794,13 +794,18 @@ tryI = wrapI errToEither
 copyInput :: (ChunkData t, Monad m) =>
           Iter t m a
        -> Iter t m (Iter t m a, Chunk t)
-copyInput iter1 = doit mempty iter1
+copyInput iter1 = doit id iter1
     where
+      -- It is usually faster to use mappend in a right associative
+      -- way (i.e, mappend a1 (mappend a2 (mappand a3 a4)) will be
+      -- faster than mappend (mappend (mappend a1 a2) a3) a4).  Thus,
+      -- we pass use a function as the accumulator, much the way
+      -- 'ShowS' optimizes (++) on srings.
       doit acc iter@(IterF _) =
-          IterF $ \c -> runIter iter c >>= return . doit (mappend acc c)
+          IterF $ \c -> runIter iter c >>= return . doit (acc . mappend c)
       doit acc (IterM m)  = IterM $ m >>= return . doit acc
-      doit acc (Done a c) = Done (return a, acc) c
-      doit acc iter       = return (iter, acc)
+      doit acc (Done a c) = Done (return a, acc mempty) c
+      doit acc iter       = return (iter, acc mempty)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in

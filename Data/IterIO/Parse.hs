@@ -250,6 +250,26 @@ skipWhile1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
                (e -> Bool) -> Iter t m ()
 skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
 
+whileFoldI :: (LL.ListLike t e, Monad m, ChunkData t) =>
+              ((e, a) -> Either a a) -> a
+           -> Iter t m (t, a)
+whileFoldI f z0 = dochunk LL.empty z0
+    where
+      dochunk acc z = do
+        (Chunk t eof) <- chunkI
+        let (z', len) = scanchunk (z, 0) t
+            (a, b)    = LL.splitAt len t
+            t'        = mappend acc a
+        if LL.null b && not eof
+          then dochunk t' z'
+          else Done (t', z') (Chunk b eof)
+      scanchunk (z, n) t
+          | LL.null t = (z, n)
+          | otherwise = case f (LL.head t, z) of
+                          Right z' -> scanchunk (z', n + 1) $ LL.tail t
+                          Left z'  -> (z', n)
+
+
 -- | Return all input elements up to the first one that does not match
 -- the specified predicate.
 whileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t

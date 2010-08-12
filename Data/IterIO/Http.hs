@@ -4,10 +4,13 @@ module Data.IterIO.Http where
 
 import Data.Array.Unboxed
 import Data.Bits
+import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.ByteString.Internal (w2c)
+import Data.Bits
 import Data.Char
 import Data.Int
+import Data.List
 import Data.Word
 import Text.Printf
 
@@ -83,6 +86,19 @@ hexInt = foldM1I digit 0 hex
       maxok = maxBound `shiftR` 4
       digit n d | n > maxok = throwI (IterParseErr "hex integer too large")
                 | otherwise = return $ (n `shiftL` 4) .|. d
+
+-- | Percent-decode input for as long as the non percent-escaped
+-- characters match some predicate.
+percent_decode :: (Monad m) => (Word8 -> Bool) -> Iter S m S
+percent_decode pred = foldrI L.cons' L.empty getc
+    where
+      getc = do
+        c <- headLikeI
+        case c :: Word8 of
+          _ | c == eord '%' -> getval
+          _ | pred c        -> return c
+          _                 -> expectedI "percent_decode predicate"
+      getval = do hi <- hex; lo <- hex; return $ toEnum $ 16 * hi + lo
 
 tokenTab :: UArray Word8 Bool
 tokenTab = listArray (0,127) $ fmap isTokenChar [0..127]
@@ -160,18 +176,73 @@ hTTPvers = do
   minor <- whileI (isDigit . w2c) >>= readI
   return (major, minor)
 
--- | RFC3986 unreserved characters
-isUnreserved :: Word8 -> Bool
-isUnreserved c | c > 0x7f  = False
-               | otherwise = unReservedTab ! c
+
+
+-- | RFC3986 syntax classes unreserved characters
+rfc3986_unreserved :: Word8
+rfc3986_unreserved = 0x1
+
+rfc3986_gen_delims :: Word8
+rfc3986_gen_delims = 0x2
+
+rfc3986_sub_delims :: Word8
+rfc3986_sub_delims = 0x4
+
+rfc3986_schemechars :: Word8
+rfc3986_schemechars = 0x8
+
+rfc3986_addrchars :: Word8
+rfc3986_addrchars = 0x10
+
+rfc3986_syntax :: UArray Word8 Word8
+rfc3986_syntax = listArray (0, 255) $ fmap bits ['\0'..'\377']
     where
-      unReservedTab :: UArray Word8 Bool
-      unReservedTab = listArray (0, 127) $ fmap pred ['\0'..'\177']
-      pred c = c `elem` "-._~" || isAlphaNum c
+      bits c = foldl' (.|.) 0 [
+                 if isAlphaNum c || c `elem` "-._~"
+                 then rfc3986_unreserved else 0
+               , if c `elem` ":/?#[]@" then rfc3986_gen_delims else 0
+               , if c `elem` "!$&'()*+,;=" then rfc3986_sub_delims else 0
+               , if isAlphaNum c || c `elem` "+-."
+                 then rfc3986_schemechars else 0
+               , if isAlphaNum c || c `elem` "-._~:!$&'()*+,;="
+                 then rfc3986_addrchars else 0
+               ]
+
+rfc3986_test :: Word8 -> Word8 -> Bool
+rfc3986_test bit c = rfc3986_syntax ! c .&. bit /= 0
+
+isUnreserved :: Word8 -> Bool
+isUnreserved c = rfc3986_syntax ! c .&. rfc3986_unreserved /= 0
+
+host :: (Monad m) => Iter S m S
+host = (bracketed <|> percent_decode regnamechar)
+       <++> (char ':' <:> whileI (isDigit . w2c) <|> nil)
+    where
+      regnamechar c = 0 /= rfc3986_syntax ! c
+                      .&. (rfc3986_unreserved .|. rfc3986_sub_delims)
+      addrchar c = 0 /= rfc3986_syntax ! c .&. rfc3986_addrchars
+      bracketed = char '[' <:> percent_decode addrchar <++> char ']' <:> nil
+ 
+{-
+absUri :: Iter S m (String, String, String)
+absUri = do
+  scheme <- satisfy (isAlpha . w2c)
+            <:> while1I $ rfc3986_test rfc3986_schemechars
+  string "://"
+  optional $ userinfo >> string "@"
+  
+    where
+      userinfo = percent_decode $ rfc3986_test $
+                 rfc3986_unreserved .|. rfc3986_sub_delims
+-}
+  
 
 {-
 uri :: Iter S m (String, String, String)
 uri = absUri
+      <|> abspath
+      <|> authority
+      <|> string "*"
     where
       absUri = do
         s <- scheme
@@ -200,7 +271,7 @@ request_line = do
   skipMany crlf
   method <- while1I (isUpper . w2c)
   spaces
-  host <- (while1I (isLower . w2c) <* string ":/") <|> return ""
+  host <- (while1I (isLower . w2c) <* string ":/") <|> return L8.empty
   uri <- char '/' <:> while1I (not . isSpace . w2c)
   spaces
   (major, minor) <- hTTPvers
