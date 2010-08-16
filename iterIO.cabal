@@ -47,8 +47,8 @@ Library
                  stringsearch >= 0.3 && < 2,
                  mtl >= 1.1.0.2 && < 2,
                  network >= 2.2 && < 3.0,
-                 ListLike >= 1.0 && < 2.0,
-                 directory >= 1.0 && < 2.0
+                 ListLike >= 1.0 && < 2,
+                 directory >= 1.0 && < 2
   Exposed-modules:
     Data.IterIO, Data.IterIO.Base, Data.IterIO.ListLike,
     Data.IterIO.Extra, Data.IterIO.Parse, Data.IterIO.Search

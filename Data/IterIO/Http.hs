@@ -4,6 +4,8 @@ module Data.IterIO.Http where
 
 import Data.Array.Unboxed
 import Data.Bits
+import qualified Data.ByteString as S
+import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.ByteString.Internal (w2c)
@@ -22,13 +24,20 @@ import System.IO
 
 -- import Debug.Trace
 
-type S = L8.ByteString
+type L = L8.ByteString
 
-pack :: String -> S
+type S = S.ByteString
+
+strictify :: L -> S
+strictify = S.concat . L.toChunks
+
+{-
+pack :: String -> L
 pack = L8.pack
 
-unpack :: S -> String
+unpack :: L -> String
 unpack = L8.unpack
+-}
 
 eord :: (Enum e) => Char -> e
 eord = toEnum . ord
@@ -40,26 +49,26 @@ optional iter = skipI iter <|> return ()
 -- fields is the sequence CRLF.  However, we recommend that
 -- applications, when parsing such headers, recognize a single LF as a
 -- line terminator and ignore the leading CR."
-crlf :: (Monad m) => Iter S m Word8
+crlf :: (Monad m) => Iter L m Word8
 crlf = char '\r' *> char '\n' <|> char '\n'
 
-spaces :: (Monad m) => Iter S m ()
+spaces :: (Monad m) => Iter L m ()
 spaces = skipWhile1I (\c -> c == eord ' ' || c == eord '\t')
          <?> "spaces"
 
-lws :: (Monad m) => Iter S m S
+lws :: (Monad m) => Iter L m L
 lws = optional crlf >> L8.singleton ' ' <$ spaces <?> "linear white space"
 
-olws :: (Monad m) => Iter S m ()
+olws :: (Monad m) => Iter L m ()
 olws = lws \/ return () $ const $ return ()
 
-noctl :: (Monad m) => Iter S m S
+noctl :: (Monad m) => Iter L m L
 noctl = while1I (\c -> c >= 0x20 && c < 0x7f) <?> "non-control characters"
 
-text :: (Monad m) => Iter S m S
+text :: (Monad m) => Iter L m L
 text = concat1I (noctl <|> lws) <?> "text (Data.IterIO.Http)"
 
-text_except :: (Monad m) => String -> Iter S m S
+text_except :: (Monad m) => String -> Iter L m L
 text_except except = concat1I (while1I ok <|> lws)
     where
       ok c = c >= 0x20 && c < 0x7f && not (w2c c `elem` except)
@@ -71,7 +80,7 @@ hexTab = listArray (0,127) $ fmap digit ['\0'..'\177']
               | otherwise    = -1
 
 -- | Return one hex digit
-hex :: (Monad m) => Iter S m Int
+hex :: (Monad m) => Iter L m Int
 hex = headLikeI >>= digit <?> "hex digit"
     where
       digit c | c > 127   = expectedI "hex digit"
@@ -80,7 +89,7 @@ hex = headLikeI >>= digit <?> "hex digit"
                               n  -> return $ fromIntegral n
 
 -- | Parse a raw hexadecimal number (no "0x..." prefix).
-hexInt :: (Monad m) => Iter S m Int
+hexInt :: (Monad m) => Iter L m Int
 hexInt = foldM1I digit 0 hex
     where
       maxok = maxBound `shiftR` 4
@@ -89,7 +98,7 @@ hexInt = foldM1I digit 0 hex
 
 -- | Percent-decode input for as long as the non percent-escaped
 -- characters match some predicate.
-percent_decode :: (Monad m) => (Word8 -> Bool) -> Iter S m S
+percent_decode :: (Monad m) => (Word8 -> Bool) -> Iter L m L
 percent_decode pred = foldrI L.cons' L.empty getc
     where
       getc = do
@@ -106,37 +115,37 @@ tokenTab = listArray (0,127) $ fmap isTokenChar [0..127]
       isTokenChar c = c > 0x20 && c < 0x7f && not (elem (chr c) separators)
       separators = "()<>@,;:\\\"/[]?={} \t\177"
 
-token :: (Monad m) => Iter S m S
+token :: (Monad m) => Iter L m L
 token = while1I (\c -> c < 127 && tokenTab ! c) <?> "token"
 
-quoted_pair :: (Monad m) => Iter S m S
+quoted_pair :: (Monad m) => Iter L m L
 quoted_pair = char '\\' <:> headLikeI <:> nil
 
-comment :: (Monad m) => Iter S m S
+comment :: (Monad m) => Iter L m L
 comment = char '('
           <:> concatI (text_except "()" <|> quoted_pair <|> comment)
           <++> string ")"
           <?> "comment"
 
-quoted_string :: (Monad m) => Iter S m S
+quoted_string :: (Monad m) => Iter L m L
 quoted_string = do char '"'
                    ret <- concatI (text_except "\"" <|> quoted_pair)
                    char '"'
                    return ret
 
-inumToChunks :: (Monad m) => EnumI S S m a
+inumToChunks :: (Monad m) => EnumI L L m a
 inumToChunks = enumI $ iterToCodec doChunk
     where
       doChunk = do
         Chunk s eof <- chunkI
         let len       = L8.length s
-            chunksize = pack $ printf "%x\r\n" len
+            chunksize = L8.pack $ printf "%x\r\n" len
             trailer   = if eof && len > 0
-                        then pack "\r\n0\r\n\r\n"
-                        else pack "\r\n"
+                        then L8.pack "\r\n0\r\n\r\n"
+                        else L8.pack "\r\n"
         return $ L8.append chunksize $ L8.append s trailer
 
-inumFromChunks :: (Monad m) => EnumI S S m a
+inumFromChunks :: (Monad m) => EnumI L L m a
 inumFromChunks = enumI getsize
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
@@ -168,7 +177,7 @@ bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
       otherBChars = "'()/+_,-./:=? "
 
 
-hTTPvers :: (Monad m) => Iter S m (Int, Int)
+hTTPvers :: (Monad m) => Iter L m (Int, Int)
 hTTPvers = do
   string "HTTP/"
   major <- whileI (isDigit . w2c) >>= readI
@@ -194,6 +203,9 @@ rfc3986_schemechars = 0x8
 rfc3986_addrchars :: Word8
 rfc3986_addrchars = 0x10
 
+rfc3986_pcharslash :: Word8
+rfc3986_pcharslash = 0x20
+
 rfc3986_syntax :: UArray Word8 Word8
 rfc3986_syntax = listArray (0, 255) $ fmap bits ['\0'..'\377']
     where
@@ -206,6 +218,8 @@ rfc3986_syntax = listArray (0, 255) $ fmap bits ['\0'..'\377']
                  then rfc3986_schemechars else 0
                , if isAlphaNum c || c `elem` "-._~:!$&'()*+,;="
                  then rfc3986_addrchars else 0
+               , if isAlphaNum c || c `elem` "-._~!$&'()*+,;=:@/"
+                 then rfc3986_pcharslash else 0
                ]
 
 rfc3986_test :: Word8 -> Word8 -> Bool
@@ -214,77 +228,102 @@ rfc3986_test bit c = rfc3986_syntax ! c .&. bit /= 0
 isUnreserved :: Word8 -> Bool
 isUnreserved c = rfc3986_syntax ! c .&. rfc3986_unreserved /= 0
 
-host :: (Monad m) => Iter S m S
-host = (bracketed <|> percent_decode regnamechar)
-       <++> (char ':' <:> whileI (isDigit . w2c) <|> nil)
+hostI :: (Monad m) => Iter L m S
+hostI = (strictify <$> (bracketed <|> percent_decode regnamechar)
+         <++> (char ':' <:> whileI (isDigit . w2c) <|> nil))
+        <?> "host"
     where
       regnamechar c = 0 /= rfc3986_syntax ! c
                       .&. (rfc3986_unreserved .|. rfc3986_sub_delims)
       addrchar c = 0 /= rfc3986_syntax ! c .&. rfc3986_addrchars
       bracketed = char '[' <:> percent_decode addrchar <++> char ']' <:> nil
+
+pathI :: (Monad m) => Iter L m (S, S)
+pathI = dopath <?> "path"
+    where
+      dopath = do
+        path <- strictify <$>
+                (ensureI (== eord '/')
+                 *> percent_decode (rfc3986_test rfc3986_pcharslash))
+                <|> return (S8.pack "/")
+        query <- char '?' *> (strictify <$> whileI qpcharslash) <|> nil
+        return (path, query)
+      qpcharslash c = rfc3986_test rfc3986_pcharslash c || c == eord '?'
  
-{-
-absUri :: Iter S m (String, String, String)
+-- | Returns (scheme, host, path, query)
+absUri :: (Monad m) => Iter L m (S, S, S, S)
 absUri = do
-  scheme <- satisfy (isAlpha . w2c)
-            <:> while1I $ rfc3986_test rfc3986_schemechars
+  scheme <- strictify <$> satisfy (isAlpha . w2c)
+            <:> while1I (rfc3986_test rfc3986_schemechars)
   string "://"
   optional $ userinfo >> string "@"
-  
+  authority <- hostI
+  (path, query) <- pathI
+  return (scheme, authority, path, query)
     where
-      userinfo = percent_decode $ rfc3986_test $
-                 rfc3986_unreserved .|. rfc3986_sub_delims
--}
+      userinfo = percent_decode $ \c ->
+                 rfc3986_test (rfc3986_unreserved .|. rfc3986_sub_delims) c
+                 || c == eord ':'
   
-
-{-
-uri :: Iter S m (String, String, String)
+-- | Returns (scheme, host, path, query)
+uri :: (Monad m) => Iter L m (S, S, S, S)
 uri = absUri
-      <|> abspath
-      <|> authority
-      <|> string "*"
+      <|> path
+      <|> char '*' *> return (S.empty, S.empty, S8.pack "*", S.empty)
+      <?> "URI"
     where
-      absUri = do
-        s <- scheme
-        char ':'
-      scheme = satisfy (isAlpha . w2c) <:>
-               many (satisfy (\c -> isAlphaNum c || c `elem` "+-.") . w2c)
--}
+      path = do (p, q) <- ensureI (== eord '/') *> pathI
+                return (S8.pack "", S8.pack "", p, q)
 
 data HttpReq = HttpReq {
-      reqMethod :: String
-    , reqURI :: String
-    , reqHost :: String
+      reqMethod :: S
+    , reqURI :: S
+    , reqHost :: S
     , reqVersMaj :: Int
     , reqVersMin :: Int
+    , headers :: [L8.ByteString]
     } deriving (Show)
 
-
-
-request_line :: (Monad m) => Iter S m HttpReq
+request_line :: (Monad m) => Iter L m HttpReq
 request_line = do
+  method <- strictify <$> while1I (isUpper . w2c)
+  spaces
+  (_, host, path, query) <- uri
+  spaces
+  (major, minor) <- hTTPvers
+  optional spaces
+  skipI crlf
+  return HttpReq { reqMethod = method
+                 , reqURI = path
+                 , reqHost = host
+                 , reqVersMaj = major
+                 , reqVersMin = minor
+                 , headers = []
+                 }
+
+hdrLine :: (Monad m) => Iter L m L
+hdrLine = token <++> char ':' <:> text <* crlf
+{-
+hdrLine = startLine <++> concatI contLine
+    where
+      startLine = ensureI (not . isSpace . w2c) >> lineI
+      contLine = ensureI lws <++> lineI
+-}
+
+httpreq :: Monad m => Iter L m HttpReq
+httpreq = do
   -- Section 4.1 of RFC2616:  "In the interest of robustness, servers
   -- SHOULD ignore any empty line(s) received where a Request-Line is
   -- expected. In other words, if the server is reading the protocol
   -- stream at the beginning of a message and receives a CRLF first,
   -- it should ignore the CRLF."
   skipMany crlf
-  method <- while1I (isUpper . w2c)
-  spaces
-  host <- (while1I (isLower . w2c) <* string ":/") <|> return L8.empty
-  uri <- char '/' <:> while1I (not . isSpace . w2c)
-  spaces
-  (major, minor) <- hTTPvers
-  optional spaces
-  skipI crlf
-  return HttpReq { reqMethod = unpack $ method
-                 , reqURI = unpack $ uri
-                 , reqHost = ""
-                 , reqVersMaj = major
-                 , reqVersMin = minor
-                 }
+  req <- request_line
+  hdrs <- many hdrLine
+  crlf
+  return $ req { headers = hdrs }
 
-qvalue :: (Monad m) => Iter S m Int
+qvalue :: (Monad m) => Iter L m Int
 qvalue = do char 'q'; olws; char '='; olws; frac <|> one
     where
       frac = do char '0'
@@ -295,7 +334,7 @@ qvalue = do char 'q'; olws; char '='; olws; frac <|> one
                              optional $ whileMinMaxI 0 3 (== eord '0')
                return 1000
 
-kEqVal :: (Monad m) => Iter S m S -> Iter S m (S, S)
+kEqVal :: (Monad m) => Iter L m L -> Iter L m (L, L)
 kEqVal kiter = do
   olws
   k <- kiter
@@ -303,7 +342,7 @@ kEqVal kiter = do
   v <- token <|> quoted_string
   return (k, v)
 
-cookie_hdr :: (Monad m) => Iter S m [(S, S)]
+cookie_hdr :: (Monad m) => Iter L m [(L, L)]
 cookie_hdr = do
   string "Cookie:"
   vers <- kEqVal $ string "$Version"
@@ -313,18 +352,14 @@ cookie_hdr = do
       sep = do olws; char ';' <|> char ','
             
 
-hdrLine :: (Monad m) => Iter S m S
-hdrLine = lineI <++> foldrI L8.append L8.empty contLine
-    where contLine = lws <++> lineI
 
 
 
-
-hdr :: (Monad m) => Iter S m [S]
+hdr :: (Monad m) => Iter L m [L]
 hdr = many hdrLine
 
 
-lineChar :: (Monad m) => Iter S m Word8
+lineChar :: (Monad m) => Iter L m Word8
 lineChar = satisfy (\c -> c /= eord '\r' && c /= eord '\n')
 
 linesI :: (Monad m) => Iter L8.ByteString m [L8.ByteString]
@@ -334,10 +369,25 @@ put :: L8.ByteString -> IO ()
 put = Prelude.putStrLn . show . L8.unpack
 
 enumHdr :: (Monad m) => EnumO L8.ByteString m a
-enumHdr = enumPure $ L8.pack $ "Header: value\r\n   cont\r\n"
-          ++ "Test: a header\r\n               with extra line\r\n"
-          ++ "Test2: another header\n"
-          ++ "Test3: a fourth\r\n"
+enumHdr = enumPure $ L.append hdr $ L.cycle $ L8.pack "And some extra crap\r\n"
+    where
+      hdr = L8.pack $ "\
+        \GET /blah/blah/blah?really HTTP/1.1\r\n\
+        \Host: localhost:8000\r\n\
+        \User-Agent: Mozilla/5.0 (X11; U; Linux x86_64; en_US; rv:1.9.2.8) Gecko/20100813 Gentoo Firefox/3.6.8\r\n\
+        \Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
+        \Accept-Language: en-us,en;q=0.5\r\n\
+        \Accept-Encoding: gzip,deflate\r\n\
+        \Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n\
+        \Keep-Alive: 115\r\n\
+        \Connection: keep-alive\r\n\
+        \Cache-Control: max-age=0\r\n\r\n"
+
+          
+
+
+
+{-
 
 main :: IO ()
 -- main = enumHdr |$ hdr >>= mapM_ L8.putStrLn
@@ -347,4 +397,4 @@ main = enumHandle stdin |$
         ..| inumFromChunks
         ..| handleI stdout
            
-
+-}

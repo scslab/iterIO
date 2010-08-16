@@ -256,9 +256,12 @@ skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
 -- should accept elements, and @'Left' state@ when it hits the first
 -- character that should not be included in the returned string.
 whileStateI :: (LL.ListLike t e, Monad m, ChunkData t) =>
-               (a -> e -> Either a a) -- ^ Preidcate function
-            -> a                      -- ^ Initial state
-            -> Iter t m (t, a)        -- ^ (accepted input, modified state)
+               (a -> e -> Either a a)
+            -- ^ Preidcate function
+            -> a 
+            -- ^ Initial state
+            -> Iter t m (t, a)
+            -- ^ (accepted input, modified state)
 whileStateI f z0 = dochunk id z0
     where
       dochunk acc z = do
@@ -273,6 +276,40 @@ whileStateI f z0 = dochunk id z0
                   case f z e of
                     Left z'  -> (False, (z', n))
                     Right z' -> dorest (z', n + 1)
+
+{-
+data InputPred e = IPred { ipredF :: e -> Bool }
+                 | IPredMin { ipredMin :: Int
+                            , ipredF :: e -> Bool }
+                 | IPredMinMax { ipredMin :: Int
+                               , ipredMax :: Int
+                               , ipredF :: e -> Bool }
+
+whilePredsI :: (LL.ListLike t e, Monad m, ChunkData t) =>
+               [InputPred e] -> Iter t m t
+whilePredsI preds = do
+  (t, preds') <- whileStateI dopred preds
+  if null preds' then return t else expectedI "whilePredsI predicates"
+      where
+        dec n = if n > 0 then n - 1 else 0
+
+        step (IPredMin n f : ps)      = IPredMin (dec n) f : ps
+        step (IPredMinMax n x f : ps) = IPredMinMax (dec n) (dec x) f : ps
+        step ps                       = ps
+
+        minok (IPredMin n _) | n > 0      = False
+        minok (IPredMinMax n _ _) | n > 0 = False
+        minok _                           = True
+
+        maxok (IPredMinMax _ n _) | n <= 0 = False
+        maxok _                            = True
+
+        dopred [] e                                  = Left []
+        dopred p@(p1:ps) e | maxok p1 && ipredF p1 e = Right $ step p
+                           | minok p1                = dopred ps e
+                           | otherwise               = Left p
+-}
+
 
 -- | Return all input elements up to the first one that does not match
 -- the specified predicate.

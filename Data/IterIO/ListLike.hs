@@ -34,9 +34,9 @@ import qualified Data.ListLike as LL
 import Data.IterIO.Base
 import Data.IterIO.Extra
 
+
 echr :: (Enum e) => Char -> e
 echr = toEnum . ord
-
 
 --
 -- Iters
@@ -196,7 +196,11 @@ enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
 enumFile path = enumObracket (liftIO $ openBinaryFile path ReadMode)
                 (liftIO . hClose) codec
     where
-      codec h = CodecF (codec h) `liftM` liftIO (LL.hGet h defaultChunkSize)
+      codec h = do
+        buf <- liftIO $ LL.hGet h defaultChunkSize
+        return $ if null buf
+          then CodecE buf
+          else CodecF (codec h) buf
 
 
 --
