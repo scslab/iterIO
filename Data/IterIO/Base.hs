@@ -305,6 +305,7 @@ instance (ChunkData t) => Show (Iter t m a) where
     showsPrec _ (Done _ (Chunk t eof)) rest =
         "Done _ (Chunk " ++ (if null t then "mempty " else "_ ")
                          ++ show eof ++ ")" ++ rest
+    showsPrec _ (IterCtl _ _) rest = "IterCtl _ _" ++ rest
     showsPrec _ (IterFail e) rest = "IterFail " ++ show e ++ rest
     showsPrec _ (EnumOFail e i) rest =
         "EnumOFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
@@ -393,10 +394,11 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
 
-    m@(IterF _) >>= k = IterF $ runIter m >=> return . (>>= k)
-    (IterM m)   >>= k = IterM $ m >>= return . (>>= k)
-    (Done a c)  >>= k = IterM $ runIter (k a) c
-    err         >>= _ = IterFail $ getIterError err
+    m@(IterF _)    >>= k = IterF $ runIter m >=> return . (>>= k)
+    (IterM m)      >>= k = IterM $ m >>= return . (>>= k)
+    (Done a c)     >>= k = IterM $ runIter (k a) c
+    (IterCtl a fr) >>= k = IterCtl a $ fr >=> return . (>>= k)
+    err            >>= _ = IterFail $ getIterError err
 
     fail msg = IterFail $ mkError msg
 
@@ -412,16 +414,17 @@ getIterError (IterFail e)    = e
 getIterError (EnumOFail e _) = e
 getIterError (EnumIFail e _) = e
 getIterError (IterM _)       = error "getIterError: no error (in IterM state)"
+getIterError (IterCtl _ _)   = error "getIterError: no error (in IterCtl state)"
 getIterError _               = error "getIterError: no error to extract"
 
 -- | True if an iteratee /or/ an enclosing enumerator has experienced
 -- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
 -- 'True', but the converse is not true.)
 isIterError :: Iter t m a -> Bool
-isIterError (IterF _)  = False
-isIterError (IterM _)  = False
-isIterError (Done _ _) = False
-isIterError _          = True
+isIterError (IterFail _)    = True
+isIterError (EnumOFail _ _) = True
+isIterError (EnumIFail _ _) = True
+isIterError _               = False
 
 -- | True if an enumerator enclosing an iteratee has experienced a
 -- failure (but not if the iteratee itself failed).
@@ -432,9 +435,10 @@ isEnumError _               = False
 
 -- | True if an iteratee is in an error state caused by an EOF exception.
 isIterEOFError :: Iter t m a -> Bool
-isIterEOFError (IterF _)  = False
-isIterEOFError (IterM _)  = False
-isIterEOFError (Done _ _) = False
+isIterEOFError (IterF _)     = False
+isIterEOFError (IterM _)     = False
+isIterEOFError (Done _ _)    = False
+isIterEOFError (IterCtl _ _) = False
 isIterEOFError err = case fromException $ getIterError err of
                        Just (IterEOF _) -> True
                        _                -> False
@@ -667,6 +671,7 @@ multiParse a@(IterF _) b = do
     _        -> case fromException $ getIterError a1 of
                   Just e  -> IterM $ runIter (combineExpected e b) c
                   Nothing -> a1
+multiParse (IterCtl a fr) b = IterCtl a $ fr >=> return . flip multiParse b
 multiParse a b = a `catchI` \err _ -> combineExpected err b
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
@@ -819,9 +824,10 @@ copyInput iter1 = doit id iter1
       -- 'ShowS' optimizes (++) on srings.
       doit acc iter@(IterF _) =
           IterF $ \c -> runIter iter c >>= return . doit (acc . mappend c)
-      doit acc (IterM m)  = IterM $ m >>= return . doit acc
-      doit acc (Done a c) = Done (return a, acc mempty) c
-      doit acc iter       = return (iter, acc mempty)
+      doit acc (IterM m)      = IterM $ m >>= return . doit acc
+      doit acc (Done a c)     = Done (return a, acc mempty) c
+      doit acc (IterCtl a fr) = IterCtl a $ fr >=> return . doit acc
+      doit acc iter           = return (iter, acc mempty)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -1073,7 +1079,7 @@ runI :: (ChunkData t1, ChunkData t2, Monad m) =>
 runI (IterM m)       = IterM $ m >>= return . runI
 runI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= runI
 runI (Done a _)      = return a
-runI (IterCtl a fr)  = IterCtl a $ fr >=> return . runI
+runI (IterCtl _ fr)  = IterM $ fr Nothing >>= return . runI
 runI (IterFail e)    = IterFail e
 runI (EnumIFail e i) = EnumIFail e i
 runI (EnumOFail e i) = runI i >>= EnumIFail e
@@ -1087,7 +1093,7 @@ popI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
 popI (IterM m)       = IterM $ m >>= return . popI
 popI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= popI
 popI (Done i _)      = i
-popI (IterCtl a fr)  = IterCtl a $ fr >=> return . popI
+popI (IterCtl _ fr)  = IterM $ fr Nothing >>= return . popI
 popI (IterFail e)    = IterFail e
 popI (EnumIFail e i) = EnumOFail e i
 popI (EnumOFail e i) = EnumOFail e $ popI i

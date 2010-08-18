@@ -3,6 +3,7 @@
 module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
+                        , comment, qvalue
                         ) where
 
 import Data.Array.Unboxed
@@ -136,19 +137,19 @@ percent_decode test = foldrI L.cons' L.empty getc
 quoted_pair :: (Monad m) => Iter L m L
 quoted_pair = char '\\' <:> headLikeI <:> nil
 
--- | 'text' and 'quoted_pair's surrounded by parentheses.
-comment :: (Monad m) => Iter L m L
-comment = char '('
-          <:> concatI (text_except "()" <|> quoted_pair <|> comment)
-          <++> string ")"
-          <?> "comment"
-
 -- | 'text' and 'quoted_pair's surrounded by double quotes.
 quoted_string :: (Monad m) => Iter L m S
 quoted_string = do char '"'
                    ret <- concatI (text_except "\"" <|> quoted_pair)
                    char '"'
                    return $ strictify ret
+
+-- | 'text' and 'quoted_pair's surrounded by parentheses.
+comment :: (Monad m) => Iter L m L
+comment = char '('
+          <:> concatI (text_except "()" <|> quoted_pair <|> comment)
+          <++> string ")"
+          <?> "comment"
 
 -- | Parses q=N where 0.000 <= N <= 1.000, and returns the result
 -- multiplied by 1000 as an integer (i.e., 1.0 returns 1000).
@@ -214,8 +215,10 @@ rfc3986_syntax = listArray (0, 255) $ fmap bits ['\0'..'\377']
 rfc3986_test :: Word8 -> Word8 -> Bool
 rfc3986_test mask c = rfc3986_syntax ! c .&. mask /= 0
 
+{-
 isUnreserved :: Word8 -> Bool
 isUnreserved c = rfc3986_syntax ! c .&. rfc3986_unreserved /= 0
+-}
 
 hostI :: (Monad m) => Iter L m S
 hostI = (strictify <$> (bracketed <|> percent_decode regnamechar)
@@ -400,12 +403,14 @@ inumFromChunks = enumI getsize
         return $ CodecE L8.empty
 
 
+{-
 -- | Mime boundary characters
 bcharTab :: UArray Word8 Bool
 bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
     where
       isBChar c = isAlphaNum c || elem c otherBChars
       otherBChars = "'()/+_,-./:=? "
+-}
 
 
 
