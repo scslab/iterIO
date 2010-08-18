@@ -95,6 +95,7 @@ module Data.IterIO.Base
     -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
     , nullI, dataI, chunkI
+    , ctlI, safeCtlI
     , wrapI, runI, popI, joinI, returnI, resultI
     , headI, safeHeadI
     , putI, sendI
@@ -243,6 +244,16 @@ instance Exception IterParseErr where
     toException = noParseToException
     fromException = noParseFromException
 
+safeCtlI :: (Typeable req, Typeable res, ChunkData t, Monad m) =>
+        req -> Iter t m (Maybe res)
+safeCtlI req = IterCtl req $ return . return
+
+ctlI :: (Typeable req, Typeable res, ChunkData t, Monad m) =>
+        req -> Iter t m res
+ctlI = safeCtlI >=> returnit
+    where
+      returnit (Just res) = return res
+      returnit Nothing    = fail "Unknown CtlReq"
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
 -- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
@@ -270,6 +281,9 @@ data Iter t m a = IterF (Chunk t -> m (Iter t m a))
                 -- ^ The iteratee requires more input.
                 | IterM (m (Iter t m a))
                 -- ^ The iteratee must execute monadic bind in monad @m@
+                | forall carg cres. (Typeable carg, Typeable cres) =>
+                  IterCtl carg (Maybe cres -> m (Iter t m a))
+                -- ^ A control request for enclosing enumerators
                 | Done a (Chunk t)
                 -- ^ Sufficient input was received; the iteratee is
                 -- returning a result (of type @a@) and a 'Chunk'
@@ -362,9 +376,10 @@ runIter (IterF f) c@(Chunk _ eof) = f c >>= execIter >>= setEOF
       setEOF (Done _ (Chunk _ True)) = error "runIter: IterF returned bogus EOF"
       setEOF (IterF _) | eof = error "runIter: IterF returned after EOF"
       setEOF iter = return iter
-runIter (IterM m) c   = m >>= flip runIter c
-runIter (Done a c) c' = return $ Done a (mappend c c')
-runIter err _         = return err
+runIter (IterM m) c      = m >>= flip runIter c
+runIter (Done a c) c'    = return $ Done a (mappend c c')
+runIter (IterCtl a fr) c = return $ IterCtl a $ fr >=> flip runIter c
+runIter err _            = return err
 
 instance (ChunkData t, Monad m) => Functor (Iter t m) where
     fmap = liftM
@@ -527,6 +542,7 @@ run :: (ChunkData t, Monad m) => Iter t m a -> m a
 run iter@(IterF _)  = runIter iter chunkEOF >>= run
 run (IterM m)       = m >>= run
 run (Done a _)      = return a
+run (IterCtl _ fr)  = fr Nothing >>= run
 run (IterFail e)    = throw $ unIterEOF e
 run (EnumOFail e _) = throw $ unIterEOF e
 run (EnumIFail e _) = throw $ unIterEOF e
@@ -1040,6 +1056,7 @@ wrapI f iter0@(IterF _) = IterF $ runIter iter0 >=> rewrap
       -- Can't return IterF state after EOF, so re-run output of f
       rewrap iter@(Done _ (Chunk _ True)) = runIter (f iter) chunkEOF
       rewrap iter                         = return $ f iter
+wrapI f (IterCtl a fr) = IterCtl a $ fr >=> return . wrapI f
 wrapI f iter = f iter
 
 -- | Runs an Iteratee from within another iteratee (feeding it EOF if
@@ -1053,9 +1070,10 @@ wrapI f iter = f iter
 runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
-runI (IterM m)       = lift m >>= runI
+runI (IterM m)       = IterM $ m >>= return . runI
 runI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= runI
 runI (Done a _)      = return a
+runI (IterCtl a fr)  = IterCtl a $ fr >=> return . runI
 runI (IterFail e)    = IterFail e
 runI (EnumIFail e i) = EnumIFail e i
 runI (EnumOFail e i) = runI i >>= EnumIFail e
@@ -1066,9 +1084,10 @@ runI (EnumOFail e i) = runI i >>= EnumIFail e
 popI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           Iter tOut m (Iter tIn m a)
        -> Iter tIn m a
-popI (IterM m)       = lift m >>= popI
+popI (IterM m)       = IterM $ m >>= return . popI
 popI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= popI
 popI (Done i _)      = i
+popI (IterCtl a fr)  = IterCtl a $ fr >=> return . popI
 popI (IterFail e)    = IterFail e
 popI (EnumIFail e i) = EnumOFail e i
 popI (EnumOFail e i) = EnumOFail e $ popI i
@@ -1090,6 +1109,7 @@ joinI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
 joinI (IterM m)       = lift m >>= joinI
 joinI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= joinI
 joinI (Done i c)      = runI i >>= flip Done c
+joinI (IterCtl a fr)  = IterCtl a $ fr >=> return . joinI
 joinI (IterFail e)    = IterFail e
 joinI (EnumIFail e i) = EnumOFail e $ runI i
 joinI (EnumOFail e i) = EnumOFail e $ joinI i
