@@ -1,6 +1,9 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
-module Data.IterIO.Http where
+module Data.IterIO.Http (HttpReq(..)
+                        , httpreqI
+                        , inumToChunks, inumFromChunks
+                        ) where
 
 import Data.Array.Unboxed
 import Data.Bits
@@ -321,8 +324,8 @@ host_hdr req = do
 cookie_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 cookie_hdr req = do
   -- string "Cookie:"
-  _vers <- kEqVal $ string "$Version"
-  sep
+  -- _vers <- kEqVal $ string "$Version"
+  -- sep
   cookies <- sepBy1 (kEqVal token') sep <* (spaces >> crlf)
   return req { reqCookies = cookies }
     where
@@ -341,13 +344,8 @@ any_hdr req = do
     where
       addhdr field val = req { reqHeaders = (field, val) : reqHeaders req }
             
-{-
-hdrLine :: (Monad m) => Iter L m L
-hdrLine = token' <++> char ':' <:> text <* crlf
--}
-
-httpreq :: Monad m => Iter L m HttpReq
-httpreq = do
+httpreqI :: Monad m => Iter L m HttpReq
+httpreqI = do
   -- Section 4.1 of RFC2616:  "In the interest of robustness, servers
   -- SHOULD ignore any empty line(s) received where a Request-Line is
   -- expected. In other words, if the server is reading the protocol
@@ -412,6 +410,7 @@ bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
 
 
 
+{-
 
 lineChar :: (Monad m) => Iter L m Word8
 lineChar = satisfy (\c -> c /= eord '\r' && c /= eord '\n')
@@ -442,7 +441,6 @@ enumHdr = enumPure $ L.append header
 
 
 
-{-
 
 main :: IO ()
 -- main = enumHdr |$ hdr >>= mapM_ L8.putStrLn
