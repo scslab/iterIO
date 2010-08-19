@@ -1,7 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FunctionalDependencies #-}
 
 
 {- | This module contains the base Enumerator/Iteratee IO
@@ -252,7 +250,8 @@ instance Exception IterParseErr where
 
 -- | Class of control requests for enclosing enumerators, along with
 -- their result types.
-class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
+data CtlCmd carg cres = CtlCmd carg deriving (Typeable)
+-- class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
@@ -281,8 +280,8 @@ data Iter t m a = IterF (Chunk t -> m (Iter t m a))
                 -- ^ The iteratee requires more input.
                 | IterM (m (Iter t m a))
                 -- ^ The iteratee must execute monadic bind in monad @m@
-                | forall carg cres. (CtlCmd carg cres) =>
-                  IterCtl carg (Maybe cres -> m (Iter t m a))
+                | forall carg cres. (Typeable carg, Typeable cres) =>
+                  IterCtl (CtlCmd carg cres) (Maybe cres -> m (Iter t m a))
                 -- ^ A control request for enclosing enumerators
                 | Done a (Chunk t)
                 -- ^ Sufficient input was received; the iteratee is
@@ -1494,18 +1493,18 @@ enumI' fn iter = enumI (iterToCodec fn) iter
 
 -- | A version of 'ctlI' that uses 'Maybe' instead of throwing an
 -- exception to indicate failure.
-safeCtlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+safeCtlI :: (Typeable carg, Typeable cres, ChunkData t, Monad m) =>
             carg -> Iter t m (Maybe cres)
-safeCtlI carg = IterCtl carg $ return . return
+safeCtlI carg = IterCtl (CtlCmd carg) $ return . return
 
 -- | Issue a control request, and return the result.  Throws an
 -- exception if the operation did not succeed.
-ctlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+ctlI :: (Typeable carg, Typeable cres, ChunkData t, Monad m) =>
         carg -> Iter t m cres
-ctlI = safeCtlI >=> returnit
+ctlI carg = safeCtlI carg >>= returnit
     where
       returnit (Just res) = return res
-      returnit Nothing    = fail "Unknown CtlReq"
+      returnit Nothing    = fail $ "Unsupported CtlCmd " ++ show (typeOf carg)
 
 wrapCtl :: (ChunkData t, Monad m) =>
            (Iter t m a -> Iter t m a)
@@ -1517,7 +1516,7 @@ wrapCtl _ iter               = iter
 
 -- | Wrap a handler for a particular kind of 'CtlCmd' request around
 -- an 'Iter'.
-enumCtl :: (ChunkData t, Monad m, CtlCmd carg cres) =>
+enumCtl :: (ChunkData t, Monad m, Typeable carg, Typeable cres) =>
            (carg -> Iter t m cres) -> EnumO t m a
 enumCtl f = wrapCtl handler
     where
@@ -1531,8 +1530,8 @@ enumCtl f = wrapCtl handler
 filterCtl :: (ChunkData t, Monad m) => EnumO t m a
 filterCtl = wrapCtl handler
     where
-      handler iter@(IterCtl _ fr) = IterM $ fr Nothing
-      handler _ = error "blockCtl: impossible"
+      handler (IterCtl _ fr) = IterM $ fr Nothing
+      handler _              = error "blockCtl: impossible"
 
 --
 -- Basic outer enumerators

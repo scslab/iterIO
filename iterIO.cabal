@@ -54,5 +54,4 @@ Library
     Data.IterIO.Extra, Data.IterIO.Parse, Data.IterIO.Search
   Extensions:
     ForeignFunctionInterface, DeriveDataTypeable,
-    ExistentialQuantification, MultiParamTypeClasses,
-    FunctionalDependencies, FlexibleInstances
+    ExistentialQuantification, FlexibleInstances
