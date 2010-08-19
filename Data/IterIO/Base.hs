@@ -375,6 +375,7 @@ runIter (IterF f) c@(Chunk _ eof) = f c >>= execIter >>= setEOF
       setEOF :: (Monad m) => Iter t m a -> m (Iter t m a)
       setEOF (Done a (Chunk t _)) | eof = return $ Done a $ Chunk t eof
       setEOF (Done _ (Chunk _ True)) = error "runIter: IterF returned bogus EOF"
+      setEOF (IterCtl a fr) | eof = return $ IterCtl a $ fr >=> setEOF
       setEOF (IterF _) | eof = error "runIter: IterF returned after EOF"
       setEOF iter = return iter
 runIter (IterM m) c      = m >>= flip runIter c
@@ -1055,15 +1056,23 @@ wrapI :: (ChunkData t, Monad m) =>
       -> Iter t m b                 -- ^ Returns an 'Iter' whose
                                     -- result will be transformed by
                                     -- the transformation function
-wrapI f (IterM m) = IterM $ m >>= return . wrapI f
+wrapI f (IterM m)       = IterM $ m >>= return . wrapI f
 wrapI f iter0@(IterF _) = IterF $ runIter iter0 >=> rewrap
     where
       rewrap iter@(IterF _)               = return $ wrapI f iter
       -- Can't return IterF state after EOF, so re-run output of f
       rewrap iter@(Done _ (Chunk _ True)) = runIter (f iter) chunkEOF
       rewrap iter                         = return $ f iter
-wrapI f (IterCtl a fr) = IterCtl a $ fr >=> return . wrapI f
-wrapI f iter = f iter
+wrapI f (IterCtl a fr)  = IterCtl a $ fr >=> return . wrapI f
+wrapI f iter            = f iter
+
+-- XXX keeping track of EOF across IterM and IterCtl may be confusing
+wrapCtlI :: (ChunkData t, Monad m) =>
+            (Iter t m a -> Iter t m a) -> Iter t m a -> Iter t m a
+wrapCtlI f (IterM m)          = IterM $ wrapCtlI f `liftM` m
+wrapCtlI f (IterF iterf)      = IterF $ iterf >=> return . wrapCtlI f
+wrapCtlI f iter@(IterCtl _ _) = wrapCtlI f (f iter)
+wrapCtlI _ iter               = iter
 
 -- | Runs an Iteratee from within another iteratee (feeding it EOF if
 -- it is in the 'IterF' state) so as to extract a return value.  The
@@ -1414,6 +1423,7 @@ enumO codec0 iter@(IterF _) = resultI (runI codec0) >>= nextCodec
       check CodecX           = iter
       check (CodecE t)       = IterM $ runIter iter (chunk t)
       check (CodecF codec t) = lift (runIter iter (chunk t)) >>= enumO codec
+enumO codec0 (IterCtl _ fr) = IterM $ fr Nothing >>= return . enumO codec0
 enumO _ iter                = iter
 
 -- | Like 'enumO', but the input function returns raw data, not
@@ -1472,6 +1482,7 @@ enumI codec0 iter@(IterF _) = resultI codec0 >>= nextCodec
       nextIter (CodecF codec dat) False = feed dat >>= enumI codec
       nextIter codecr _                 = feed $ unCodecR codecr
       feed dat = lift $ runIter iter (chunk dat)
+enumI codec0 (IterCtl a fr) = IterCtl a $ fr >=> return . enumI codec0
 -- If iter finished, still must feed EOF to codec before returning
 enumI codec0 iter           = lift (runIter codec0 chunkEOF) >>= check
     where
