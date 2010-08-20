@@ -1518,7 +1518,7 @@ enumCtl :: (ChunkData t, Monad m, Typeable carg, Typeable cres) =>
 enumCtl f = wrapCtl handler
     where
       apctl :: (carg -> Iter t m cres) -> (CtlCmd carg cres) -> Iter t m cres
-      apctl f (CtlCmd arg) = f arg
+      apctl f' (CtlCmd arg) = f' arg
       handler iter@(IterCtl carg fr) =
           case cast carg of
             Nothing -> iter
