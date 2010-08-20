@@ -101,7 +101,7 @@ module Data.IterIO.Base
     , putI, sendI
     -- * Control functions
     , ctlI, safeCtlI
-    , enumCtl, filterCtl
+    , filterCtl
     -- * Some basic Enumerators
     , enumPure
     , enumCatch, enumHandler, inumCatch
@@ -276,12 +276,12 @@ data CtlCmd carg cres = CtlCmd carg deriving (Typeable)
 --
 -- Note that @Iter t@ is a 'MonadTrans' and @Iter t m@ is a a 'Monad'
 -- (as discussed in the documentation for module "Data.IterIO").
-data Iter t m a = IterF (Chunk t -> m (Iter t m a))
+data Iter t m a = IterF (Chunk t -> Iter t m a)
                 -- ^ The iteratee requires more input.
                 | IterM (m (Iter t m a))
                 -- ^ The iteratee must execute monadic bind in monad @m@
                 | forall carg cres. (Typeable carg, Typeable cres) =>
-                  IterCtl (CtlCmd carg cres) (Maybe cres -> m (Iter t m a))
+                  IterCtl (CtlCmd carg cres) (Maybe cres -> Iter t m a)
                 -- ^ A control request for enclosing enumerators
                 | Done a (Chunk t)
                 -- ^ Sufficient input was received; the iteratee is
@@ -329,7 +329,7 @@ execIter iter      = return iter
 
 -- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
 -- 'Done', or in some error condition, simulates the behavior
--- appropriately.  Never returns the 'Iter' in the 'IterM' state.
+-- appropriately.
 --
 -- Note that this function asserts the following invariants on the
 -- behavior of an 'Iter':
@@ -370,21 +370,21 @@ execIter iter      = return iter
 runIter :: (ChunkData t, Monad m) =>
            Iter t m a
         -> Chunk t
-        -> m (Iter t m a)
-runIter (IterF f) c@(Chunk _ eof) = f c >>= if eof then ensureEOF else noEOF
+        -> Iter t m a
+runIter (IterF f) c@(Chunk _ eof) = (if eof then ensureEOF else noEOF) $ f c
     where
       noEOF (Done _ (Chunk _ True)) = error "runIter: IterF returned bad EOF"
-      noEOF iter                    = return iter
+      noEOF iter                    = iter
       ensureEOF (IterF _)      = error "runIter: IterF returned after EOF"
-      ensureEOF (IterM m)      = m >>= ensureEOF
-      ensureEOF (IterCtl a fr) = return $ IterCtl a $ \r -> case r of
-                                   Just _  -> fr r
-                                   Nothing -> fr r >>= ensureEOF
-      ensureEOF iter           = return iter
-runIter (IterM m) c      = m >>= flip runIter c
-runIter (Done a c) c'    = return $ Done a (mappend c c')
-runIter (IterCtl a fr) c = return $ IterCtl a $ fr >=> flip runIter c
-runIter err _            = return err
+      ensureEOF (IterM m)      = IterM $ ensureEOF `liftM` m
+      ensureEOF (IterCtl a fr) = IterCtl a $ \r -> case r of
+                                                     Just _  -> fr r
+                                                     Nothing -> ensureEOF $ fr r
+      ensureEOF iter           = iter
+runIter (IterM m) c      = IterM $ flip runIter c `liftM` m
+runIter (Done a c) c'    = Done a (mappend c c')
+runIter (IterCtl a fr) c = IterCtl a $ flip runIter c . fr
+runIter err _            = err
 
 instance (ChunkData t, Monad m) => Functor (Iter t m) where
     fmap = liftM
@@ -398,10 +398,10 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
 
-    m@(IterF _)    >>= k = IterF $ runIter m >=> return . (>>= k)
-    (IterM m)      >>= k = IterM $ m >>= return . (>>= k)
-    (Done a c)     >>= k = IterM $ runIter (k a) c
-    (IterCtl a fr) >>= k = IterCtl a $ fr >=> return . (>>= k)
+    m@(IterF _)    >>= k = IterF $ runIter m >=> k
+    (IterM m)      >>= k = IterM $ liftM (>>= k) m
+    (Done a c)     >>= k = runIter (k a) c
+    (IterCtl a fr) >>= k = IterCtl a $ fr >=> k
     err            >>= _ = IterFail $ getIterError err
 
     fail msg = IterFail $ mkError msg
@@ -540,10 +540,10 @@ instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
 -- state, feed it an EOF to extract a result.  Throws an exception if
 -- there has been a failure.
 run :: (ChunkData t, Monad m) => Iter t m a -> m a
-run iter@(IterF _)  = runIter iter chunkEOF >>= run
+run iter@(IterF _)  = run $ runIter iter chunkEOF
 run (IterM m)       = m >>= run
 run (Done a _)      = return a
-run (IterCtl _ fr)  = fr Nothing >>= run
+run (IterCtl _ fr)  = run $ fr Nothing
 run (IterFail e)    = throw $ unIterEOF e
 run (EnumOFail e _) = throw $ unIterEOF e
 run (EnumIFail e _) = throw $ unIterEOF e
@@ -658,17 +658,16 @@ combineExpected (IterNoParse e) iter =
 -- on the input stream.
 multiParse :: (ChunkData t, Monad m) =>
               Iter t m a -> Iter t m a -> Iter t m a
-multiParse (IterM m) b = IterM $ m >>= return . flip multiParse b
+multiParse (IterM m) b = IterM $ flip multiParse b `liftM` m
 multiParse a@(IterF _) b = do
   c <- chunkI
-  a1 <- lift $ runIter a c
-  case a1 of
-    Done _ _ -> a1
-    IterF _  -> lift (runIter b c) >>= multiParse a1
-    _        -> case fromException $ getIterError a1 of
-                  Just e  -> IterM $ runIter (combineExpected e b) c
-                  Nothing -> a1
-multiParse (IterCtl a fr) b = IterCtl a $ fr >=> return . flip multiParse b
+  case runIter a c of
+    a1@(Done _ _) -> a1
+    a1 | not (isIterEOFError a1) -> multiParse a1 (runIter b c)
+    a1 -> case fromException $ getIterError a1 of
+            Just e  -> runIter (combineExpected e b) c
+            Nothing -> a1
+multiParse (IterCtl a fr) b = IterCtl a $ \r -> multiParse (fr r) b
 multiParse a b = a `catchI` \err _ -> combineExpected err b
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
@@ -820,10 +819,10 @@ copyInput iter1 = doit id iter1
       -- we pass a function as the accumulator, much the way 'ShowS'
       -- optimizes (++) on srings.
       doit acc iter@(IterF _) =
-          IterF $ \c -> runIter iter c >>= return . doit (acc . mappend c)
-      doit acc (IterM m)      = IterM $ m >>= return . doit acc
+          IterF $ \c -> doit (acc . mappend c) (runIter iter c)
+      doit acc (IterM m)      = IterM $ doit acc `liftM` m
       doit acc (Done a c)     = Done (return a, acc mempty) c
-      doit acc (IterCtl a fr) = IterCtl a $ fr >=> return . doit acc
+      doit acc (IterCtl a fr) = IterCtl a $ doit acc . fr
       doit acc iter           = return (iter, acc mempty)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
@@ -1022,24 +1021,23 @@ mapExceptionI f iter1 = wrapI check iter1
                 
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, Monoid t) => Iter t m ()
-nullI = IterF $ return . check
+nullI = IterF $ check
     where
       check (Chunk _ True) = Done () chunkEOF
       check _              = nullI
 
 
 -- | Returns any non-empty amount of input data, or throws an
--- exception if EOF is encountered and there is no data..
+-- exception if EOF is encountered and there is no data.
 dataI :: (Monad m, ChunkData t) => Iter t m t
-dataI = IterF $ return . nextChunk
+dataI = IterF nextChunk
     where
       nextChunk (Chunk d True) | null d = throwEOFI "dataI"
       nextChunk (Chunk d _)             = return d
 
 -- | Returns a non-empty 'Chunk' or an EOF 'Chunk'.
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
-chunkI = IterF $ \c@(Chunk _ eof) -> return $
-         if null c then chunkI else Done c (Chunk mempty eof)
+chunkI = IterF $ \c -> if null c then chunkI else return c
 
 -- | Wrap a function around an 'Iter' to transform its result.  The
 -- 'Iter' will be fed 'Chunk's as usual for as long as it remains in
@@ -1053,33 +1051,36 @@ wrapI :: (ChunkData t, Monad m) =>
                                     -- result will be transformed by
                                     -- the transformation function
 wrapI f (IterM m)       = IterM $ m >>= return . wrapI f
-wrapI f iter0@(IterF _) = IterF $ runIter iter0 >=> rewrap
+wrapI f iter0@(IterF _) = IterF $ rewrap . runIter iter0
     where
-      rewrap iter@(IterF _)               = return $ wrapI f iter
+      rewrap iter@(IterF _)               = wrapI f iter
       -- Can't return IterF state after EOF, so re-run output of f
       rewrap iter@(Done _ (Chunk _ True)) = runIter (f iter) chunkEOF
-      rewrap iter                         = return $ f iter
-wrapI f (IterCtl a fr)  = IterCtl a $ fr >=> return . wrapI f
+      rewrap iter                         = f iter
+wrapI f (IterCtl a fr)  = IterCtl a $ wrapI f . fr
 wrapI f iter            = f iter
+
+-- XXX the following is no longer true of runI, but should it be true?
+-- In the event that the failure is an enumerator failure (either
+-- 'EnumIFail' or 'EnumOFail'), @runI@ returns an 'EnumIFail' failure
+-- and includes the state of the iteratee.
 
 -- | Runs an Iteratee from within another iteratee (feeding it EOF if
 -- it is in the 'IterF' state) so as to extract a return value.  The
 -- return value is lifted into the invoking Iteratee monadic type.  If
 -- the iteratee being run fails, then @runI@ will propagate the
--- failure by also failing.  In the event that the failure is an
--- enumerator failure (either 'EnumIFail' or 'EnumOFail'), @runI@
--- returns an 'EnumIFail' failure and includes the state of the
--- iteratee.
+-- failure by also failing.
 runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
 runI (IterM m)       = IterM $ m >>= return . runI
-runI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= runI
+runI iter@(IterF _)  = runI $ runIter iter chunkEOF
 runI (Done a _)      = return a
-runI (IterCtl _ fr)  = IterM $ fr Nothing >>= return . runI
+runI (IterCtl _ fr)  = runI $ fr Nothing
 runI (IterFail e)    = IterFail e
 runI (EnumIFail e i) = EnumIFail e i
-runI (EnumOFail e i) = runI i >>= EnumIFail e
+runI (EnumOFail e i) = EnumOFail e $ runI i
+-- runI (EnumOFail e i) = runI i >>= EnumIFail e
 
 -- | Pop an 'Iter' back out of an 'EnumI', propagating any failure,
 -- Any enumerator failure ('EnumIFail' or 'EnumOFail') will be
@@ -1088,9 +1089,9 @@ popI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           Iter tOut m (Iter tIn m a)
        -> Iter tIn m a
 popI (IterM m)       = IterM $ m >>= return . popI
-popI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= popI
+popI iter@(IterF _)  = popI $ runIter iter chunkEOF
 popI (Done i _)      = i
-popI (IterCtl _ fr)  = IterM $ fr Nothing >>= return . popI
+popI (IterCtl _ fr)  = popI $ fr Nothing
 popI (IterFail e)    = IterFail e
 popI (EnumIFail e i) = EnumOFail e i
 popI (EnumOFail e i) = EnumOFail e $ popI i
@@ -1109,10 +1110,10 @@ popI (EnumOFail e i) = EnumOFail e $ popI i
 joinI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Iter tOut m (Iter tIn m a)
      -> Iter tOut m a
-joinI (IterM m)       = lift m >>= joinI
-joinI iter@(IterF _)  = lift (runIter iter chunkEOF) >>= joinI
+joinI (IterM m)       = IterM $ m >>= return . joinI
+joinI iter@(IterF _)  = joinI $ runIter iter chunkEOF
 joinI (Done i c)      = runI i >>= flip Done c
-joinI (IterCtl a fr)  = IterCtl a $ fr >=> return . joinI
+joinI (IterCtl a fr)  = IterCtl a $ joinI . fr
 joinI (IterFail e)    = IterFail e
 joinI (EnumIFail e i) = EnumOFail e $ runI i
 joinI (EnumOFail e i) = EnumOFail e $ joinI i
@@ -1120,16 +1121,12 @@ joinI (EnumOFail e i) = EnumOFail e $ joinI i
 -- | Allows you to look at the state of an 'Iter' by returning it into
 -- an 'Iter' monad.  This is just like the monadic 'return' method,
 -- except that if the 'Iter' is in the 'IterM' state, it is executed
--- until it enters another state.  If it is in the 'IterF' state, it
--- is fed an empty input chunk, to give it a chance to execute monadic
--- actions.  [Though the latter behavior may change for 'IterF', since
--- 'IterM' processing might be sufficient.]  Thus, 'Iter's that do not
--- require data, such as @returnI $ liftIO $ ...@, can execute and
--- return a result (possibly reflecting exceptions) immediately.
+-- until it enters another state.  Thus, 'Iter's that do not require
+-- data, such as @returnI $ liftIO $ ...@, can execute and return a
+-- result (possibly reflecting exceptions) immediately.
 returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
            Iter tIn m a
         -> Iter tOut m (Iter tIn m a)
-returnI iter@(IterF _) = lift $ runIter iter (chunk mempty)
 returnI iter@(IterM _) = lift $ execIter iter
 returnI iter           = return iter
 
@@ -1148,7 +1145,7 @@ resultI = wrapI fixdone
 
 -- | Return the the first element when the Iteratee data type is a list.
 headI :: (Monad m) => Iter [a] m a
-headI = IterF $ return . dohead
+headI = IterF $ dohead
     where
       dohead (Chunk [] True)    = throwEOFI "headI"
       dohead (Chunk [] _)       = headI
@@ -1157,7 +1154,7 @@ headI = IterF $ return . dohead
 -- | Return 'Just' the the first element when the Iteratee data type
 -- is a list, or 'Nothing' on EOF.
 safeHeadI :: (Monad m) => Iter [a] m (Maybe a)
-safeHeadI = IterF $ return . dohead
+safeHeadI = IterF $ dohead
     where
       dohead c@(Chunk [] True)  = Done Nothing c
       dohead (Chunk [] _)       = safeHeadI
@@ -1409,9 +1406,9 @@ enumO codec0 iter@(IterF _) = resultI (runI codec0) >>= nextCodec
           | isIterEOFError codec = iter
           | otherwise            = EnumOFail (getIterError codec) iter 
       check CodecX           = iter
-      check (CodecE t)       = IterM $ runIter iter (chunk t)
-      check (CodecF codec t) = lift (runIter iter (chunk t)) >>= enumO codec
-enumO codec0 (IterCtl _ fr) = IterM $ fr Nothing >>= return . enumO codec0
+      check (CodecE t)       = runIter iter (chunk t)
+      check (CodecF codec t) = enumO codec $ runIter iter (chunk t)
+enumO codec0 (IterCtl _ fr) = enumO codec0 $ fr Nothing
 enumO _ iter                = iter
 
 -- | Like 'enumO', but the input function returns raw data, not
@@ -1467,12 +1464,12 @@ enumI codec0 iter@(IterF _) = resultI codec0 >>= nextCodec
       nextCodec codec | isIterEOFError codec = return iter
                       | otherwise         = EnumIFail (getIterError codec) iter
       nextIter CodecX _                 = return iter
-      nextIter (CodecF codec dat) False = feed dat >>= enumI codec
-      nextIter codecr _                 = feed $ unCodecR codecr
-      feed dat = lift $ runIter iter (chunk dat)
-enumI codec0 (IterCtl a fr) = IterCtl a $ fr >=> return . enumI codec0
+      nextIter (CodecF codec dat) False = enumI codec $ feed dat
+      nextIter codecr _                 = return $ feed $ unCodecR codecr
+      feed dat = runIter iter (chunk dat)
+enumI codec0 (IterCtl a fr) = IterCtl a $ enumI codec0 . fr
 -- If iter finished, still must feed EOF to codec before returning
-enumI codec0 iter           = lift (runIter codec0 chunkEOF) >>= check
+enumI codec0 iter           = returnI (runIter codec0 chunkEOF) >>= check
     where
       check codec | isIterEOFError codec = return iter
                   | isIterError codec    = EnumIFail (getIterError codec) iter
@@ -1495,7 +1492,7 @@ enumI' fn iter = enumI (iterToCodec fn) iter
 -- exception to indicate failure.
 safeCtlI :: (Typeable carg, Typeable cres, ChunkData t, Monad m) =>
             carg -> Iter t m (Maybe cres)
-safeCtlI carg = IterCtl (CtlCmd carg) $ return . return
+safeCtlI carg = IterCtl (CtlCmd carg) $ return
 
 -- | Issue a control request, and return the result.  Throws an
 -- exception if the operation did not succeed.
@@ -1510,27 +1507,34 @@ wrapCtl :: (ChunkData t, Monad m) =>
            (Iter t m a -> Iter t m a)
         -> Iter t m a -> Iter t m a
 wrapCtl f (IterM m)          = IterM $ wrapCtl f `liftM` m
-wrapCtl f (IterF iterf)      = IterF $ iterf >=> return . wrapCtl f
+wrapCtl f (IterF iterf)      = IterF $ wrapCtl f . iterf
 wrapCtl f iter@(IterCtl _ _) = wrapCtl f (f iter)
 wrapCtl _ iter               = iter
 
+{-
 -- | Wrap a handler for a particular kind of 'CtlCmd' request around
 -- an 'Iter'.
 enumCtl :: (ChunkData t, Monad m, Typeable carg, Typeable cres) =>
            (carg -> Iter t m cres) -> EnumO t m a
 enumCtl f = wrapCtl handler
     where
-      handler iter@(IterCtl carg0 fr) =
-          case cast carg0 of
-            Nothing   -> iter
-            Just carg -> IterM $ enumCtl f `liftM` fr carg
+      applyctl :: (carg -> Iter t m cres) -> CtlCmd carg cres -> Iter t m cres
+      applyctl f (CtlCmd arg) = f arg
+      handler iter@(IterCtl carg fr) =
+          case cast carg of
+            Nothing    -> iter
+            Just carg' -> do mr <- resultI $ applyctl f carg'
+                             if (isIterError mr)
+                               then EnumOFail (getIterError mr) iter
+                               else mr >>= fr . Just
       handler _ = error "enumCtl: impossible"
+-}
 
 -- | Block all handlers 'CtlCmd' request issued by an 'Iter'.
 filterCtl :: (ChunkData t, Monad m) => EnumO t m a
 filterCtl = wrapCtl handler
     where
-      handler (IterCtl _ fr) = IterM $ fr Nothing
+      handler (IterCtl _ fr) = fr Nothing
       handler _              = error "blockCtl: impossible"
 
 --
@@ -1661,7 +1665,7 @@ iterLoop = do
                     putMVar p $ case mp of
                                   Nothing -> c
                                   Just c' -> mappend c' c
-             return $ if eof then Done () chunkEOF else IterF $ iterf pipe
+             if eof then Done () chunkEOF else IterF $ iterf pipe
 
       enum pipe = let codec = do
                         p <- liftIO $ readMVar pipe
@@ -1688,10 +1692,10 @@ inumSplit iter1 = do
     where
       iterf mv (Chunk t eof) = do
         rold <- liftIO $ takeMVar mv
-        rnew <- runIter rold $ chunk t
+        rnew <- returnI $ runIter rold $ chunk t
         liftIO $ putMVar mv rnew
-        return $ case rnew of
-                   IterF _ | not eof -> IterF $ iterf mv
-                   _                 -> return rnew
+        case rnew of
+          IterF _ | not eof -> IterF $ iterf mv
+          _                 -> return rnew
 
 

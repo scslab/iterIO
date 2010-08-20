@@ -297,7 +297,7 @@ packE = enumI' $ do
 
 cE :: (Monad m) => Char -> Int -> EnumO L.ByteString m a
 cE c len iter =
-    lift (runIter iter (Chunk (L8.replicate (fromIntegral len) c) False)) >>= id
+    runIter iter (Chunk (L8.replicate (fromIntegral len) c) False)
 nI :: (Monad m) => Int -> Iter L.ByteString m Bool
 nI n = do
   s <- stringMaxI $ fromIntegral n

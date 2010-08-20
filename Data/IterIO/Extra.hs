@@ -57,7 +57,7 @@ chunkerToCodec iter = do
 
 -- | Feed pure data directly to an iteratee.
 feed :: (Monad m, ChunkData t) => t -> Iter t m a -> m (Iter t m a)
-feed t iter = runIter iter $ Chunk t False
+feed t iter = execIter $ runIter iter $ Chunk t False
 
 {-
 -- | Feed pure data directly to an iteratee from within a function of

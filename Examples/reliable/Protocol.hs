@@ -69,7 +69,7 @@ killEndpoint ep = do
 
 -- | Feed pure data directly to an iteratee.
 feed :: (Monad m, ChunkData t) => t -> Iter t m a -> m (Iter t m a)
-feed t iter = runIter iter $ Chunk t False
+feed t iter = execIter $ runIter iter $ Chunk t False
 inWindow :: SeqNo -> SeqNo -> SeqNo -> Bool
 inWindow wsz next seqno
     | next + wsz >= next = seqno >= next && seqno < next + wsz

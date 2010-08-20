@@ -65,7 +65,7 @@ safeHeadLikeI = do
 -- | Like 'lineI', but returns 'Nothing' on EOF.
 safeLineI :: (Monad m, LL.ListLike t e, Eq t, Enum e, Eq e) =>
              Iter t m (Maybe t)
-safeLineI = IterF $ return . doline LL.empty
+safeLineI = IterF $ doline LL.empty
     where
       cr = LL.singleton $ echr '\r'
       nl = LL.singleton $ echr '\n'
@@ -78,7 +78,7 @@ safeLineI = IterF $ return . doline LL.empty
           in case result of
                Just (l', r') -> Done (Just l') (Chunk r' eof)
                Nothing | eof -> Done Nothing (Chunk acc' True)
-               _             -> IterF $ return . doline acc'
+               _             -> IterF $ doline acc'
       dolr eof l r
           | LL.isPrefixOf nl r = Just (l, LL.drop (LL.length nl) r)
           | LL.isPrefixOf crnl r = Just (l, LL.drop (LL.length crnl) r)
@@ -101,7 +101,7 @@ lineI = do
 stringMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
               Int
            -> Iter t m t
-stringMaxI maxlen = IterF $ return . dostring
+stringMaxI maxlen = IterF $ dostring
     where
       dostring (Chunk s eof) =
           if null s && maxlen > 0 && not eof

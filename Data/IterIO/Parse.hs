@@ -222,7 +222,7 @@ skipI = (() <$)
 -- | Peeks at the next input element without consuming it.  Throws an
 -- 'IterEOF' exception if an end of file is encountered.
 peekI :: (LL.ListLike t e, Monad m) => Iter t m e
-peekI = IterF $ \c@(Chunk t eof) -> return $
+peekI = IterF $ \c@(Chunk t eof) ->
         if LL.null t
         then if eof
              then throwEOFI "peekI"
@@ -241,9 +241,9 @@ ensureI test = do
 -- that does not match the specified predicate.
 skipWhileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m ()
 skipWhileI test = IterF $ \(Chunk t eof) ->
-                  return $ case LL.dropWhile test t of
-                             t1 | LL.null t1 && not eof -> skipWhileI test
-                             t1 -> Done () $ Chunk t1 eof
+                  case LL.dropWhile test t of
+                    t1 | LL.null t1 && not eof -> skipWhileI test
+                    t1 -> Done () $ Chunk t1 eof
 
 -- | Like 'skipWhileI', but fails if at least one element does not
 -- satisfy the predicate.
@@ -317,10 +317,10 @@ whileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t
 whileI test = more LL.empty
     where
       more t0 = IterF $ \(Chunk t eof) ->
-                return $ case LL.span test t of
-                         (t1, t2) | not (LL.null t2) || eof ->
-                                      Done (LL.append t0 t1) $ Chunk t2 eof
-                         (t1, _) -> more (LL.append t0 t1)
+                case LL.span test t of
+                  (t1, t2) | not (LL.null t2) || eof ->
+                               Done (LL.append t0 t1) $ Chunk t2 eof
+                  (t1, _) -> more (LL.append t0 t1)
 
 -- | Like 'whileI', but fails if at least one element does not satisfy
 -- the predicate.
@@ -333,7 +333,7 @@ whileMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
              Int                  -- ^ Maximum number to match
           -> (e -> Bool)          -- ^ Predicate test
           -> Iter t m t
-whileMaxI nmax test = IterF $ \(Chunk t eof) -> return $
+whileMaxI nmax test = IterF $ \(Chunk t eof) ->
         let s = LL.takeWhile test $ LL.take nmax t
             slen = LL.length s
             rest = LL.drop slen t
