@@ -101,7 +101,7 @@ module Data.IterIO.Base
     , putI, sendI
     -- * Control functions
     , ctlI, safeCtlI
-    , filterCtl
+    , enumCtl, filterCtl
     -- * Some basic Enumerators
     , enumPure
     , enumCatch, enumHandler, inumCatch
@@ -1511,31 +1511,29 @@ wrapCtl f (IterF iterf)      = IterF $ wrapCtl f . iterf
 wrapCtl f iter@(IterCtl _ _) = wrapCtl f (f iter)
 wrapCtl _ iter               = iter
 
-{-
 -- | Wrap a handler for a particular kind of 'CtlCmd' request around
 -- an 'Iter'.
 enumCtl :: (ChunkData t, Monad m, Typeable carg, Typeable cres) =>
            (carg -> Iter t m cres) -> EnumO t m a
 enumCtl f = wrapCtl handler
     where
-      applyctl :: (carg -> Iter t m cres) -> CtlCmd carg cres -> Iter t m cres
-      applyctl f (CtlCmd arg) = f arg
+      apctl :: (carg -> Iter t m cres) -> (CtlCmd carg cres) -> Iter t m cres
+      apctl f (CtlCmd arg) = f arg
       handler iter@(IterCtl carg fr) =
           case cast carg of
-            Nothing    -> iter
-            Just carg' -> do mr <- resultI $ applyctl f carg'
-                             if (isIterError mr)
-                               then EnumOFail (getIterError mr) iter
-                               else mr >>= fr . Just
+            Nothing -> iter
+            Just ca -> do mr <- resultI $ apctl f ca
+                          if isIterError mr
+                            then EnumOFail (getIterError mr) (IterCtl carg fr)
+                            else mr >>= fr . cast
       handler _ = error "enumCtl: impossible"
--}
 
 -- | Block all handlers 'CtlCmd' request issued by an 'Iter'.
 filterCtl :: (ChunkData t, Monad m) => EnumO t m a
 filterCtl = wrapCtl handler
     where
       handler (IterCtl _ fr) = fr Nothing
-      handler _              = error "blockCtl: impossible"
+      handler _              = error "filterCtl: impossible"
 
 --
 -- Basic outer enumerators
