@@ -57,35 +57,9 @@ chunkerToCodec iter = do
 
 -- | Feed pure data directly to an iteratee.
 feed :: (Monad m, ChunkData t) => t -> Iter t m a -> m (Iter t m a)
-feed t iter = execIter $ runIter iter $ Chunk t False
-
-{-
--- | Feed pure data directly to an iteratee from within a function of
--- type 'EnumO'.  Takes the outer 'EnumO' as an argument so as to
--- invoke it recursively when the iteratee returns 'Cont'.
-feedO :: (Monad m, ChunkData t) =>
-         EnumO t m a            -- ^ Outer Enumerator (that gets more data)
-      -> t                      -- ^ Data to feed to the Iteratee
-      -> EnumO t m a            -- ^ Takes an Iter and feeds it the data
-feedO enum t iter = do
-  result <- lift $ feed t iter
-  case result of
-    IterF _ -> enum result
-    done    -> done
-
--- | Feed a chunk of the inner data type to the inner iteratee from
--- within an 'EnumI'.  Invokes the 'EnumI' in the first argument
--- recursively when the inner Iteratee returns 'Cont'.
-feedI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-         EnumI tOut tIn m a     -- ^ Inner Enumerator
-      -> tIn                    -- ^ Transcoded data to feed to inner Iter
-      -> EnumI tOut tIn m a     -- ^ Takes the inner Iter and feeds it the data
-feedI enum t iter = do
-    result <- lift $ feed t iter
-    case result of
-      IterF _ -> enum result
-      _       -> return $ result
--}
+feed t iter = case runIter iter $ chunk t of
+      IterM m -> m
+      iter'   -> return iter'
 
 --
 -- Some utility functions for things that are made hard by the Haskell

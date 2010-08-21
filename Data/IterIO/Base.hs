@@ -77,7 +77,7 @@ module Data.IterIO.Base
     , Iter(..), EnumO, EnumI, Codec, CodecR(..)
     -- * Core functions
     , (|$)
-    , execIter, runIter, run
+    , runIter, run
     , chunk, chunkEOF, isChunkEOF
     -- * Concatenation functions
     , cat, catI
@@ -104,7 +104,7 @@ module Data.IterIO.Base
     -- * Control functions
     , CtlCmd
     , ctlI, safeCtlI
-    -- , enumCtl, filterCtl
+    , enumCtl, filterCtl
     -- * Some basic Enumerators
     , enumPure
     , enumCatch, enumHandler, inumCatch
@@ -188,12 +188,12 @@ instance (ChunkData t) => Monoid (Chunk t) where
     -- EOF bit set, but make an exception for appending a null chunk,
     -- so that code like the following will work:
     --
-    -- execIter $ (Done (Done "" (Chunk "" True)) (Chunk "" False)) >>= id
+    --   (Done (Done "" (Chunk "" True)) (Chunk "" False)) >>= id
     --
     -- While the above code may seem arcane, something similar happens
     -- with, for instance:
     --
-    -- do iter <- lift $ runIter (return "") chunkEOF
+    -- do iter <- returnI $ runIter (return "") chunkEOF
     --    iter
     mappend a (Chunk b _) | null b        = a
     mappend _ _                           = error "mappend to EOF"
@@ -258,7 +258,7 @@ instance Exception IterParseErr where
 
 -- | Class of control commands for enclosing enumerators.  The class
 -- binds each control argument type to a unique result type.
-class (Typeable carg) => CtlCmd carg cres | carg -> cres
+class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
 -- | A request for a control operation
 data CtlReq t m a = forall carg cres. (CtlCmd carg cres) =>
@@ -309,7 +309,7 @@ iterC :: (CtlCmd carg cres) => carg -> (Maybe cres -> Iter t m a) -> Iter t m a
 iterC carg fr = IterC (CtlReq carg fr)
 
 -- | Apply a function to the next state of an 'Iter' if it is still
--- active.
+-- active, or the current state if it is not.
 apNext :: (Monad m) =>
          (Iter t m a -> Iter t m b)
       -> Iter t m a
@@ -355,11 +355,6 @@ instance (Show t, Show a) => Show (Iter t m a) where
     showsPrec _ (EnumIFail e i) rest =
         "EnumIFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
 -}
-
--- | Executes an 'Iter' until it it is no longer in the 'IterM' state.
-execIter :: (Monad m) => Iter t m a -> m (Iter t m a)
-execIter (IterM m) = m >>= execIter
-execIter iter      = return iter
 
 -- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
 -- 'Done', or in some error condition, simulates the behavior
@@ -474,7 +469,9 @@ isIterEOFError err         = case fromException $ getIterError err of
                                Just (IterEOF _) -> True
                                _                -> False
 
--- | True if an iteratee is not done and not an error.
+-- | True if an 'Iter' is requesting something from an
+-- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
+-- error states.
 isIterActive :: Iter t m a -> Bool
 isIterActive (IterF _) = True
 isIterActive (IterM _) = True
@@ -613,50 +610,48 @@ combineExpected (IterNoParse e) iter =
 
 -- | Try two Iteratees and return the result of executing the second
 -- if the first one throws an 'IterNoParse' exception.  The statement
--- @multiParse (a >>= f) b@ is somewhat similar to
--- @'ifParse' a f b@, but the two functions operate differently.
--- Depending on the situation, only one of the two
--- formulations is correct.  Specifically:
+-- @multiParse a b@ is similar to @'ifParse' a return b@, but the
+-- two functions operate differently.  Depending on the situation,
+-- only one of the two formulations is correct.  Specifically:
 -- 
 --  * @'ifParse' a f b@ works by first executing @a@, saving a copy of
 --    all input consumed by @a@.  If @a@ throws a parse error, the
 --    saved input is used to backtrack and execute @b@ on the same
---    input that @a@ just rejected.  If @a@ suceeds, @b@ is never run,
+--    input that @a@ just rejected.  If @a@ suceeds, @b@ is never run;
 --    @a@'s result is fed to @f@, and the resulting action is executed
 --    without backtracking (so any error thrown within @f@ will not be
 --    caught by this 'ifParse' expression).
 --
---    The main restriction of 'ifParse' is that @a@ must not consume
---    unbounded amounts of input, or the program may exhaust memory
---    saving the input for backtracking.  Note that the second
---    argument to 'ifParse' (in this case 'return') is a continuation
---    for @a@ when @a@ succeeds.
+--  * Istead of saving input, @multiParse a b@ executes both @a@ and
+--    @b@ concurrently as input chunks arrive.  If @a@ throws a parse
+--    error, then the result of executing @b@ is returned.  If @a@
+--    either succeeds or throws an exception not of class
+--    'IterNoParse', then the result of running @a@ is returned.
 --
---  * @multiParse (a >>= f) b@ avoids the unbounded input problem by
---    executing both @(a >>= f)@ and @b@ concurrently on input chunks
---    as they arrive.  If @a@ throws a parse error, then the result of
---    executing @b@ is returned.  If @a@ either succeeds or throws an
---    exception not of class 'IterNoParse', then the result of running
---    @a@ is returned.  However, in this case, even though @a@'s
---    result is returned, @b@ may have been fed some of the input
---    data.  (Specifically, @b@ will be fed all but the last chunk
---    processed by @a@.)
+--  * With @multiParse a b@, if @b@ returns a value, executes a
+--    monadic action via 'lift', or issues a control request via
+--    'ctlI', then further processing of @b@ will be suspended until
+--    @a@ experiences a parse error, and thus the behavior will be
+--    equivalent to @'ifParse' a return b@.
 --
---    The main restriction on @multiParse@ is that the second
---    argument, @b@, must not have monadic side effects.  Otherwise,
---    the result of executing @b@ on some partial input when @a@
---    succeeds can leave the process in an inconsistent state.
+-- The main restriction on 'ifParse' is that @a@ must not consume
+-- unbounded amounts of input, or the program may exhaust memory
+-- saving the input for backtracking.  Note that the second
+-- argument to 'ifParse' ('return') is a continuation
+-- for @a@ when @a@ succeeds.
 --
--- The big advantage of @multiParse@ is that it can avoid storing
--- unbounded amounts of input for backtracking purposes.  Another
--- advantage is that sometimes it is not convenient to break the parse
--- target into an action to execute with backtracking (@a@) and a
--- continuation to execute without (@f@).  @multiParse@ avoids the
--- need to do this, since it does not do backtracking.
+-- The advantage of @multiParse@ is that it can avoid storing
+-- unbounded amounts of input for backtracking purposes if both
+-- 'Iter's consume data.  Another advantage is that with an expression
+-- such as @'ifParse' a f b@, sometimes it is not convenient to break
+-- the parse target into an action to execute with backtracking (@a@)
+-- and a continuation to execute without backtracking (@f@).  The
+-- equivalent @multiParse (a >>= f) b@ avoids the need to do this,
+-- since it does not do backtracking.
 --
 -- However, it is important to note that it is still possible to end
--- up storing unbounded amounts with @multiParse@.  For example,
--- consider the following code:
+-- up storing unbounded amounts of input with @multiParse@.  For
+-- example, consider the following code:
 --
 -- > total :: (Monad m) => Iter String m Int
 -- > total = multiParse parseAndSumIntegerList (return -1) -- Bad
@@ -699,17 +694,22 @@ combineExpected (IterNoParse e) iter =
 -- on the input stream.
 multiParse :: (ChunkData t, Monad m) =>
               Iter t m a -> Iter t m a -> Iter t m a
-multiParse (IterM m) b = IterM $ flip multiParse b `liftM` m
-multiParse a@(IterF _) b = do
-  c <- chunkI
-  case runIter a c of
-    a1@(Done _ _) -> a1
-    a1 | not (isIterEOFError a1) -> multiParse a1 (runIter b c)
-    a1 -> case fromException $ getIterError a1 of
-            Just e  -> runIter (combineExpected e b) c
-            Nothing -> a1
-multiParse (IterC (CtlReq a fr)) b = iterC a $ \r -> multiParse (fr r) b
-multiParse a b = a `catchI` \err _ -> combineExpected err b
+multiParse a@(IterF _) b
+    | useIfParse b = ifParse a return b
+    | otherwise    = do c <- chunkI
+                        multiParse (runIter a c) (runIter b c)
+    where
+      -- If b is IterM, IterC, or Done, we will just accumulate all
+      -- the input anyway inside 'runIter', so we might as well just
+      -- do it efficiently with 'copyInput' (which is what 'ifParse'
+      -- uses, indirectly, via 'tryBI').
+      useIfParse (Done _ _) = True
+      useIfParse (IterM _)  = True
+      useIfParse (IterC _)  = True
+      useIfParse _          = False
+multiParse a b
+    | isIterActive a = apNext (flip multiParse b) a
+    | otherwise      = a `catchI` \err _ -> combineExpected err b
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
 -- all input consumed using 'tryBI'.  (This means @iter@ must not
@@ -720,7 +720,6 @@ multiParse a b = a `catchI` \err _ -> combineExpected err b
 -- @failure@ is fed the same input that @iter@ was).  If @iter@ throws
 -- any other type of exception, @ifParse@ passes the exception back
 -- and does not execute @failure@.
---
 ifParse :: (ChunkData t, Monad m) =>
            Iter t m a
         -- ^ Iteratee @iter@ to run with backtracking
@@ -741,58 +740,6 @@ ifParse iter yes no = do
 ifNoParse :: (ChunkData t, Monad m) =>
              Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
 ifNoParse iter no yes = ifParse iter yes no
-
-{-
--- | LL(1) parser alternative.  @a \<|\> b@ starts by executing @a@.
--- If @a@ throws an exception of class 'IterNoParse' /and/ @a@ has not
--- consumed any input, then @b@ is executed.  (@a@ has consumed input
--- if it returns in the 'IterF' state after being fed a non-empty
--- 'Chunk'.)
---
--- Use of this combinator is somewhat error-prone, because it may be
--- difficult to tell whether Iteratee @a@ will ever consume input
--- before failing.  For this reason, it is safer to use 'orI', the
--- '\/' operator, or the '<&>' operator, all of which support
--- unlimited lookahead (LL(*) parsing) in different ways.
---
--- @\<|\>@ has fixity:
---
--- > infixr 3 <|>
-(<|>) :: (ChunkData t, LL.ListLike t e, Monad m) =>
-         Iter t m a -> Iter t m a -> Iter t m a
-(<|>) = paranoidLL1
-infixr 3 <|>
-
-fastLL1 :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
-fastLL1 a@(IterF _) b = IterF $ \c -> runIter a c >>= check c
-    where
-      check _ a1@(Done _ _) = return a1
-      check c a1@(IterF _) | not (null c) = return a1
-                           | otherwise    = return $ fastLL1 a1 b
-      check c a1 = runIter (fastLL1 a1 b) c
-fastLL1 a b = a `catchI` \err _ -> combineExpected err b
-
-
--- | To catch bugs that only get triggered on certain input
--- boundaries, this version of @<|>@ always just feeds the first
--- character to Iteratees.
-paranoidLL1 :: (ChunkData t, LL.ListLike t e, Monad m) =>
-               Iter t m a -> Iter t m a -> Iter t m a
-paranoidLL1 a@(IterF _) b = IterF dorun
-    where
-      dorun c@(Chunk t eof)
-          | LL.null t || LL.null (LL.tail t) = runIter a c >>= check c
-          | otherwise                        = do
-        let ch = Chunk (LL.singleton $ LL.head t) False
-            ct = Chunk (LL.tail t) eof
-        a2 <- runIter a ch >>= check ch
-        runIter a2 ct
-      check _ a1@(Done _ _) = return a1
-      check c a1@(IterF _) | not (null c) = return a1
-                           | otherwise    = return $ paranoidLL1 a1 b
-      check c a1 = runIter (paranoidLL1 a1 b) c
-paranoidLL1 a b = a `catchI` \err _ -> combineExpected err b
--}
 
 --
 -- Some super-basic Iteratees
@@ -848,7 +795,8 @@ tryI = wrapI errToEither
 
 -- | Runs an 'Iter' until it no longer requests input, keeping a copy
 -- of all input that was fed to it (which might be longer than the
--- input the 'Iter' actually consumed).
+-- input that the 'Iter' actually consumed, because fed input includes
+-- any residual data returned in the 'Done' state).
 copyInput :: (ChunkData t, Monad m) =>
           Iter t m a
        -> Iter t m (Iter t m a, Chunk t)
@@ -857,13 +805,14 @@ copyInput iter1 = doit id iter1
       -- It is usually faster to use mappend in a right associative
       -- way (i.e, mappend a1 (mappend a2 (mappand a3 a4)) will be
       -- faster than mappend (mappend (mappend a1 a2) a3) a4).  Thus,
-      -- we pass a function as the accumulator, much the way 'ShowS'
-      -- optimizes (++) on srings.
+      -- acc is a function of the rest of the input, rather than a
+      -- simple prefix of ithe input.  This is the same technique used
+      -- by 'ShowS' to optimize the use of (++) on srings.
       doit acc iter@(IterF _) =
           IterF $ \c -> doit (acc . mappend c) (runIter iter c)
       doit acc iter | isIterActive iter = apNext (doit acc) iter
-      doit acc (Done a c)   = Done (return a, acc mempty) c
-      doit acc iter         = return (iter, acc mempty)
+      doit acc (Done a c)               = Done (return a, acc mempty) c
+      doit acc iter                     = return (iter, acc mempty)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -1090,20 +1039,10 @@ wrapI :: (ChunkData t, Monad m) =>
       -> Iter t m b                 -- ^ Returns an 'Iter' whose
                                     -- result will be transformed by
                                     -- the transformation function
-wrapI f iter | isIterActive iter = next iter
-             | otherwise         = f iter
-    where next = apNext (wrapI f)
-{-
-wrapI f iter0@(IterF _) = IterF $ rewrap . runIter iter0
-    where
-      rewrap iter@(IterF _)               = wrapI f iter
-      -- Can't return IterF state after EOF, so re-run output of f
-      rewrap iter@(Done _ (Chunk _ True)) = runIter (f iter) chunkEOF
-      rewrap iter                         = f iter
-wrapI f (IterM m)       = IterM $ m >>= return . wrapI f
-wrapI f (IterC a fr)    = IterC a $ wrapI f . fr
-wrapI f iter            = f iter
--}
+wrapI f = next
+    where next iter | isIterActive iter = apNext next iter
+                    | otherwise         = f iter
+
 
 -- XXX the following is no longer true of runI, but should it be true?
 -- In the event that the failure is an enumerator failure (either
@@ -1167,8 +1106,8 @@ joinI iter            = apRun joinI iter
 returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
            Iter tIn m a
         -> Iter tOut m (Iter tIn m a)
-returnI iter@(IterM _) = lift $ execIter iter
-returnI iter           = return iter
+returnI (IterM m) = IterM $ returnI `liftM` m
+returnI iter      = return iter
 
 -- | @resultI@ is like a version of 'returnI' that additionally
 -- ensures the returned 'Iter' is not in the 'IterF' state.  Moreover,
@@ -1543,39 +1482,31 @@ ctlI carg = safeCtlI carg >>= returnit
       returnit (Just res) = return res
       returnit Nothing    = fail $ "Unsupported CtlCmd " ++ show (typeOf carg)
 
-{-
 wrapCtl :: (ChunkData t, Monad m) =>
-           (Iter t m a -> Iter t m a)
+           (CtlReq t m a -> Iter t m a)
         -> Iter t m a -> Iter t m a
-wrapCtl f (IterM m)          = IterM $ wrapCtl f `liftM` m
-wrapCtl f (IterF iterf)      = IterF $ wrapCtl f . iterf
-wrapCtl f iter@(IterC _ _)   = wrapCtl f (f iter)
-wrapCtl _ iter               = iter
+wrapCtl f = next
+    where next (IterC req)              = next (f req)
+          next iter | isIterActive iter = apNext next iter
+                    | otherwise         = iter
 
 -- | Wrap a handler for a particular kind of 'CtlCmd' request around
 -- an 'Iter'.
-enumCtl :: (ChunkData t, Monad m, Typeable carg, Typeable cres) =>
+enumCtl :: (ChunkData t, Monad m, CtlCmd carg cres) =>
            (carg -> Iter t m cres) -> EnumO t m a
 enumCtl f = wrapCtl handler
     where
-      apctl :: (carg -> Iter t m cres) -> (CtlCmd carg cres) -> Iter t m cres
-      apctl f' (CtlCmd arg) = f' arg
-      handler iter@(IterC carg fr) =
+      handler (CtlReq carg fr) =
           case cast carg of
-            Nothing -> iter
-            Just ca -> do mr <- resultI $ apctl f ca
+            Nothing -> fr Nothing
+            Just ca -> do mr <- resultI $ f ca
                           if isIterError mr
-                            then EnumOFail (getIterError mr) (IterC carg fr)
+                            then EnumOFail (getIterError mr) (iterC carg fr)
                             else mr >>= fr . cast
-      handler _ = error "enumCtl: impossible"
 
 -- | Block all handlers 'CtlCmd' request issued by an 'Iter'.
 filterCtl :: (ChunkData t, Monad m) => EnumO t m a
-filterCtl = wrapCtl handler
-    where
-      handler (IterC _ fr) = fr Nothing
-      handler _            = error "filterCtl: impossible"
--}
+filterCtl = wrapCtl $ \(CtlReq _ fr) -> fr Nothing
 
 --
 -- Basic outer enumerators

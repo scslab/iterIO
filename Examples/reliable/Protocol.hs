@@ -24,7 +24,7 @@ import Network.Socket
 -- import System.IO
 
 import Data.IterIO
--- import Data.IterIO.Extra
+import Data.IterIO.Extra (feed)
 
 portOfAddr :: SockAddr -> PortNumber
 portOfAddr (SockAddrInet port _)      = port
@@ -68,8 +68,6 @@ killEndpoint ep = do
   modifyMVar_ (epLAR ep) $ \ack -> return $ xor ack 0x80000000
 
 -- | Feed pure data directly to an iteratee.
-feed :: (Monad m, ChunkData t) => t -> Iter t m a -> m (Iter t m a)
-feed t iter = execIter $ runIter iter $ Chunk t False
 inWindow :: SeqNo -> SeqNo -> SeqNo -> Bool
 inWindow wsz next seqno
     | next + wsz >= next = seqno >= next && seqno < next + wsz
