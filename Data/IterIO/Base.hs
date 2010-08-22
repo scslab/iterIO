@@ -531,14 +531,14 @@ fixtest2 i = do
 -- defined using 'fixMonadIO'.
 fixIterPure :: (ChunkData t, MonadFix m) =>
                (a -> Iter t m a) -> Iter t m a
-fixIterPure f' = dofix mempty f'
+fixIterPure f = IterM $ mfix ff
     where
-      dofix c0 f = IterF $ \c1 -> do
-         let c = mappend c0 c1
-         iter <- mfix $ \ ~(Done a _) -> runIter (f a) c
-         case iter of
-           IterF _ -> return $ dofix c f -- Warning: repeats side effects
-           _       -> return iter
+      ff ~(Done a _)  = check $ f a
+      -- Warning: IterF case re-runs function, repeating side effects
+      check (IterF i) = return $ IterF $ \c ->
+                        fixIterPure $ \a -> runIter (f a) c
+      check (IterM m) = m >>= check
+      check iter      = return iter
 -}
 
 -- | This is a generalization of 'fixIO' for arbitrary members of the
