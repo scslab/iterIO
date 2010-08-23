@@ -440,10 +440,17 @@ apRun :: (Monad m, ChunkData t1) =>
          (Iter t1 m a -> Iter t2 m b)
       -> Iter t1 m a
       -> Iter t2 m b
-apRun f iter@(IterF _)           = f $ runIter iter chunkEOF
+apRun f iter@(IterF _)           = f $ unEOF $ runIter iter chunkEOF
 apRun f (IterM iterm)            = IterM $ iterm >>= return . f
 apRun f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
 apRun f iter                     = f iter
+
+-- | Remove EOF bit from an Iter in the 'Done' state.
+unEOF :: (Monad m, ChunkData t) => Iter t m a -> Iter t m a
+unEOF = wrapI fixeof
+    where
+      fixeof (Done a (Chunk t _)) = Done a (Chunk t False)
+      fixeof iter                 = iter
 
 --
 -- Core functions
@@ -1371,9 +1378,8 @@ infixr 4 ..|
 -- This convention allows @Codec@s to maintain state from one
 -- invocation to the next by currying the state into the codec
 -- function the next time it is invoked.  A @Codec@ that cannot
--- process more input returns a 'CodecR' in the 'CodecE' state, if
--- there is some final output, or the 'CodecX' state, if there is
--- nothing more to feed to the 'Iter'.
+-- process more input returns a 'CodecR' in the 'CodecE' state,
+-- possibly including some final output.
 type Codec tArg m tRes = Iter tArg m (CodecR tArg m tRes)
 
 -- | The result type of a 'Codec' that translates from type @tArg@ to
@@ -1390,11 +1396,6 @@ data CodecR tArg m tRes = CodecF { unCodecF :: (Codec tArg m tRes)
                           -- is ending--i.e., returning for the last
                           -- time--and thus cannot provide another
                           -- 'Codec' to process further input.
-                        | CodecX
-                          -- ^ An alternative to 'CodecE' when the
-                          -- 'Codec' is ending and additionally did
-                          -- not receive enough input to produce one
-                          -- last output.
 
 -- | Transform an ordinary 'Iter' into a stateless 'Codec'.
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
@@ -1423,9 +1424,9 @@ enumO codec0 iter@(IterF _)        = resultI (runI codec0) >>= nextCodec
       nextCodec codec
           | isIterEOFError codec = iter
           | otherwise            = EnumOFail (getIterError codec) iter 
-      check CodecX           = iter
-      check (CodecE t)       = runIter iter (chunk t)
-      check (CodecF codec t) = enumO codec $ runIter iter (chunk t)
+      check (CodecE t) | null t    = iter
+                       | otherwise = runIter iter (chunk t)
+      check (CodecF codec t)       = enumO codec $ runIter iter (chunk t)
 enumO codec0 (IterC (CtlReq _ fr)) = enumO codec0 $ fr Nothing
 enumO _ iter                       = iter
 
@@ -1448,7 +1449,8 @@ enumO' = enumO . iterToCodec
 -- >       where
 -- >         doGet h = do
 -- >           buf <- liftIO $ hWaitForInput h (-1) >> L.hGetNonBlocking h 8192
--- >           return $ if null buf then CodecX else CodecF (doGet h) buf
+-- >           return $ if null buf then CodecE L.empty
+-- >                                else CodecF (doGet h) buf
 enumObracket :: (Monad m, ChunkData t) =>
                 (Iter () m b)
              -- ^ Before action
@@ -1480,14 +1482,14 @@ enumI codec0 iter@(IterF _) = resultI codec0 >>= nextCodec
       nextCodec (Done codecr (Chunk _ eof))  = nextIter codecr eof
       nextCodec codec | isIterEOFError codec = return iter
                       | otherwise         = EnumIFail (getIterError codec) iter
-      nextIter CodecX _                 = return iter
       nextIter (CodecF codec dat) False = enumI codec $ feed dat
+      nextIter (CodecE t) _ | null t    = return iter
       nextIter codecr _                 = return $ feed $ unCodecR codecr
       feed dat = runIter iter (chunk dat)
 enumI codec0 iter
-    | isIterActive iter     = apRun (enumI codec0) iter
+    | isIterActive iter = apRun (enumI codec0) iter
     -- If iter finished, still must feed EOF to codec before returning
-    | otherwise             = resultI (runIter codec0 chunkEOF) >>= check
+    | otherwise         = resultI (unEOF $ runIter codec0 chunkEOF) >>= check
     where
       check codec | isIterEOFError codec = return iter
                   | isIterError codec    = EnumIFail (getIterError codec) iter
