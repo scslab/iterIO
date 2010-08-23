@@ -74,16 +74,13 @@
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..)
-    , Iter(..), EnumO, EnumI, Codec, CodecR(..)
-    -- * Core functions
+    , Iter(..), EnumO, EnumI
+    -- * Concatenation and fusing operators
     , (|$)
-    , runIter, run
-    , chunk, chunkEOF
-    -- * Concatenation functions
     , cat, catI
-    -- * Fusing operators
     , (|..), (..|..), (..|)
     -- * Enumerator construction functions
+    , Codec, CodecR(..)
     , iterToCodec
     , enumO, enumO', enumObracket, enumI, enumI'
     -- * Exception and error functions
@@ -104,6 +101,8 @@ module Data.IterIO.Base
     , CtlCmd
     , ctlI, safeCtlI
     , enumCtl, filterCtl
+    -- * Other functions
+    , runIter, run, chunk, chunkEOF
     ) where
 
 import Prelude hiding (null)
@@ -1399,7 +1398,9 @@ data CodecR tArg m tRes = CodecF { unCodecF :: (Codec tArg m tRes)
 
 -- | Transform an ordinary 'Iter' into a stateless 'Codec'.
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
-iterToCodec iter = iter >>= return . CodecF (iterToCodec iter)
+iterToCodec iter = codec
+    where codec = iter >>= return . CodecF codec
+-- iter >>= return . CodecF (iterToCodec iter)
 
 -- | Construct an outer enumerator given a 'Codec' that generates data
 -- of type @t@.
