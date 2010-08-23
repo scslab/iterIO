@@ -88,7 +88,7 @@ text_except except = concat1I (while1I ok <|> lws)
 
 -- | Parse one hex digit and return its value from 0-15.
 hex :: (Monad m) => Iter L m Int
-hex = headLikeI >>= digit <?> "hex digit"
+hex = headI >>= digit <?> "hex digit"
     where
       digit c | c > 127   = expectedI "hex digit"
               | otherwise = case hexTab ! c of
@@ -126,7 +126,7 @@ percent_decode :: (Monad m) => (Word8 -> Bool) -> Iter L m L
 percent_decode test = foldrI L.cons' L.empty getc
     where
       getc = do
-        c <- headLikeI
+        c <- headI
         case c :: Word8 of
           _ | c == eord '%' -> getval
           _ | test c        -> return c
@@ -135,7 +135,7 @@ percent_decode test = foldrI L.cons' L.empty getc
 
 -- | Parse a backslash-escaped character.
 quoted_pair :: (Monad m) => Iter L m L
-quoted_pair = char '\\' <:> headLikeI <:> nil
+quoted_pair = char '\\' <:> headI <:> nil
 
 -- | 'text' and 'quoted_pair's surrounded by double quotes.
 quoted_string :: (Monad m) => Iter L m S

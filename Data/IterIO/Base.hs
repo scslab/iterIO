@@ -78,7 +78,7 @@ module Data.IterIO.Base
     -- * Core functions
     , (|$)
     , runIter, run
-    , chunk, chunkEOF, isChunkEOF
+    , chunk, chunkEOF
     -- * Concatenation functions
     , cat, catI
     -- * Fusing operators
@@ -88,27 +88,22 @@ module Data.IterIO.Base
     , enumO, enumO', enumObracket, enumI, enumI'
     -- * Exception and error functions
     , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
-    , isIterError, isEnumError
     , throwI, throwEOFI, expectedI
     , tryI, tryBI, catchI, catchBI, handlerI, handlerBI
+    , enumCatch, enumHandler, inumCatch
     , resumeI, verboseResumeI, mapExceptionI
-    -- * Other functions
-    , iterLoop
     , ifParse, ifNoParse, multiParse
-    -- , fixIterPure, fixMonadIO
     -- * Some basic Iteratees
     , nullI, dataI, chunkI
     , wrapI, runI, popI, joinI, returnI, resultI
-    , headI, safeHeadI
-    , putI, sendI
+    -- * Some basic Enumerators
+    , enumPure
+    , iterLoop
+    , inumNop, inumSplit
     -- * Control functions
     , CtlCmd
     , ctlI, safeCtlI
     , enumCtl, filterCtl
-    -- * Some basic Enumerators
-    , enumPure
-    , enumCatch, enumHandler, inumCatch
-    , inumNop, inumSplit
     ) where
 
 import Prelude hiding (null)
@@ -133,7 +128,7 @@ import System.IO.Unsafe
 
 
 --
--- Iteratee types
+-- Iteratee types and instances
 --
 
 -- | @ChunkData@ is the class of data types that can be output by an
@@ -176,11 +171,6 @@ chunk t = Chunk t False
 chunkEOF :: (Monoid t) => Chunk t
 chunkEOF = Chunk mempty True
 
--- | Returns True if a chunk is the result of 'chunkEOF' (i.e., has no
--- data and a 'True' EOF bit).
-isChunkEOF :: (ChunkData t) => Chunk t -> Bool
-isChunkEOF (Chunk t eof) = eof && null t
-
 instance (ChunkData t) => Monoid (Chunk t) where
     mempty = Chunk mempty False
     mappend (Chunk a False) (Chunk b eof) = Chunk (mappend a b) eof
@@ -201,54 +191,6 @@ instance (ChunkData t) => Monoid (Chunk t) where
 instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
     null (Chunk _ True)  = False
-
--- | Generalized class of errors that occur when an Iteratee does not
--- receive expected input.  (Catches 'IterEOF', 'IterExpected', and
--- the miscellaneous 'IterParseErr'.)
-data IterNoParse = forall a. (Exception a) => IterNoParse a deriving (Typeable)
-instance Show IterNoParse where
-    showsPrec _ (IterNoParse e) rest = show e ++ rest
-instance Exception IterNoParse
-
-noParseFromException :: (Exception e) => SomeException -> Maybe e
-noParseFromException s = do IterNoParse e <- fromException s; cast e
-
-noParseToException :: (Exception e) => e -> SomeException
-noParseToException = toException . IterNoParse
-
--- | End-of-file occured in an Iteratee that required more input.
-data IterEOF = IterEOF IOError deriving (Typeable)
-instance Show IterEOF where
-    showsPrec _ (IterEOF e) rest = show e ++ rest
-instance Exception IterEOF where
-    toException = noParseToException
-    fromException = noParseFromException
-
-unIterEOF :: SomeException -> SomeException
-unIterEOF e = case fromException e of
-                Just (IterEOF e') -> toException e'
-                _                 -> e
-
--- | Iteratee expected particular input and did not receive it.
-data IterExpected = IterExpected [String] deriving (Typeable)
-instance Show IterExpected where
-    showsPrec _ (IterExpected [token]) rest =
-        "Iteratee expected " ++ token ++ rest
-    showsPrec _ (IterExpected tokens) rest =
-        "Iteratee expected one of ["
-        ++ intercalate ", " tokens ++ "]" ++ rest
-instance Exception IterExpected where
-    toException = noParseToException
-    fromException = noParseFromException
-
--- | Miscellaneous Iteratee parse error.
-data IterParseErr = IterParseErr String deriving (Typeable)
-instance Show IterParseErr where
-    showsPrec _ (IterParseErr err) rest =
-        "Iteratee parse error: " ++ err ++ rest
-instance Exception IterParseErr where
-    toException = noParseToException
-    fromException = noParseFromException
 
 
 -- Note that the Ctl types were originally done without
@@ -304,34 +246,6 @@ data Iter t m a = IterF (Chunk t -> Iter t m a)
                 -- @'Iter' t m a\'@ for some @a'@ in the result of an
                 -- 'EnumI'.)
 
--- | @iterC carg fr = 'IterC' ('CtlReq' carg fr)@
-iterC :: (CtlCmd carg cres) => carg -> (Maybe cres -> Iter t m a) -> Iter t m a
-iterC carg fr = IterC (CtlReq carg fr)
-
--- | Apply a function to the next state of an 'Iter' if it is still
--- active, or the current state if it is not.
-apNext :: (Monad m) =>
-         (Iter t m a -> Iter t m b)
-      -> Iter t m a
-      -> Iter t m b
-apNext f (IterF iterf)            = IterF $ f . iterf
-apNext f (IterM iterm)            = IterM $ iterm >>= return . f
-apNext f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
-apNext f iter                     = f iter
-
--- | Like 'apNext', but feed an EOF to the 'Iter' if it is in the
--- 'IterF' state.
-apRun :: (Monad m, ChunkData t1) =>
-         (Iter t1 m a -> Iter t2 m b)
-      -> Iter t1 m a
-      -> Iter t2 m b
-apRun f iter@(IterF _)           = f $ runIter iter chunkEOF
-apRun f (IterM iterm)            = IterM $ iterm >>= return . f
-apRun f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
-apRun f iter                     = f iter
-
-
-
 instance (ChunkData t) => Show (Iter t m a) where
     showsPrec _ (IterF _) rest = "IterF _" ++ rest
     showsPrec _ (IterM _) rest = "IterM _" ++ rest
@@ -344,76 +258,6 @@ instance (ChunkData t) => Show (Iter t m a) where
         "EnumOFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
     showsPrec _ (EnumIFail e _) rest =
         "EnumIFail " ++ show e ++ " _" ++ rest
-
-{-
-instance (Show t, Show a) => Show (Iter t m a) where
-    showsPrec _ (IterF _) rest = "IterF" ++ rest
-    showsPrec _ (Done a c) rest = "Done (" ++ show a ++ ") " ++ show c ++ rest
-    showsPrec _ (IterFail e) rest = "IterFail " ++ show e ++ rest
-    showsPrec _ (EnumOFail e i) rest =
-        "EnumOFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
-    showsPrec _ (EnumIFail e i) rest =
-        "EnumIFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
--}
-
--- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
--- 'Done', or in some error condition, simulates the behavior
--- appropriately.
---
--- Note that this function asserts the following invariants on the
--- behavior of an 'Iter':
---
---     1. An 'Iter' may not return an 'IterF' (asking for more input)
---        if it received a 'Chunk' with the EOF bit 'True'.  (It is
---        okay to return IterF after issuing a successful 'IterC'
---        request.)
---
---     2. An 'Iter' returning 'Done' must not set the EOF bit if it
---        did not receive the EOF bit.
---
--- It /is/, however, okay for an 'Iter' to return 'Done' without the
--- EOF bit even if the EOF bit was set on its input chunk, as
--- @runIter@ will just propagate the EOF bit.  For instance, the
--- following code is valid:
---
--- @
---      runIter (return ()) 'chunkEOF'
--- @
---
--- Even though it is equivalent to:
---
--- @
---      runIter ('Done' () ('Chunk' 'mempty' True)) ('Chunk' 'mempty' False)
--- @
---
--- in which the first argument to @runIter@ appears to be discarding
--- the EOF bit from the input chunk.  @runIter@ will propagate the EOF
--- bit, making the above code equivalent to to @'Done' () 'chunkEOF'@.
---
--- On the other hand, the following code is illegal, as it violates
--- invariant 2 above:
---
--- @
---      runIter ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
--- @
-runIter :: (ChunkData t, Monad m) =>
-           Iter t m a
-        -> Chunk t
-        -> Iter t m a
-runIter (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
-    where
-      noEOF (Done _ (Chunk _ True)) = error "runIter: IterF returned bad EOF"
-      noEOF iter                    = iter
-      forceEOF (IterF _)             = error "runIter: IterF returned after EOF"
-      forceEOF (IterM m)             = IterM $ forceEOF `liftM` m
-      forceEOF (IterC (CtlReq a fr)) = iterC a $ \r -> 
-                                       case r of Just _  -> fr r
-                                                 Nothing -> forceEOF $ fr r
-      forceEOF iter                  = iter
-runIter (IterM m) c               = IterM $ flip runIter c `liftM` m
-runIter (Done a c) c'             = Done a (mappend c c')
-runIter (IterC (CtlReq a fr)) c   = iterC a $ flip runIter c . fr
-runIter err _                     = err
 
 instance (ChunkData t, Monad m) => Functor (Iter t m) where
     fmap = liftM
@@ -433,53 +277,40 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
     (IterC (CtlReq a fr)) >>= k = iterC a $ fr >=> k
     err                   >>= _ = IterFail $ getIterError err
 
-    fail msg = IterFail $ mkError msg
+    fail msg = IterFail $ toException $ ErrorCall msg
 
-getIterError                 :: Iter t m a -> SomeException
-getIterError (IterFail e)    = e
-getIterError (EnumOFail e _) = e
-getIterError (EnumIFail e _) = e
-getIterError (IterM _)       = error "getIterError: no error (in IterM state)"
-getIterError (IterC _)       = error "getIterError: no error (in IterC state)"
-getIterError _               = error "getIterError: no error to extract"
+instance (ChunkData t) => MonadTrans (Iter t) where
+    lift m = IterM $ m >>= return . return
 
--- | True if an iteratee /or/ an enclosing enumerator has experienced
--- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
--- 'True', but the converse is not true.)
-isIterError :: Iter t m a -> Bool
-isIterError (IterFail _)    = True
-isIterError (EnumOFail _ _) = True
-isIterError (EnumIFail _ _) = True
-isIterError _               = False
+-- | Lift an IO operation into an 'Iter' monad, but if the IO
+-- operation throws an error, catch the exception and return it as a
+-- failure of the Iteratee.  An IO exception satisfying the
+-- 'isEOFError' predicate is re-wrapped in an 'IterEOF' type so as to
+-- be caught by handlers expecting 'IterNoParse'.
+instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
+    liftIO m = do
+      result <- lift $ liftIO $ try m
+      case result of
+        Right ok -> return ok
+        Left err -> IterFail $ case fromException err of
+                                 Just ioerr | isEOFError ioerr ->
+                                                toException $ IterEOF ioerr
+                                 _ -> err
 
--- | True if an enumerator enclosing an iteratee has experienced a
--- failure (but not if the iteratee itself failed).
-isEnumError :: Iter t m a -> Bool
-isEnumError (EnumOFail _ _) = True
-isEnumError (EnumIFail _ _) = True
-isEnumError _               = False
+-- | This is a generalization of 'fixIO' for arbitrary members of the
+-- 'MonadIO' class.  
+fixMonadIO :: (MonadIO m) =>
+              (a -> m a) -> m a
+fixMonadIO f = do
+  ref <- liftIO $ newIORef $ throw $ toException
+         $ ErrorCall "fixMonadIO: non-termination"
+  a <- liftIO $ unsafeInterleaveIO $ readIORef ref
+  r <- f a
+  liftIO $ writeIORef ref r
+  return r
 
--- | True if an iteratee is in an error state caused by an EOF exception.
-isIterEOFError :: Iter t m a -> Bool
-isIterEOFError (IterF _)   = False
-isIterEOFError (IterM _)   = False
-isIterEOFError (Done _ _)  = False
-isIterEOFError (IterC _)   = False
-isIterEOFError err         = case fromException $ getIterError err of
-                               Just (IterEOF _) -> True
-                               _                -> False
-
--- | True if an 'Iter' is requesting something from an
--- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
--- error states.
-isIterActive :: Iter t m a -> Bool
-isIterActive (IterF _) = True
-isIterActive (IterM _) = True
-isIterActive (IterC _) = True
-isIterActive _         = False
-
-mkError :: String -> SomeException
-mkError msg = toException $ ErrorCall msg
+instance (ChunkData t, MonadIO m) => MonadFix (Iter t m) where
+    mfix f = fixMonadIO f
 
 {- fixIterPure and fixIterIO allow MonadFix instances, which support
    out-of-order name bindings in an "mdo" block, provided your file
@@ -541,38 +372,147 @@ fixIterPure f = IterM $ mfix ff
       check iter      = return iter
 -}
 
--- | This is a generalization of 'fixIO' for arbitrary members of the
--- 'MonadIO' class.  
-fixMonadIO :: (MonadIO m) =>
-              (a -> m a) -> m a
-fixMonadIO f = do
-  ref <- liftIO $ newIORef $ throw $ mkError "fixMonadIO: non-termination"
-  a <- liftIO $ unsafeInterleaveIO $ readIORef ref
-  r <- f a
-  liftIO $ writeIORef ref r
-  return r
 
-instance (ChunkData t, MonadIO m) => MonadFix (Iter t m) where
-    mfix f = fixMonadIO f
+--
+-- Internal utility functions
+--
 
-instance (ChunkData t) => MonadTrans (Iter t) where
-    lift m = IterM $ m >>= return . return
+-- | @iterC carg fr = 'IterC' ('CtlReq' carg fr)@
+iterC :: (CtlCmd carg cres) => carg -> (Maybe cres -> Iter t m a) -> Iter t m a
+iterC carg fr = IterC (CtlReq carg fr)
 
--- | Lift an IO operation into an 'Iter' monad, but if the IO
--- operation throws an error, catch the exception and return it as a
--- failure of the Iteratee.  An IO exception satisfying the
--- 'isEOFError' predicate is re-wrapped in an 'IterEOF' type so as to
--- be caught by handlers expecting 'IterNoParse'.
-instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
-    liftIO m = do
-      result <- lift $ liftIO $ try m
-      case result of
-        Right ok -> return ok
-        Left err -> IterFail $ case fromException err of
-                                 Just ioerr | isEOFError ioerr ->
-                                                toException $ IterEOF ioerr
-                                 _ -> err
+getIterError                 :: Iter t m a -> SomeException
+getIterError (IterFail e)    = e
+getIterError (EnumOFail e _) = e
+getIterError (EnumIFail e _) = e
+getIterError (IterM _)       = error "getIterError: no error (in IterM state)"
+getIterError (IterC _)       = error "getIterError: no error (in IterC state)"
+getIterError _               = error "getIterError: no error to extract"
 
+-- | True if an iteratee /or/ an enclosing enumerator has experienced
+-- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
+-- 'True', but the converse is not true.)
+isIterError :: Iter t m a -> Bool
+isIterError (IterFail _)    = True
+isIterError (EnumOFail _ _) = True
+isIterError (EnumIFail _ _) = True
+isIterError _               = False
+
+-- | True if an enumerator enclosing an iteratee has experienced a
+-- failure (but not if the iteratee itself failed).
+isEnumError :: Iter t m a -> Bool
+isEnumError (EnumOFail _ _) = True
+isEnumError (EnumIFail _ _) = True
+isEnumError _               = False
+
+-- | True if an iteratee is in an error state caused by an EOF exception.
+isIterEOFError :: Iter t m a -> Bool
+isIterEOFError (IterF _)   = False
+isIterEOFError (IterM _)   = False
+isIterEOFError (Done _ _)  = False
+isIterEOFError (IterC _)   = False
+isIterEOFError err         = case fromException $ getIterError err of
+                               Just (IterEOF _) -> True
+                               _                -> False
+
+-- | True if an 'Iter' is requesting something from an
+-- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
+-- error states.
+isIterActive :: Iter t m a -> Bool
+isIterActive (IterF _) = True
+isIterActive (IterM _) = True
+isIterActive (IterC _) = True
+isIterActive _         = False
+
+-- | Apply a function to the next state of an 'Iter' if it is still
+-- active, or the current state if it is not.
+apNext :: (Monad m) =>
+         (Iter t m a -> Iter t m b)
+      -> Iter t m a
+      -> Iter t m b
+apNext f (IterF iterf)            = IterF $ f . iterf
+apNext f (IterM iterm)            = IterM $ iterm >>= return . f
+apNext f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
+apNext f iter                     = f iter
+
+-- | Like 'apNext', but feed an EOF to the 'Iter' if it is in the
+-- 'IterF' state.
+apRun :: (Monad m, ChunkData t1) =>
+         (Iter t1 m a -> Iter t2 m b)
+      -> Iter t1 m a
+      -> Iter t2 m b
+apRun f iter@(IterF _)           = f $ runIter iter chunkEOF
+apRun f (IterM iterm)            = IterM $ iterm >>= return . f
+apRun f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
+apRun f iter                     = f iter
+
+--
+-- Core functions
+--
+
+-- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
+-- 'Done', or in some error condition, simulates the behavior
+-- appropriately.
+--
+-- Note that this function asserts the following invariants on the
+-- behavior of an 'Iter':
+--
+--     1. An 'Iter' may not return an 'IterF' (asking for more input)
+--        if it received a 'Chunk' with the EOF bit 'True'.  (It is
+--        okay to return IterF after issuing a successful 'IterC'
+--        request.)
+--
+--     2. An 'Iter' returning 'Done' must not set the EOF bit if it
+--        did not receive the EOF bit.
+--
+-- It /is/, however, okay for an 'Iter' to return 'Done' without the
+-- EOF bit even if the EOF bit was set on its input chunk, as
+-- @runIter@ will just propagate the EOF bit.  For instance, the
+-- following code is valid:
+--
+-- @
+--      runIter (return ()) 'chunkEOF'
+-- @
+--
+-- Even though it is equivalent to:
+--
+-- @
+--      runIter ('Done' () ('Chunk' 'mempty' True)) ('Chunk' 'mempty' False)
+-- @
+--
+-- in which the first argument to @runIter@ appears to be discarding
+-- the EOF bit from the input chunk.  @runIter@ will propagate the EOF
+-- bit, making the above code equivalent to to @'Done' () 'chunkEOF'@.
+--
+-- On the other hand, the following code is illegal, as it violates
+-- invariant 2 above:
+--
+-- @
+--      runIter ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
+-- @
+runIter :: (ChunkData t, Monad m) =>
+           Iter t m a
+        -> Chunk t
+        -> Iter t m a
+runIter (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
+    where
+      noEOF (Done _ (Chunk _ True)) = error "runIter: IterF returned bad EOF"
+      noEOF iter                    = iter
+      forceEOF (IterF _)             = error "runIter: IterF returned after EOF"
+      forceEOF (IterM m)             = IterM $ forceEOF `liftM` m
+      forceEOF (IterC (CtlReq a fr)) = iterC a $ \r -> 
+                                       case r of Just _  -> fr r
+                                                 Nothing -> forceEOF $ fr r
+      forceEOF iter                  = iter
+runIter (IterM m) c               = IterM $ flip runIter c `liftM` m
+runIter (Done a c) c'             = Done a (mappend c c')
+runIter (IterC (CtlReq a fr)) c   = iterC a $ flip runIter c . fr
+runIter err _                     = err
+
+unIterEOF :: SomeException -> SomeException
+unIterEOF e = case fromException e of
+                Just (IterEOF e') -> toException e'
+                _                 -> e
 
 -- | Return the result of an iteratee.  If it is still in the 'IterF'
 -- state, feed it an EOF to extract a result.  Throws an exception if
@@ -590,6 +530,49 @@ run (EnumIFail e _)       = throw $ unIterEOF e
 --
 -- Exceptions
 --
+
+-- | Generalized class of errors that occur when an Iteratee does not
+-- receive expected input.  (Catches 'IterEOF', 'IterExpected', and
+-- the miscellaneous 'IterParseErr'.)
+data IterNoParse = forall a. (Exception a) => IterNoParse a deriving (Typeable)
+instance Show IterNoParse where
+    showsPrec _ (IterNoParse e) rest = show e ++ rest
+instance Exception IterNoParse
+
+noParseFromException :: (Exception e) => SomeException -> Maybe e
+noParseFromException s = do IterNoParse e <- fromException s; cast e
+
+noParseToException :: (Exception e) => e -> SomeException
+noParseToException = toException . IterNoParse
+
+-- | End-of-file occured in an Iteratee that required more input.
+data IterEOF = IterEOF IOError deriving (Typeable)
+instance Show IterEOF where
+    showsPrec _ (IterEOF e) rest = show e ++ rest
+instance Exception IterEOF where
+    toException = noParseToException
+    fromException = noParseFromException
+
+-- | Iteratee expected particular input and did not receive it.
+data IterExpected = IterExpected [String] deriving (Typeable)
+instance Show IterExpected where
+    showsPrec _ (IterExpected [token]) rest =
+        "Iteratee expected " ++ token ++ rest
+    showsPrec _ (IterExpected tokens) rest =
+        "Iteratee expected one of ["
+        ++ intercalate ", " tokens ++ "]" ++ rest
+instance Exception IterExpected where
+    toException = noParseToException
+    fromException = noParseFromException
+
+-- | Miscellaneous Iteratee parse error.
+data IterParseErr = IterParseErr String deriving (Typeable)
+instance Show IterParseErr where
+    showsPrec _ (IterParseErr err) rest =
+        "Iteratee parse error: " ++ err ++ rest
+instance Exception IterParseErr where
+    toException = noParseToException
+    fromException = noParseFromException
 
 -- | Run an Iteratee, and if it throws a parse error by calling
 -- 'expectedI', then combine the exptected tokens with those of a
@@ -740,10 +723,6 @@ ifParse iter yes no = do
 ifNoParse :: (ChunkData t, Monad m) =>
              Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
 ifNoParse iter no yes = ifParse iter yes no
-
---
--- Some super-basic Iteratees
---
 
 -- | Throw an exception from an Iteratee.  The exception will be
 -- propagated properly through nested Iteratees, which will allow it
@@ -975,6 +954,107 @@ handlerBI :: (Exception e, ChunkData t, Monad m) =>
           -> Iter t m a
 handlerBI = flip catchBI
 
+-- | Like 'catchI', but applied to 'EnumO's and 'EnumI's instead of
+-- 'Iter's, and does not catch errors thrown by 'Iter's.
+--
+-- There are three 'catch'-like functions in the iterIO library,
+-- catching varying numbers of types of failures.  @inumCatch@ is the
+-- middle option.  By comparison:
+--
+-- * 'catchI' catches the most errors, including those thrown by
+--   'Iter's.  'catchI' can be applied to 'Iter's, 'EnumI's, or
+--   'enumO's, and is useful both to the left and to the right of
+--   '|$'.
+--
+-- * @inumCatch@ catches 'EnumI' or 'EnumO' failures, but not 'Iter'
+--   failures.  It can be applied to 'EnumI's or 'EnumO's, to the left
+--   or to the right of '|$'.  When applied to the left of '|$', will
+--   not catch any errors thrown by 'EnumI's to the right of '|$'.
+--
+-- * 'enumCatch' only catches 'EnumO' failures, and should only be
+--   applied to the left of '|$'.  (You /can/ apply 'enumCatch' to
+--   'EnumI's or to the right of '|$', but this is not useful because
+--   it ignores 'Iter' and 'EnumI' failures so won't catch anything.)
+--
+-- One potentially unintuitive apsect of @inumCatch@ is that, when
+-- applied to an enumerator, it catches any enumerator failure to the
+-- right that is on the same side of '|$'--even enumerators not
+-- lexically scoped within the argument of @inumCatch@.  See
+-- 'enumCatch' for some examples of this behavior.
+inumCatch :: (Exception e, ChunkData t, Monad m) =>
+              EnumO t m a
+           -- ^ 'EnumO' that might throw an exception
+           -> (e -> Iter t m a -> Iter t m a)
+           -- ^ Exception handler
+           -> EnumO t m a
+inumCatch enum handler = wrapI check . enum
+    where
+      check iter'@(Done _ _)   = iter'
+      check iter'@(IterFail _) = iter'
+      check err                = case fromException $ getIterError err of
+                                   Just e  -> handler e err
+                                   Nothing -> err
+
+-- | Like 'catchI', but for 'EnumO's instead of 'Iter's.  Catches
+-- errors thrown by an 'EnumO', but /not/ those thrown by 'EnumI's
+-- fused to the 'EnumO' after @enumCatch@ has been applied, and not
+-- exceptions thrown from an 'Iter'.  If you want to catch all
+-- enumerator errors, including those from subsequently fused
+-- 'EnumI's, see the `inumCatch` function.  For example, compare
+-- @test1@ (which throws an exception) to @test2@ and @test3@ (which
+-- do not):
+--
+-- >    inumBad :: (ChunkData t, Monad m) => EnumI t t m a
+-- >    inumBad = enumI' $ fail "inumBad"
+-- >    
+-- >    skipError :: (ChunkData t, MonadIO m) =>
+-- >                 SomeException -> Iter t m a -> Iter t m a
+-- >    skipError e iter = do
+-- >      liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
+-- >      resumeI iter
+-- >    
+-- >    -- Throws an exception
+-- >    test1 :: IO ()
+-- >    test1 = enumCatch (enumPure "test") skipError |.. inumBad |$ nullI
+-- >    
+-- >    -- Does not throw an exception, because inumCatch catches all
+-- >    -- enumerator errors on the same side of '|$', including from
+-- >    -- subsequently fused inumBad.
+-- >    test2 :: IO ()
+-- >    test2 = inumCatch (enumPure "test") skipError |.. inumBad |$ nullI
+-- >    
+-- >    -- Does not throw an exception, because enumCatch was applied
+-- >    -- after inumBad was fused to enumPure.
+-- >    test3 :: IO ()
+-- >    test3 = enumCatch (enumPure "test" |.. inumBad) skipError |$ nullI
+--
+-- Note that both @\`enumCatch\`@ and ``inumCatch`` have the default
+-- infix precedence (9), which binds more tightly than any
+-- concatenation or fusing operators.
+enumCatch :: (Exception e, ChunkData t, Monad m) =>
+              EnumO t m a
+           -- ^ 'EnumO' that might throw an exception
+           -> (e -> Iter t m a -> Iter t m a)
+           -- ^ Exception handler
+           -> EnumO t m a
+enumCatch enum handler = wrapI check . enum
+    where
+      check iter@(EnumOFail e _) =
+          case fromException e of
+            Just e' -> handler e' iter
+            Nothing -> iter
+      check iter = iter
+
+-- | 'enumCatch' with the argument order switched.
+enumHandler :: (Exception e, ChunkData t, Monad m) =>
+               (e -> Iter t m a -> Iter t m a)
+            -- ^ Exception handler
+            -> EnumO t m a
+            -- ^ 'EnumO' that might throw an exception
+            -> EnumO t m a
+enumHandler = flip enumCatch
+
+
 -- | Used in an exception handler, after an enumerator fails, to
 -- resume processing of the 'Iter' by the next enumerator in a
 -- concatenated series.  See 'catchI' for an example.
@@ -1007,14 +1087,17 @@ mapExceptionI f iter1 = wrapI check iter1
       doMap e = case fromException e of
                   Just e' -> toException (f e')
                   Nothing -> e
-                
+
+--
+-- Some super-basic Iteratees
+--
+
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, Monoid t) => Iter t m ()
 nullI = IterF $ check
     where
       check (Chunk _ True) = Done () chunkEOF
       check _              = nullI
-
 
 -- | Returns any non-empty amount of input data, or throws an
 -- exception if EOF is encountered and there is no data.
@@ -1058,7 +1141,6 @@ runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
 runI (Done a _)            = return a
--- runI (IterC (CtlReq _ fr)) = runI $ fr Nothing
 runI (IterFail e)          = IterFail e
 runI (EnumIFail e i)       = EnumIFail e i
 runI (EnumOFail e i)       = EnumOFail e $ runI i
@@ -1121,50 +1203,6 @@ resultI = wrapI fixdone
     where
       fixdone (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
       fixdone iter                     = return iter
-
--- | Return the the first element when the Iteratee data type is a list.
-headI :: (Monad m) => Iter [a] m a
-headI = IterF $ dohead
-    where
-      dohead (Chunk [] True)    = throwEOFI "headI"
-      dohead (Chunk [] _)       = headI
-      dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
-
--- | Return 'Just' the the first element when the Iteratee data type
--- is a list, or 'Nothing' on EOF.
-safeHeadI :: (Monad m) => Iter [a] m (Maybe a)
-safeHeadI = IterF $ dohead
-    where
-      dohead c@(Chunk [] True)  = Done Nothing c
-      dohead (Chunk [] _)       = safeHeadI
-      dohead (Chunk (a:as) eof) = Done (Just a) $ Chunk as eof
-
--- | An Iteratee that puts data to a consumer function, then calls an
--- eof function.  For instance, @'handleI'@ could be defined as:
---
--- > handleI :: (MonadIO m) => Handle -> Iter L.ByteString m ()
--- > handleI h = putI (liftIO . L.hPut h) (liftIO $ hShutdown h 1)
---
-putI :: (ChunkData t, Monad m) =>
-        (t -> Iter t m a)
-     -> Iter t m b
-     -> Iter t m ()
-putI putfn eoffn = do
-  Chunk t eof <- chunkI
-  unless (null t) $ putfn t >> return ()
-  if eof then eoffn >> return () else putI putfn eoffn
-
--- | Send datagrams using a supplied function.  The datagrams are fed
--- as a list of packets, where each element of the list should be a
--- separate datagram.
-sendI :: (Monad m) =>
-         (t -> Iter [t] m a)
-      -> Iter [t] m ()
-sendI sendfn = do
-  dgram <- safeHeadI
-  case dgram of
-    Just pkt -> sendfn pkt >> sendI sendfn
-    Nothing  -> return ()
 
 --
 -- Enumerator types
@@ -1515,106 +1553,6 @@ filterCtl = wrapCtl $ \(CtlReq _ fr) -> fr Nothing
 -- | An 'EnumO' that will feed pure data to 'Iter's.
 enumPure :: (Monad m, ChunkData t) => t -> EnumO t m a
 enumPure t = enumO $ return $ CodecE t
-
--- | Like 'catchI', but applied to 'EnumO's and 'EnumI's instead of
--- 'Iter's, and does not catch errors thrown by 'Iter's.
---
--- There are three 'catch'-like functions in the iterIO library,
--- catching varying numbers of types of failures.  @inumCatch@ is the
--- middle option.  By comparison:
---
--- * 'catchI' catches the most errors, including those thrown by
---   'Iter's.  'catchI' can be applied to 'Iter's, 'EnumI's, or
---   'enumO's, and is useful both to the left and to the right of
---   '|$'.
---
--- * @inumCatch@ catches 'EnumI' or 'EnumO' failures, but not 'Iter'
---   failures.  It can be applied to 'EnumI's or 'EnumO's, to the left
---   or to the right of '|$'.  When applied to the left of '|$', will
---   not catch any errors thrown by 'EnumI's to the right of '|$'.
---
--- * 'enumCatch' only catches 'EnumO' failures, and should only be
---   applied to the left of '|$'.  (You /can/ apply 'enumCatch' to
---   'EnumI's or to the right of '|$', but this is not useful because
---   it ignores 'Iter' and 'EnumI' failures so won't catch anything.)
---
--- One potentially unintuitive apsect of @inumCatch@ is that, when
--- applied to an enumerator, it catches any enumerator failure to the
--- right that is on the same side of '|$'--even enumerators not
--- lexically scoped within the argument of @inumCatch@.  See
--- 'enumCatch' for some examples of this behavior.
-inumCatch :: (Exception e, ChunkData t, Monad m) =>
-              EnumO t m a
-           -- ^ 'EnumO' that might throw an exception
-           -> (e -> Iter t m a -> Iter t m a)
-           -- ^ Exception handler
-           -> EnumO t m a
-inumCatch enum handler = wrapI check . enum
-    where
-      check iter'@(Done _ _)   = iter'
-      check iter'@(IterFail _) = iter'
-      check err                = case fromException $ getIterError err of
-                                   Just e  -> handler e err
-                                   Nothing -> err
-
--- | Like 'catchI', but for 'EnumO's instead of 'Iter's.  Catches
--- errors thrown by an 'EnumO', but /not/ those thrown by 'EnumI's
--- fused to the 'EnumO' after @enumCatch@ has been applied, and not
--- exceptions thrown from an 'Iter'.  If you want to catch all
--- enumerator errors, including those from subsequently fused
--- 'EnumI's, see the `inumCatch` function.  For example, compare
--- @test1@ (which throws an exception) to @test2@ and @test3@ (which
--- do not):
---
--- >    inumBad :: (ChunkData t, Monad m) => EnumI t t m a
--- >    inumBad = enumI' $ fail "inumBad"
--- >    
--- >    skipError :: (ChunkData t, MonadIO m) =>
--- >                 SomeException -> Iter t m a -> Iter t m a
--- >    skipError e iter = do
--- >      liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
--- >      resumeI iter
--- >    
--- >    -- Throws an exception
--- >    test1 :: IO ()
--- >    test1 = enumCatch (enumPure "test") skipError |.. inumBad |$ nullI
--- >    
--- >    -- Does not throw an exception, because inumCatch catches all
--- >    -- enumerator errors on the same side of '|$', including from
--- >    -- subsequently fused inumBad.
--- >    test2 :: IO ()
--- >    test2 = inumCatch (enumPure "test") skipError |.. inumBad |$ nullI
--- >    
--- >    -- Does not throw an exception, because enumCatch was applied
--- >    -- after inumBad was fused to enumPure.
--- >    test3 :: IO ()
--- >    test3 = enumCatch (enumPure "test" |.. inumBad) skipError |$ nullI
---
--- Note that both @\`enumCatch\`@ and ``inumCatch`` have the default
--- infix precedence (9), which binds more tightly than any
--- concatenation or fusing operators.
-enumCatch :: (Exception e, ChunkData t, Monad m) =>
-              EnumO t m a
-           -- ^ 'EnumO' that might throw an exception
-           -> (e -> Iter t m a -> Iter t m a)
-           -- ^ Exception handler
-           -> EnumO t m a
-enumCatch enum handler = wrapI check . enum
-    where
-      check iter@(EnumOFail e _) =
-          case fromException e of
-            Just e' -> handler e' iter
-            Nothing -> iter
-      check iter = iter
-
--- | 'enumCatch' with the argument order switched.
-enumHandler :: (Exception e, ChunkData t, Monad m) =>
-               (e -> Iter t m a -> Iter t m a)
-            -- ^ Exception handler
-            -> EnumO t m a
-            -- ^ 'EnumO' that might throw an exception
-            -> EnumO t m a
-enumHandler = flip enumCatch
 
 -- | Create a loopback @('Iter', 'EnumO')@ pair.  The iteratee and
 -- enumerator can be used in different threads.  Any data fed into the

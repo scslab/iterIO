@@ -4,7 +4,9 @@
 -- sockets.
 module Data.IterIO.ListLike
     ( -- * Iteratees
-      headLikeI, safeHeadLikeI
+      putI, sendI
+    , headLI, safeHeadLI
+    , headI, safeHeadI
     , lineI, safeLineI
     , stringExactI, stringMaxI
     , handleI, sockDgramI
@@ -42,23 +44,68 @@ echr = toEnum . ord
 -- Iters
 --
 
--- | Like 'headI', but works for any 'LL.ListLike' data type.
-headLikeI :: (ChunkData t, LL.ListLike t e, Monad m) =>
-             Iter t m e
-headLikeI = do
+-- | An Iteratee that puts data to a consumer function, then calls an
+-- eof function.  For instance, @'handleI'@ could be defined as:
+--
+-- > handleI :: (MonadIO m) => Handle -> Iter L.ByteString m ()
+-- > handleI h = putI (liftIO . L.hPut h) (liftIO $ hShutdown h 1)
+--
+putI :: (ChunkData t, Monad m) =>
+        (t -> Iter t m a)
+     -> Iter t m b
+     -> Iter t m ()
+putI putfn eoffn = do
+  Chunk t eof <- chunkI
+  unless (null t) $ putfn t >> return ()
+  if eof then eoffn >> return () else putI putfn eoffn
+
+-- | Send datagrams using a supplied function.  The datagrams are fed
+-- as a list of packets, where each element of the list should be a
+-- separate datagram.
+sendI :: (Monad m) =>
+         (t -> Iter [t] m a)
+      -> Iter [t] m ()
+sendI sendfn = do
+  dgram <- safeHeadI
+  case dgram of
+    Just pkt -> sendfn pkt >> sendI sendfn
+    Nothing  -> return ()
+
+-- | Return the the first element when the Iteratee data type is a list.
+headLI :: (Monad m) => Iter [a] m a
+headLI = IterF $ dohead
+    where
+      dohead (Chunk [] True)    = throwEOFI "headI"
+      dohead (Chunk [] _)       = headLI
+      dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
+
+-- | Return 'Just' the the first element when the Iteratee data type
+-- is a list, or 'Nothing' on EOF.
+safeHeadLI :: (Monad m) => Iter [a] m (Maybe a)
+safeHeadLI = IterF $ dohead
+    where
+      dohead c@(Chunk [] True)  = Done Nothing c
+      dohead (Chunk [] _)       = safeHeadLI
+      dohead (Chunk (a:as) eof) = Done (Just a) $ Chunk as eof
+
+
+-- | Like 'headLI', but works for any 'LL.ListLike' data type.
+headI :: (ChunkData t, LL.ListLike t e, Monad m) =>
+         Iter t m e
+headI = do
   c <- chunkI
   case c of
-    Chunk t False | null t -> headLikeI
+    Chunk t False | null t -> headI
     Chunk t True  | null t -> throwEOFI "headLikeI"
     Chunk t eof            -> Done (LL.head t) $ Chunk (LL.tail t) eof
 
--- | Like 'safeHeadI', but works for any 'LL.ListLike' data type.
-safeHeadLikeI :: (ChunkData t, LL.ListLike t e, Monad m) =>
-                 Iter t m (Maybe e)
-safeHeadLikeI = do
+-- | Like 'safeHeadLI', but works for any 'LL.ListLike' data type.
+safeHeadI :: (ChunkData t, LL.ListLike t e, Monad m) =>
+             Iter t m (Maybe e)
+safeHeadI = do
   c <- chunkI
   case c of
-    Chunk t False | null t -> safeHeadLikeI
+    Chunk t False | null t -> safeHeadI
     Chunk t True  | null t -> Done Nothing $ Chunk t True
     Chunk t eof            -> Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
 

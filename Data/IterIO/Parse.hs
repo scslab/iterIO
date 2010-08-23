@@ -491,7 +491,7 @@ sepEndBy1 item sep =
 satisfy :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m e
 satisfy test = do
-  e <- headLikeI
+  e <- headI
   if test e then return e else expectedI "satify predicate"
 
 -- | Read input that exactly matches a character.
