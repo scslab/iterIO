@@ -98,7 +98,8 @@ module Data.IterIO.Base
     , iterLoop
     , inumNop, inumSplit
     -- * Control functions
-    , CtlCmd
+    , CtlCmd, CtlReq(..)
+    , wrapCtl
     , ctlI, safeCtlI
     , enumCtl, filterCtl
     -- * Other functions
@@ -1527,7 +1528,7 @@ wrapCtl :: (ChunkData t, Monad m) =>
            (CtlReq t m a -> Iter t m a)
         -> Iter t m a -> Iter t m a
 wrapCtl f = next
-    where next (IterC req)              = next (f req)
+    where next (IterC req)              = apNext next (f req)
           next iter | isIterActive iter = apNext next iter
                     | otherwise         = iter
 

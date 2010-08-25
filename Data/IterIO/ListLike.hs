@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 -- | This module contains basic iteratees and enumerators for working
 -- with strings, 'LL.ListLike' objects, file handles, and datagram
@@ -10,6 +12,9 @@ module Data.IterIO.ListLike
     , lineI, safeLineI
     , stringExactI, stringMaxI
     , handleI, sockDgramI
+    -- * Control requests
+    , SeekMode(..)
+    , SizeC(..), SeekC(..), TellC(..)
     -- * Outer enumerators
     , enumDgram, enumDgramFrom
     , enumHandle, enumHandle'
@@ -25,8 +30,10 @@ import Control.Monad.Trans
 -- import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
+import Data.Maybe
 import Data.Monoid
 import Data.Char
+import Data.Typeable
 -- import Data.Word
 import Network.Socket
 import System.IO
@@ -176,8 +183,7 @@ handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
         -> Iter t m ()
 handleI h = putI (liftIO . LL.hPutStr h) (liftIO $ hShutdown h 1)
 
---
---
+-- | Sends a list of packets to a datagram socket.
 sockDgramI :: (MonadIO m, SendRecvString t) =>
               Socket
            -> Maybe SockAddr
@@ -187,6 +193,39 @@ sockDgramI s mdest = do
   case mpkt of
     Nothing  -> return ()
     Just pkt -> liftIO (genSendTo s pkt mdest) >> sockDgramI s mdest
+
+--
+-- Control functions
+--
+
+data SizeC = SizeC deriving (Typeable)
+instance CtlCmd SizeC Integer
+
+data SeekC = SeekC SeekMode Integer deriving (Typeable)
+instance CtlCmd SeekC ()
+
+data TellC = TellC deriving (Typeable)
+instance CtlCmd TellC Integer
+
+tryReq :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+          (carg -> Iter t m cres)
+       -> CtlReq t m a
+       -> Maybe (Iter t m a)
+tryReq f (CtlReq carg fr) =
+    case cast carg of
+      Nothing    -> Nothing
+      Just carg' -> Just $ f carg' >>= fr . cast
+
+{-
+fileCtl :: (ChunkData t, MonadIO m) => Handle -> Iter t m a -> Iter t m a
+fileCtl h = wrapCtl $ fromJust . check
+    where
+      check req@(CtlReq carg fr) =
+          msum [ tryReq $ \SizeC 
+                                    
+          (cast carg >>= \SizeC -> (fr . cast) `liftM` liftIO (hFileSize h))
+          `mplus` Just (IterC req)
+-}
 
 --
 -- EnumOs
