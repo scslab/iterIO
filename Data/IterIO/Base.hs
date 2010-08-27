@@ -98,7 +98,7 @@ module Data.IterIO.Base
     , iterLoop
     , inumNop, inumSplit
     -- * Control functions
-    , CtlCmd, CtlReq(..)
+    , CtlCmd, CtlReq(..), CtlHandler
     , ctlI, safeCtlI
     , noCtls, ctl, tryCtls
     -- * Other functions
@@ -1406,7 +1406,7 @@ iterToCodec iter = codec
 -- | Construct an outer enumerator given a 'Codec' that generates data
 -- of type @t@ and a function to handle control requests.
 enumCO :: (Monad m, ChunkData t) =>
-          (CtlReq t m a -> Iter t m a)
+          CtlHandler t m a
        -- ^ Function for handling control requests
        -> Codec () m t
        -- ^ This is the computation that produces input.  It is run
@@ -1495,7 +1495,7 @@ enumObracket before after codec iter0 = tryI (runI before) >>= checkBefore
 -- failure will have to send an EOF or the codec will not be able to
 -- clean up.
 enumCI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
-          (CtlReq tIn m a -> Iter tIn m a)
+          CtlHandler tIn m a
        -- ^ Control request handler
        -> Codec tOut m tIn
        -- ^ Codec to be invoked to produce transcoded chunks.
@@ -1547,6 +1547,9 @@ enumI' fn iter = enumI (iterToCodec fn) iter
 -- Support for control operations
 --
 
+-- | Control request handler, maps control requests to 'Iter's.
+type CtlHandler t m a = CtlReq t m a -> Iter t m a
+
 -- | A version of 'ctlI' that uses 'Maybe' instead of throwing an
 -- exception to indicate failure.
 safeCtlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
@@ -1594,8 +1597,7 @@ ctl f (CtlReq carg fr) = case cast carg of
 -- 'CtlReq' to see if one matches.
 tryCtls :: (ChunkData t, Monad m) =>
            [CtlReq t m a -> Maybe (Iter t m a)]
-        -> CtlReq t m a
-        -> Iter t m a
+        -> CtlHandler t m a
 tryCtls ctls req = case res of
                      Nothing           -> IterC req
                      Just (IterC req') -> tryCtls ctls req'
