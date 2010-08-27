@@ -82,7 +82,7 @@ module Data.IterIO.Base
     -- * Enumerator construction functions
     , Codec, CodecR(..)
     , iterToCodec
-    , enumO, enumO', enumObracket, enumI, enumI'
+    , enumCO, enumO, enumO', enumObracket, enumCI, enumI, enumI'
     -- * Exception and error functions
     , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
     , throwI, throwEOFI, expectedI
@@ -99,9 +99,8 @@ module Data.IterIO.Base
     , inumNop, inumSplit
     -- * Control functions
     , CtlCmd, CtlReq(..)
-    , wrapCtl
     , ctlI, safeCtlI
-    , enumCtl, filterCtl
+    , noCtls, ctl, tryCtls
     -- * Other functions
     , runIter, run, chunk, chunkEOF
     ) where
@@ -1405,6 +1404,38 @@ iterToCodec iter = codec
 -- iter >>= return . CodecF (iterToCodec iter)
 
 -- | Construct an outer enumerator given a 'Codec' that generates data
+-- of type @t@ and a function to handle control requests.
+enumCO :: (Monad m, ChunkData t) =>
+          (CtlReq t m a -> Iter t m a)
+       -- ^ Function for handling control requests
+       -> Codec () m t
+       -- ^ This is the computation that produces input.  It is run
+       -- with EOF, and never gets fed any input.  The type of this
+       -- argument could alternatively have been just @m t@, but
+       -- then there would be no way to signal failure.  (We don't
+       -- want to assume @m@ is a member of @MonadIO@; thus we
+       -- cannot catch exceptions that aren't propagated via monadic
+       -- types.)
+       -> EnumO t m a
+       -- ^ Returns an outer enumerator that feeds input chunks
+       -- (obtained from the first argument) into an iteratee.
+enumCO cf codec0 (IterM m)      = IterM $ m >>= return . enumCO cf codec0
+enumCO cf codec0 iter@(IterF _) = resultI (runI codec0) >>= nextCodec
+    where
+      nextCodec codec@(Done _ _) = codec >>= check
+      nextCodec codec
+          | isIterEOFError codec = iter
+          | otherwise            = EnumOFail (getIterError codec) iter 
+      check (CodecE t) | null t    = iter
+                       | otherwise = runIter iter (chunk t)
+      check (CodecF codec t)       = enumCO cf codec $ runIter iter (chunk t)
+enumCO cf codec0 (IterC req)    = enumCO cf codec0 $
+                                  case cf req of
+                                    IterC (CtlReq _ fr) -> fr Nothing
+                                    iter                -> iter
+enumCO _ _ iter                 = iter
+
+-- | Construct an outer enumerator given a 'Codec' that generates data
 -- of type @t@.
 enumO :: (Monad m, ChunkData t) =>
          Codec () m t
@@ -1418,18 +1449,7 @@ enumO :: (Monad m, ChunkData t) =>
       -> EnumO t m a
          -- ^ Returns an outer enumerator that feeds input chunks
          -- (obtained from the first argument) into an iteratee.
-enumO codec0 (IterM m)             = IterM $ m >>= return . enumO codec0
-enumO codec0 iter@(IterF _)        = resultI (runI codec0) >>= nextCodec
-    where     
-      nextCodec codec@(Done _ _) = codec >>= check
-      nextCodec codec
-          | isIterEOFError codec = iter
-          | otherwise            = EnumOFail (getIterError codec) iter 
-      check (CodecE t) | null t    = iter
-                       | otherwise = runIter iter (chunk t)
-      check (CodecF codec t)       = enumO codec $ runIter iter (chunk t)
-enumO codec0 (IterC (CtlReq _ fr)) = enumO codec0 $ fr Nothing
-enumO _ iter                       = iter
+enumO codec0 = enumCO noCtls codec0
 
 -- | Like 'enumO', but the input function returns raw data, not
 -- 'Chunk's.  The only way to signal EOF is therefore to raise an EOF
@@ -1474,27 +1494,45 @@ enumObracket before after codec iter0 = tryI (runI before) >>= checkBefore
 -- if a containing 'EnumO' or 'EnumI' fails, code handling that
 -- failure will have to send an EOF or the codec will not be able to
 -- clean up.
-enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
-         Codec tOut m tIn
-      -- ^ Codec to be invoked to produce transcoded chunks.
-      -> EnumI tOut tIn m a
-enumI codec0 iter@(IterF _) = resultI codec0 >>= nextCodec
+enumCI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
+          (CtlReq tIn m a -> Iter tIn m a)
+       -- ^ Control request handler
+       -> Codec tOut m tIn
+       -- ^ Codec to be invoked to produce transcoded chunks.
+       -> EnumI tOut tIn m a
+enumCI cf codec0 iter@(IterF _) = resultI codec0 >>= nextCodec
     where
       nextCodec (Done codecr (Chunk _ eof))  = nextIter codecr eof
       nextCodec codec | isIterEOFError codec = return iter
                       | otherwise         = EnumIFail (getIterError codec) iter
-      nextIter (CodecF codec dat) False = enumI codec $ feed dat
+      nextIter (CodecF codec dat) False = enumCI cf codec $ feed dat
       nextIter (CodecE t) _ | null t    = return iter
       nextIter codecr _                 = return $ feed $ unCodecR codecr
       feed dat = runIter iter (chunk dat)
-enumI codec0 iter
-    | isIterActive iter = apRun (enumI codec0) iter
+enumCI cf codec0 (IterC req) = case cf req of
+                                 IterC (CtlReq carg fr) ->
+                                     iterC carg $ enumCI cf codec0 . fr
+                                 iter -> enumCI cf codec0 iter
+enumCI cf codec0 iter
+    | isIterActive iter = apRun (enumCI cf codec0) iter
     -- If iter finished, still must feed EOF to codec before returning
     | otherwise         = resultI (unEOF $ runIter codec0 chunkEOF) >>= check
     where
       check codec | isIterEOFError codec = return iter
                   | isIterError codec    = EnumIFail (getIterError codec) iter
                   | otherwise            = return iter
+
+-- | Build an inner enumerator given a 'Codec' that returns chunks of
+-- the appropriate type.  Makes an effort to send an EOF to the codec
+-- if the inner 'Iter' fails, so as to facilitate cleanup.  However,
+-- if a containing 'EnumO' or 'EnumI' fails, code handling that
+-- failure will have to send an EOF or the codec will not be able to
+-- clean up.
+enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
+         Codec tOut m tIn
+      -- ^ Codec to be invoked to produce transcoded chunks.
+      -> EnumI tOut tIn m a
+enumI = enumCI IterC
 
 -- | Transcode (until codec throws an EOF error, or until after it has
 -- received EOF).
@@ -1524,6 +1562,7 @@ ctlI carg = safeCtlI carg >>= returnit
       returnit (Just res) = return res
       returnit Nothing    = fail $ "Unsupported CtlCmd " ++ show (typeOf carg)
 
+{-
 wrapCtl :: (ChunkData t, Monad m) =>
            (CtlReq t m a -> Iter t m a)
         -> Iter t m a -> Iter t m a
@@ -1531,7 +1570,43 @@ wrapCtl f = next
     where next (IterC req)              = apNext next (f req)
           next iter | isIterActive iter = apNext next iter
                     | otherwise         = iter
+-}
 
+-- | A control request handler that always fails immediately (thereby
+-- not passing the control request up further to other enclosing
+-- enumerators).
+noCtls :: CtlReq t m a -> Iter t m a
+noCtls (CtlReq _ fr) = fr Nothing
+
+-- | Wrap a control command for requests of type @carg@ into a
+-- function of type @'CtlReq' t m a -> Maybe 'Iter' t m a@ (which is
+-- not parameterized by @carg@ and therefore can be grouped in a list
+-- with control functions for other types).
+ctl :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+       (carg -> Iter t m cres)
+    -> CtlReq t m a
+    -> Maybe (Iter t m a)
+ctl f (CtlReq carg fr) = case cast carg of
+                           Nothing    -> Nothing
+                           Just carg' -> Just $ f carg' >>= fr . cast
+
+-- | Try a bunch of handlers created with 'ctl' on a particular
+-- 'CtlReq' to see if one matches.
+tryCtls :: (ChunkData t, Monad m) =>
+           [CtlReq t m a -> Maybe (Iter t m a)]
+        -> CtlReq t m a
+        -> Iter t m a
+tryCtls ctls req = case res of
+                     Nothing           -> IterC req
+                     Just (IterC req') -> tryCtls ctls req'
+                     Just iter         -> iter
+    where
+      res = foldr ff Nothing ctls
+      ff a b = case a req of
+                 Nothing  -> b
+                 a'       -> a'
+
+{-
 -- | Wrap a handler for a particular kind of 'CtlCmd' request around
 -- an 'Iter'.
 enumCtl :: (ChunkData t, Monad m, CtlCmd carg cres) =>
@@ -1549,6 +1624,7 @@ enumCtl f = wrapCtl handler
 -- | Block all handlers 'CtlCmd' request issued by an 'Iter'.
 filterCtl :: (ChunkData t, Monad m) => EnumO t m a
 filterCtl = wrapCtl $ \(CtlReq _ fr) -> fr Nothing
+-}
 
 --
 -- Basic outer enumerators

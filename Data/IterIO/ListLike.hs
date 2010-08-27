@@ -30,7 +30,6 @@ import Control.Monad.Trans
 -- import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
-import Data.Maybe
 import Data.Monoid
 import Data.Char
 import Data.Typeable
@@ -207,21 +206,14 @@ instance CtlCmd SeekC ()
 data TellC = TellC deriving (Typeable)
 instance CtlCmd TellC Integer
 
-tryReq :: (CtlCmd carg cres, ChunkData t, Monad m) =>
-          (carg -> Iter t m cres)
-       -> CtlReq t m a
-       -> Maybe (Iter t m a)
-tryReq f (CtlReq carg fr) =
-    case cast carg of
-      Nothing    -> Nothing
-      Just carg' -> Just $ f carg' >>= fr . cast
-
 {-
 fileCtl :: (ChunkData t, MonadIO m) => Handle -> Iter t m a -> Iter t m a
 fileCtl h = wrapCtl $ fromJust . check
     where
-      check req@(CtlReq carg fr) =
-          msum [ tryReq $ \SizeC 
+      check req =
+          msum [ tryReq $ \SizeC -> liftIO (hFileSize h)
+               , 
+               , req
                                     
           (cast carg >>= \SizeC -> (fr . cast) `liftM` liftIO (hFileSize h))
           `mplus` Just (IterC req)
