@@ -82,7 +82,8 @@ module Data.IterIO.Base
     -- * Enumerator construction functions
     , Codec, CodecR(..)
     , iterToCodec
-    , enumCO, enumO, enumO', enumObracket, enumCI, enumI, enumI'
+    , enumCO, enumO, enumO', enumCObracket, enumObracket
+    , enumCI, enumI, enumI'
     -- * Exception and error functions
     , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
     , throwI, throwEOFI, expectedI
@@ -100,7 +101,7 @@ module Data.IterIO.Base
     -- * Control functions
     , CtlCmd, CtlReq(..), CtlHandler
     , ctlI, safeCtlI
-    , noCtls, ctl, tryCtls
+    , noCtls, ctl, ctl', ctlHandler
     -- * Other functions
     , runIter, run, chunk, chunkEOF
     ) where
@@ -435,7 +436,8 @@ apNext f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
 apNext f iter                     = f iter
 
 -- | Like 'apNext', but feed an EOF to the 'Iter' if it is in the
--- 'IterF' state.
+-- 'IterF' state.  Thus it can be used within 'Iter's with different
+-- input type from the one a function is being applied to.
 apRun :: (Monad m, ChunkData t1) =>
          (Iter t1 m a -> Iter t2 m b)
       -> Iter t1 m a
@@ -1187,15 +1189,20 @@ joinI iter            = apRun joinI iter
 
 -- | Allows you to look at the state of an 'Iter' by returning it into
 -- an 'Iter' monad.  This is just like the monadic 'return' method,
--- except that if the 'Iter' is in the 'IterM' state, it is executed
--- until it enters another state.  Thus, 'Iter's that do not require
--- data, such as @returnI $ liftIO $ ...@, can execute and return a
--- result (possibly reflecting exceptions) immediately.
+-- except that so long as the 'Iter' is in the 'IterM' or 'IterC'
+-- state, then the monadic action or control request is executed.
+-- Thus, 'Iter's that do not require input, such as
+-- @returnI $ liftIO $ ...@, can execute and return a result (possibly
+-- reflecting exceptions) immediately.  Moreover, code looking at an
+-- 'Iter' produced with @iter <- returnI someOtherIter@ does not need
+-- to worry about the 'IterM' or 'IterC' cases, since the returned
+-- 'Iter' is guaranteed not to be in one of those states.
 returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
            Iter tIn m a
         -> Iter tOut m (Iter tIn m a)
-returnI (IterM m) = IterM $ returnI `liftM` m
-returnI iter      = return iter
+returnI iter@(IterM _) = apRun returnI iter
+returnI iter@(IterC _) = apRun returnI iter
+returnI iter           = return iter
 
 -- | @resultI@ is like a version of 'returnI' that additionally
 -- ensures the returned 'Iter' is not in the 'IterF' state.  Moreover,
@@ -1404,7 +1411,7 @@ iterToCodec iter = codec
 -- iter >>= return . CodecF (iterToCodec iter)
 
 -- | Construct an outer enumerator given a 'Codec' that generates data
--- of type @t@ and a function to handle control requests.
+-- of type @t@ and a 'CtlHandler' to handle control requests.
 enumCO :: (Monad m, ChunkData t) =>
           CtlHandler t m a
        -- ^ Function for handling control requests
@@ -1429,10 +1436,15 @@ enumCO cf codec0 iter@(IterF _) = resultI (runI codec0) >>= nextCodec
       check (CodecE t) | null t    = iter
                        | otherwise = runIter iter (chunk t)
       check (CodecF codec t)       = enumCO cf codec $ runIter iter (chunk t)
-enumCO cf codec0 (IterC req)    = enumCO cf codec0 $
-                                  case cf req of
-                                    IterC (CtlReq _ fr) -> fr Nothing
-                                    iter                -> iter
+enumCO cf codec0 (IterC req)    = 
+-- Note if when we execute the 'CtlReq' with the handler we get a
+-- 'CtlReq' back (likely because the handler doesn't know about that
+-- type), we pass it back out to 'run', which will just feed in
+-- Nothing.  However, this allows one to augment 'EnumO's with new
+-- control operations by simply wrapping them with a new function.
+    case cf req of
+      IterC (CtlReq carg fr) -> iterC carg $ enumCO cf codec0 . fr
+      iter                   -> enumCO cf codec0 iter
 enumCO _ _ iter                 = iter
 
 -- | Construct an outer enumerator given a 'Codec' that generates data
@@ -1458,6 +1470,27 @@ enumO' :: (Monad m, ChunkData t) =>
           Iter () m t
        -> EnumO t m a
 enumO' = enumO . iterToCodec
+
+-- | A variant of 'enumObracket' that also takes a 'CtlHandler' (as a
+-- function of the input).
+enumCObracket :: (Monad m, ChunkData t) =>
+                 (Iter () m b)
+              -- ^ Before action
+              -> (b -> Iter () m c)
+              -- ^ After action, as a function of before action result
+              -> (b -> CtlHandler t m a)
+              -- ^ Control request handler, as funciton of before action result
+              -> (b -> (Codec () m t))
+              -- ^ Input 'Codec', as a funciton of before aciton result
+              -> EnumO t m a
+enumCObracket before after cf codec iter0 = tryI (runI before) >>= checkBefore
+    where
+      checkBefore (Left (e,_)) = EnumOFail e iter0
+      checkBefore (Right b)    = resultI (enumCO (cf b) (codec b) iter0)
+                                 >>= checkMain b
+      checkMain b iter = tryI (runI $ after b) >>= checkAfter iter
+      checkAfter iter (Left (e,_)) | not (isIterError iter) = EnumOFail e iter
+      checkAfter iter _                                     = iter 
 
 -- | Build an 'EnumO' from a @before@ action, an @after@ function, and
 -- an @input@ 'Codec' in a manner analogous to the IO @'bracket'@
@@ -1547,7 +1580,7 @@ enumI' fn iter = enumI (iterToCodec fn) iter
 -- Support for control operations
 --
 
--- | Control request handler, maps control requests to 'Iter's.
+-- | A control request handler maps control requests to 'Iter's.
 type CtlHandler t m a = CtlReq t m a -> Iter t m a
 
 -- | A version of 'ctlI' that uses 'Maybe' instead of throwing an
@@ -1575,16 +1608,45 @@ wrapCtl f = next
                     | otherwise         = iter
 -}
 
--- | A control request handler that always fails immediately (thereby
--- not passing the control request up further to other enclosing
--- enumerators).
-noCtls :: CtlReq t m a -> Iter t m a
+-- | A control request handler that ignores the request argument and
+-- always fails immediately (thereby not passing the control request
+-- up further to other enclosing enumerators).
+--
+-- One use of this is for 'EnumI's that change the data in such a way
+-- that control requests would not makes sense to outer enumerators.
+-- Suppose @gunzipCodec@ is a codec that uncompresses a file in gzip
+-- format.  The corresponding inner enumerator should probably be
+-- defined as:
+--
+-- > inumGunzip :: (Monad m) => EnumI ByteString ByteString m a
+-- > inumGunzip = enumCI noCtls gunzipCodec
+--
+-- The alternate definition @inumGunzip = enumI gunzipCodec@ would
+-- likely wreak havoc in the event of any seek requests, as the outer
+-- enumerator might seek around in the file, confusing the
+-- decompression codec.
+noCtls :: CtlHandler t m a
 noCtls (CtlReq _ fr) = fr Nothing
 
 -- | Wrap a control command for requests of type @carg@ into a
--- function of type @'CtlReq' t m a -> Maybe 'Iter' t m a@ (which is
+-- function of type @'CtlReq' t m a -> Maybe 'Iter' t m a@, which is
 -- not parameterized by @carg@ and therefore can be grouped in a list
--- with control functions for other types).
+-- with control functions for other types.  The intent is then to
+-- combine a list of such functions into a 'CtlHandler' with
+-- 'tryCtls'.
+--
+-- As an example, the following funciton produces a 'CtlHandler'
+-- (suitable to be passed to 'enumCO' or 'enumCObracket') that
+-- implements control operations for three types:
+--
+-- @
+--  fileCtl :: ('ChunkData' t, 'MonadIO' m) => 'Handle' -> 'CtlHandler' t m a
+--  fileCtl h = 'ctlHandler'
+--              [ ctl $ \\('SeekC' mode pos) -> 'liftIO' ('hSeek' h mode pos)
+--              , ctl $ \\'TellC' -> 'liftIO' ('hTell' h)
+--              , ctl $ \\'SizeC' -> 'liftIO' ('hFileSize' h)
+--              ]
+-- @
 ctl :: (CtlCmd carg cres, ChunkData t, Monad m) =>
        (carg -> Iter t m cres)
     -> CtlReq t m a
@@ -1593,14 +1655,32 @@ ctl f (CtlReq carg fr) = case cast carg of
                            Nothing    -> Nothing
                            Just carg' -> Just $ f carg' >>= fr . cast
 
--- | Try a bunch of handlers created with 'ctl' on a particular
--- 'CtlReq' to see if one matches.
-tryCtls :: (ChunkData t, Monad m) =>
-           [CtlReq t m a -> Maybe (Iter t m a)]
-        -> CtlHandler t m a
-tryCtls ctls req = case res of
+-- | A variant of 'ctl' that, makes the control operation fail if it
+-- throws any kind of exception (as opposed to re-propagating the
+-- exception as an 'EnumOFail', which is what would end up happening
+-- with 'ctl').
+ctl' :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+        (carg -> Iter t m cres)
+     -> CtlReq t m a
+     -> Maybe (Iter t m a)
+ctl' f (CtlReq carg fr) = case cast carg of
+                           Nothing    -> Nothing
+                           Just carg' -> Just $ doit carg'
+    where
+      doit carg' = do
+        er <- tryI $ f carg'
+        case er of
+          Right r                   -> fr $ cast r
+          Left (SomeException _, _) -> fr Nothing
+
+-- | Create a 'CtlHandler' from a list of functions created with 'ctl'
+-- that try each tries one argument type.  See the example given for
+-- 'ctl'.
+ctlHandler :: (ChunkData t, Monad m) =>
+              [CtlReq t m a -> Maybe (Iter t m a)]
+           -> CtlHandler t m a
+ctlHandler ctls req = case res of
                      Nothing           -> IterC req
-                     Just (IterC req') -> tryCtls ctls req'
                      Just iter         -> iter
     where
       res = foldr ff Nothing ctls

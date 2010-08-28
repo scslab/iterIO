@@ -15,6 +15,7 @@ module Data.IterIO.ListLike
     -- * Control requests
     , SeekMode(..)
     , SizeC(..), SeekC(..), TellC(..)
+    , fileCtl
     -- * Outer enumerators
     , enumDgram, enumDgramFrom
     , enumHandle, enumHandle'
@@ -207,10 +208,10 @@ data TellC = TellC deriving (Typeable)
 instance CtlCmd TellC Integer
 
 fileCtl :: (ChunkData t, MonadIO m) => Handle -> CtlHandler t m a
-fileCtl h = tryCtls
-            [ ctl $ \(SeekC mode pos) -> liftIO (hSeek h mode pos)
-            , ctl $ \TellC -> liftIO (hTell h)
-            , ctl $ \SizeC -> liftIO (hFileSize h)
+fileCtl h = ctlHandler
+            [ ctl' $ \(SeekC mode pos) -> liftIO (hSeek h mode pos)
+            , ctl' $ \TellC -> liftIO (hTell h)
+            , ctl' $ \SizeC -> liftIO (hFileSize h)
             ]
 
 --
@@ -246,7 +247,7 @@ enumHandle' = enumHandle
 enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                Handle
             -> EnumO t m a
-enumHandle h = enumO $ iterToCodec $ do
+enumHandle h = enumCO (fileCtl h) $ iterToCodec $ do
   _ <- liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
   if null buf then throwEOFI "enumHandle" else return buf
@@ -265,8 +266,8 @@ enumFile' = enumFile
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
              FilePath
           -> EnumO t m a
-enumFile path = enumObracket (liftIO $ openBinaryFile path ReadMode)
-                (liftIO . hClose) codec
+enumFile path = enumCObracket (liftIO $ openBinaryFile path ReadMode)
+                (liftIO . hClose) fileCtl codec
     where
       codec h = do
         buf <- liftIO $ LL.hGet h defaultChunkSize
