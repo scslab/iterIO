@@ -1,8 +1,9 @@
 
 PKG = $(basename $(wildcard *.cabal))
 TARGETS = $(basename $(shell find Examples -name '[a-z]*.hs' -print))
+HSCS = $(patsubst %.hsc,%.hs,$(shell find . -name '*.hsc' -print))
 
-all: $(TARGETS)
+all: $(TARGETS) $(HSCS)
 
 .PHONY: all always clean build dist doc browse install
 
@@ -12,8 +13,11 @@ WALL = -Wall -Werror
 always:
 	@:
 
-Examples/%: always
+Examples/%: always $(HSCS)
 	$(GHC) --make -i$(dir $@) $(WALL) $@.hs
+
+%.hs: %.hsc
+	hsc2hs $<
 
 Setup: Setup.hs
 	$(GHC) --make Setup.hs
@@ -49,6 +53,7 @@ browse: doc
 	xdg-open dist/doc/html/$(PKG)/index.html
 
 clean:
-	rm -rf $(TARGETS) Setup dist
+	rm -rf dist
+	rm -f Setup $(TARGETS) $(HSCS)
 	find . \( -name '*~' -o -name '*.hi' -o -name '*.o' \) -print0 \
 		| xargs -0 rm -f --

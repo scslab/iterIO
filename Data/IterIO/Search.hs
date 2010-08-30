@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 
 module Data.IterIO.Search (inumStopString
                           ) where
