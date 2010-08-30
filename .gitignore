@@ -1,6 +1,7 @@
 *.hi
 *.o
 *~
+/Data/IterIO/ZlibInt.hs
 /Examples/fgrep
 /Examples/simple
 /Examples/httptest
