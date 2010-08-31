@@ -5,6 +5,7 @@
 -- code outside the IterIO library.
 module Data.IterIO.ZlibInt where
 
+import Data.ByteString.Internal (memset)
 import Foreign
 import Foreign.C
 
@@ -36,24 +37,31 @@ foreign import ccall unsafe "zlib.h inflateEnd"
 zlib_version :: CString
 zlib_version = unsafePerformIO $ newCAString #const_str ZLIB_VERSION
 
-z_stream_size :: Int
+z_stream_size :: (Num a) => a
 z_stream_size = #size z_stream
 
-#{let zoffdef field = #field "_offset :: Int\n" #field "_offset = %ld"
-                      , (long) offsetof (z_stream, field)}
-#zoffdef next_in
-#zoffdef avail_in
-#zoffdef total_in
-#zoffdef next_out
-#zoffdef avail_out
-#zoffdef total_out
-#zoffdef msg
-#zoffdef state
-#zoffdef zalloc
-#zoffdef zfree
-#zoffdef opaque
-#zoffdef data_type
-#zoffdef adler
+newZStream :: IO (Ptr ZStream)
+newZStream = do
+  ptr <- mallocBytes z_stream_size
+  memset (castPtr ptr) 0 z_stream_size
+  return ptr
+
+#{let zoffdef type, field =
+          #field " :: Ptr ZStream -> Ptr (" #type ")\n"
+          #field " zptr = zptr `plusPtr` %ld"
+          , (long) offsetof (z_stream, field)}
+#zoffdef Ptr a, next_in
+#zoffdef CUInt, avail_in
+#zoffdef CULong, total_in
+#zoffdef Ptr a, next_out
+#zoffdef CUInt, avail_out
+#zoffdef CULong, total_out
+#zoffdef CString, msg
+#zoffdef FunPtr (Ptr a -> CUInt -> CUInt -> Ptr b), zalloc
+#zoffdef FunPtr (Ptr a -> Ptr b -> ()), zfree
+#zoffdef Ptr a, opaque
+#zoffdef CInt, data_type
+#zoffdef CULong, adler
 
 newtype ZFlush = ZFlush CInt
 #{enum ZFlush, ZFlush
@@ -63,6 +71,3 @@ newtype ZFlush = ZFlush CInt
  , z_FINISH = Z_FINISH
  , z_BLOCK = Z_BLOCK
  }
-
- -- , z_PARTIAL_FLUSH = Z_PARTIAL_FLUSH
- -- , z_TREES = Z_TREES
