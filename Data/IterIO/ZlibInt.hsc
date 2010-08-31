@@ -18,8 +18,8 @@ data ZStream = ZStream
 foreign import ccall unsafe "zlib.h deflateInit_"
     c_deflateInit :: Ptr ZStream -> CInt -> CString -> CInt -> IO ()
 foreign import ccall unsafe "zlib.h deflateInit2_"
-    c_deflateInit2 :: Ptr ZStream -> CInt -> CInt -> CInt -> CInt -> CInt
-                   -> CString -> CInt -> IO ()
+    c_deflateInit2 :: Ptr ZStream -> CInt -> ZMethod -> CInt -> CInt
+                   -> ZStrategy -> CString -> CInt -> IO ()
 foreign import ccall unsafe "zlib.h deflate"
     c_deflate :: Ptr ZStream -> ZFlush -> IO CInt
 foreign import ccall unsafe "zlib.h deflateEnd"
@@ -60,8 +60,31 @@ newZStream = do
 #zoffdef FunPtr (Ptr a -> CUInt -> CUInt -> Ptr b), zalloc
 #zoffdef FunPtr (Ptr a -> Ptr b -> ()), zfree
 #zoffdef Ptr a, opaque
-#zoffdef CInt, data_type
+#zoffdef ZDataType, data_type
 #zoffdef CULong, adler
+
+newtype ZMethod = ZMethod CInt
+z_DEFLATED :: ZMethod
+z_DEFLATED = ZMethod #const Z_DEFLATED
+
+max_wbits :: CInt
+max_wbits = #const MAX_WBITS
+
+newtype ZStrategy = ZStrategy CInt
+#{enum ZStrategy, ZStrategy
+ , z_FILTERED = Z_FILTERED
+ , z_HUFFMAN_ONLY = Z_HUFFMAN_ONLY
+ , z_RLE = Z_RLE
+ , z_FIXED = Z_FIXED
+ , z_DEFAULT_STRATEGY = Z_DEFAULT_STRATEGY
+ }
+
+newtype ZDataType = ZDataType CInt
+#{enum ZDataType, ZDataType
+ , z_BINARY = Z_BINARY
+ , z_TEXT = Z_TEXT
+ , z_UNKNOWN = Z_UNKNOWN
+ }
 
 newtype ZFlush = ZFlush CInt
 #{enum ZFlush, ZFlush
