@@ -32,6 +32,15 @@ foreign import ccall unsafe "zlib.h inflate"
 foreign import ccall unsafe "zlib.h &inflateEnd"
     c_inflateEnd :: FunPtr (Ptr ZStream -> IO ())
 
+max_wbits :: CInt
+max_wbits = #const MAX_WBITS
+
+max_mem_level :: CInt
+max_mem_level = #const MAX_MEM_LEVEL
+
+def_mem_level :: CInt
+def_mem_level = #const MAX_MEM_LEVEL > 8 ? 8 : MAX_MEM_LEVEL
+
 zlib_version :: CString
 zlib_version = unsafePerformIO $ newCAString #const_str ZLIB_VERSION
 
@@ -61,29 +70,6 @@ data ZStream = ZStream
 #zoffdef ZDataType, data_type
 #zoffdef CULong, adler
 
-newtype ZMethod = ZMethod CInt
-z_DEFLATED :: ZMethod
-z_DEFLATED = ZMethod #const Z_DEFLATED
-
-max_wbits :: CInt
-max_wbits = #const MAX_WBITS
-
-newtype ZStrategy = ZStrategy CInt
-#{enum ZStrategy, ZStrategy
- , z_FILTERED = Z_FILTERED
- , z_HUFFMAN_ONLY = Z_HUFFMAN_ONLY
- , z_RLE = Z_RLE
- , z_FIXED = Z_FIXED
- , z_DEFAULT_STRATEGY = Z_DEFAULT_STRATEGY
- }
-
-newtype ZDataType = ZDataType CInt
-#{enum ZDataType, ZDataType
- , z_BINARY = Z_BINARY
- , z_TEXT = Z_TEXT
- , z_UNKNOWN = Z_UNKNOWN
- }
-
 newtype ZFlush = ZFlush CInt
 #{enum ZFlush, ZFlush
  , z_NO_FLUSH = Z_NO_FLUSH
@@ -103,6 +89,31 @@ newtype ZFlush = ZFlush CInt
  , z_MEM_ERROR = Z_MEM_ERROR
  , z_BUF_ERROR = Z_BUF_ERROR
  , z_VERSION_ERROR = Z_VERSION_ERROR
+ }
+
+#{enum CInt,
+ , z_DEFAULT_COMPRESSION = Z_DEFAULT_COMPRESSION
+ }
+
+newtype ZStrategy = ZStrategy CInt
+#{enum ZStrategy, ZStrategy
+ , z_FILTERED = Z_FILTERED
+ , z_HUFFMAN_ONLY = Z_HUFFMAN_ONLY
+ , z_RLE = Z_RLE
+ , z_FIXED = Z_FIXED
+ , z_DEFAULT_STRATEGY = Z_DEFAULT_STRATEGY
+ }
+
+newtype ZDataType = ZDataType CInt
+#{enum ZDataType, ZDataType
+ , z_BINARY = Z_BINARY
+ , z_TEXT = Z_TEXT
+ , z_UNKNOWN = Z_UNKNOWN
+ }
+
+newtype ZMethod = ZMethod CInt
+#{enum ZMethod, ZMethod
+ , z_DEFLATED = Z_DEFLATED
  }
 
 
