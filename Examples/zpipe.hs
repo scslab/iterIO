@@ -10,14 +10,14 @@ import Data.IterIO.Zlib
 usage :: IO ()
 usage = do
   prog <- getProgName
-  hPutStrLn stderr $ prog ++ ": [-d]"
+  hPutStrLn stderr $ "usage: " ++ prog ++ " [-d]"
 
 main :: IO ()
 main = do
   av <- getArgs
   case av of
     []     -> enumHandle stdin |.. inumGzip |$ handleI stdout
-    ["-d"] -> enumHandle stdin |.. inumGunzip |$ handleI stdout
+    ["-d"] -> enumHandle stdin |$ inumGunzip ..| handleI stdout
     _      -> usage
 
 

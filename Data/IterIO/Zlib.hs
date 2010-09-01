@@ -15,6 +15,8 @@ import Foreign.C
 import Data.IterIO.Base
 import Data.IterIO.ZlibInt
 
+import Debug.Trace
+
 data ZState = ZState { zStream :: (ForeignPtr ZStream)
                      , zOp :: (ZFlush -> IO CInt)
                      , zInChunk :: !(ForeignPtr Word8)
@@ -146,18 +148,26 @@ zExec flush = do
 zCodec :: (MonadIO m) => ZState -> Codec L.ByteString m L.ByteString
 zCodec zs0 = do
   (Chunk dat eof) <- chunkI
+  liftIO $ putTraceMsg $ "EOF is " ++ show eof
   (r, zs) <- liftIO $ runStateT (runz eof $ L.toChunks dat) zs0
   if eof || r == z_STREAM_END
     then return $ CodecE $ zOut zs L.empty
     else return $ CodecF (zCodec zs { zOut = id }) $ zOut zs L.empty
     where
-      runz eof [] = if eof then zExec z_FINISH else return z_OK
-      runz eof s  = do s' <- zPushIn s
-                       let flush = if eof && null s'
-                                   then z_FINISH
-                                   else z_NO_FLUSH
-                       r <- zExec flush
-                       if null s' then return r else runz eof s'
+      runz False [] = return z_OK
+      runz False s  = do s' <- zPushIn s
+                         r <- zExec z_NO_FLUSH
+                         if null s' then return r else runz False s'
+      runz True []  = finish
+      runz True s   = do s' <- zPushIn s
+                         if null s'
+                           then finish
+                           else zExec z_NO_FLUSH >> runz True s'
+      finish = do r <- zExec z_FINISH
+                  zPopOut
+                  modify $ \zs -> zs { zOp = error "zOp called after EOF" }
+                  return r
+                      
 
 inumZlib :: (MonadIO m) =>
             ZState
