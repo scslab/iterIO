@@ -15,8 +15,8 @@ import Foreign.C
 import Data.IterIO.Base
 import Data.IterIO.ZlibInt
 
-data ZState = ZState { zStream :: !(ForeignPtr ZStream)
-                     , zOp :: !(ZFlush -> IO CInt)
+data ZState = ZState { zStream :: (ForeignPtr ZStream)
+                     , zOp :: (ZFlush -> IO CInt)
                      , zInChunk :: !(ForeignPtr Word8)
                      , zOutChunk :: !(ForeignPtr Word8)
                      , zOut :: L.ByteString -> L.ByteString
@@ -172,7 +172,7 @@ inumGzip iter = do
 
 inumGunzip :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
 inumGunzip iter = do
-  zs <- liftIO (inflateInit2 max_wbits)
+  zs <- liftIO (inflateInit2 $ 32 + max_wbits)
   inumZlib zs iter
 
 -- Local Variables:
