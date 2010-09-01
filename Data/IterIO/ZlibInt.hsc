@@ -5,7 +5,7 @@
 -- code outside the IterIO library.
 module Data.IterIO.ZlibInt where
 
-import Data.ByteString.Internal (memset)
+import Data.Word
 import Foreign
 import Foreign.C
 
@@ -13,17 +13,15 @@ import Data.IterIO
 
 #include "zlib.h"
 
-data ZStream = ZStream
-
 foreign import ccall unsafe "zlib.h deflateInit_"
-    c_deflateInit :: Ptr ZStream -> CInt -> CString -> CInt -> IO ()
+    c_deflateInit :: Ptr ZStream -> CInt -> CString -> CInt -> IO CInt
 foreign import ccall unsafe "zlib.h deflateInit2_"
     c_deflateInit2 :: Ptr ZStream -> CInt -> ZMethod -> CInt -> CInt
-                   -> ZStrategy -> CString -> CInt -> IO ()
+                   -> ZStrategy -> CString -> CInt -> IO CInt
 foreign import ccall unsafe "zlib.h deflate"
     c_deflate :: Ptr ZStream -> ZFlush -> IO CInt
-foreign import ccall unsafe "zlib.h deflateEnd"
-    c_deflateEnd :: Ptr ZStream -> IO ()
+foreign import ccall unsafe "zlib.h &deflateEnd"
+    c_deflateEnd :: FunPtr (Ptr ZStream -> IO ())
 
 foreign import ccall unsafe "zlib.h inflateInit_"
     c_inflateInit :: Ptr ZStream -> CString -> CInt -> IO CInt
@@ -31,8 +29,8 @@ foreign import ccall unsafe "zlib.h inflateInit2_"
     c_inflateInit2 :: Ptr ZStream -> CInt -> CString -> CInt -> IO CInt
 foreign import ccall unsafe "zlib.h inflate"
     c_inflate :: Ptr ZStream -> ZFlush -> IO CInt
-foreign import ccall unsafe "zlib.h inflateEnd"
-    c_inflateEnd :: Ptr ZStream -> IO CInt
+foreign import ccall unsafe "zlib.h &inflateEnd"
+    c_inflateEnd :: FunPtr (Ptr ZStream -> IO ())
 
 zlib_version :: CString
 zlib_version = unsafePerformIO $ newCAString #const_str ZLIB_VERSION
@@ -40,20 +38,20 @@ zlib_version = unsafePerformIO $ newCAString #const_str ZLIB_VERSION
 z_stream_size :: (Num a) => a
 z_stream_size = #size z_stream
 
-newZStream :: IO (Ptr ZStream)
-newZStream = do
-  ptr <- mallocBytes z_stream_size
-  memset (castPtr ptr) 0 z_stream_size
-  return ptr
+#def struct zssz { z_stream z; char c; };
+z_stream_alignment :: Int
+z_stream_alignment = #const sizeof (struct zssz) - sizeof (z_stream)
+
+data ZStream = ZStream
 
 #{let zoffdef type, field =
           #field " :: Ptr ZStream -> Ptr (" #type ")\n"
           #field " zptr = zptr `plusPtr` %ld"
           , (long) offsetof (z_stream, field)}
-#zoffdef Ptr a, next_in
+#zoffdef Ptr Word8, next_in
 #zoffdef CUInt, avail_in
 #zoffdef CULong, total_in
-#zoffdef Ptr a, next_out
+#zoffdef Ptr Word8, next_out
 #zoffdef CUInt, avail_out
 #zoffdef CULong, total_out
 #zoffdef CString, msg
@@ -94,3 +92,20 @@ newtype ZFlush = ZFlush CInt
  , z_FINISH = Z_FINISH
  , z_BLOCK = Z_BLOCK
  }
+
+#{enum CInt,
+ , z_OK = Z_OK
+ , z_STREAM_END = Z_STREAM_END
+ , z_NEED_DICT = Z_NEED_DICT
+ , z_ERRNO = Z_ERRNO
+ , z_STREAM_ERROR = Z_STREAM_ERROR
+ , z_DATA_ERROR = Z_DATA_ERROR
+ , z_MEM_ERROR = Z_MEM_ERROR
+ , z_BUF_ERROR = Z_BUF_ERROR
+ , z_VERSION_ERROR = Z_VERSION_ERROR
+ }
+
+
+-- Local Variables:
+-- haskell-program-name: "ghci -lz"
+-- End:

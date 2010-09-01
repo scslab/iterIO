@@ -51,7 +51,8 @@ Library
                  directory >= 1.0 && < 2
   Exposed-modules:
     Data.IterIO, Data.IterIO.Base, Data.IterIO.ListLike,
-    Data.IterIO.Extra, Data.IterIO.Parse, Data.IterIO.Search
+    Data.IterIO.Extra, Data.IterIO.Parse, Data.IterIO.Search,
+    Data.IterIO.Zlib
   Other-modules:
     Data.IterIO.ZlibInt
   Extensions:
