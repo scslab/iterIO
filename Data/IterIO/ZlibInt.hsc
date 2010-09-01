@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-deprecated-flags #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 
 -- | This module exposes the raw FFI interface to zlib C functions.
@@ -8,8 +9,6 @@ module Data.IterIO.ZlibInt where
 import Data.Word
 import Foreign
 import Foreign.C
-
-import Data.IterIO
 
 #include "zlib.h"
 

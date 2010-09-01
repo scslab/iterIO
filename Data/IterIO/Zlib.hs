@@ -4,9 +4,7 @@ module Data.IterIO.Zlib (ZState, deflateInit2, inflateInit2, zCodec
 
 import Prelude hiding (null)
 import Control.Exception (throwIO, ErrorCall(..))
-import Control.Monad (when, liftM)
 import Control.Monad.State.Strict
-import Control.Monad.Trans (MonadIO(..))
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Internal as S
 import qualified Data.ByteString.Lazy as L
@@ -33,11 +31,11 @@ defaultZState = ZState { zStream = error "must allocate zStream"
                        }
 
 newZStream :: (Ptr ZStream -> IO CInt) -> IO (ForeignPtr ZStream)
-newZStream init = do
+newZStream initfn = do
   zs <- mallocForeignPtrBytes z_stream_size
   withForeignPtr zs $ \ptr ->
-      do S.memset (castPtr ptr) 0 z_stream_size
-         err <- init ptr
+      do _ <- S.memset (castPtr ptr) 0 z_stream_size
+         err <- initfn ptr
          when (err /= z_OK) $ throwIO $ ErrorCall "newZStream: init failed"
   return zs
 
@@ -124,10 +122,10 @@ zMkSpace = do
   avail <- zPeek avail_out
   when (avail <= 0) $ do
              zPopOut
-             chunk <- liftIO $ S.mallocByteString L.defaultChunkSize
-             zPokeFP next_out chunk 0
+             nchunk <- liftIO $ S.mallocByteString L.defaultChunkSize
+             zPokeFP next_out nchunk 0
              zPoke avail_out $ fromIntegral L.defaultChunkSize
-             modify $ \zs -> zs { zOutChunk = chunk }
+             modify $ \zs -> zs { zOutChunk = nchunk }
 
 zExec :: ZFlush -> ZM CInt
 zExec flush = do

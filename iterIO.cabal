@@ -10,7 +10,7 @@ Maintainer:     http://www.scs.stanford.edu/~dm/addr/
 Category:       System, Data
 Synopsis:       Iteratee-based IO with simple pipe operators
 Extra-source-files:
-        Examples/simple.hs, Examples/fgrep.hs,
+        Examples/simple.hs, Examples/fgrep.hs, Examples/zpipe.hs,
         Examples/reliable/Arc4.hs, Examples/reliable/NetSim.hs,
         Examples/reliable/Protocol.hs, Examples/reliable/TM.hs,
         Examples/reliable/Target.hs, Examples/reliable/reference.hs,

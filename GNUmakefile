@@ -9,12 +9,13 @@ all: $(TARGETS) $(HSCS)
 
 GHC = ghc $(WALL)
 WALL = -Wall -Werror
+LIBS = -lz
 
 always:
 	@:
 
 Examples/%: always $(HSCS)
-	$(GHC) --make -i$(dir $@) $(WALL) $@.hs
+	$(GHC) --make -i$(dir $@) $(WALL) $@.hs $(LIBS)
 
 %.hs: %.hsc
 	hsc2hs $<
