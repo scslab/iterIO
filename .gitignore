@@ -1,11 +1,13 @@
 *.hi
 *.o
+*_hsc.[ch]
 *~
 /Data/IterIO/ZlibInt.hs
 /Examples/fgrep
-/Examples/simple
 /Examples/httptest
 /Examples/reliable/reference
 /Examples/reliable/tester
+/Examples/simple
+/Examples/zpipe
 /Setup
 /dist

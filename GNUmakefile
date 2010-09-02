@@ -1,7 +1,8 @@
 
 PKG = $(basename $(wildcard *.cabal))
 TARGETS = $(basename $(shell find Examples -name '[a-z]*.hs' -print))
-HSCS = $(patsubst %.hsc,%.hs,$(shell find . -name '*.hsc' -print))
+HSCS := $(patsubst %.hsc,%.hs,$(shell find . -name '*.hsc' -print))
+HSCCLEAN = $(patsubst %.hs,%_hsc.[ch],$(HSCS))
 
 all: $(TARGETS) $(HSCS)
 
@@ -55,6 +56,6 @@ browse: doc
 
 clean:
 	rm -rf dist
-	rm -f Setup $(TARGETS) $(HSCS)
+	rm -f Setup $(TARGETS) $(HSCS) $(HSCCLEAN)
 	find . \( -name '*~' -o -name '*.hi' -o -name '*.o' \) -print0 \
 		| xargs -0 rm -f --
