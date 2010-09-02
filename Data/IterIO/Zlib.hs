@@ -63,7 +63,7 @@ newZStream initfn = do
 deflateInit2 :: CInt
              -- ^ Compression level (use 'z_DEFAULT_COMPRESSION' for defualt)
              -> ZMethod
-             -- ^ Method (use z_DEFLATED)
+             -- ^ Method (use 'z_DEFLATED')
              -> CInt
              -- ^ @windowBits@ (e.g., 'max_wbits')
              -> CInt
