@@ -216,10 +216,12 @@ Inner-enumerators are generally constructed using either 'enumI' or
 \"@inum@...\".  'enumI'' takes an argument of type @Iter t1 m t2@ that
 transcodes type @t1@ to type @t2@.  (For @inumToLines@, @t1@ is
 @S.ByteString@ and @t2@ is @[S.ByteString]@).  'enumI' is like
-`enumI'`, but returns its data wrapped in 'Chunk's, the library's internal
-representation for data that allows finer-grained control of EOF
-conditions.  In @inumToLines@, we are happy just to let 'lineI'
-throw an exception on EOF, as `enumI'` will do the right thing.
+`enumI'`, but the transcoding function is of type @'CodeC' t1 m t2@,
+which is designed to allow the transcoder to keep state from one
+invocation to the next (unlike @'Iter' t1 m t2@), as well as to signal
+EOF explicitly.  In @inumToLines@, we do not need to keep state and
+are happy just to let 'lineI' throw an exception on EOF.  `enumI'`
+will catch the EOF exception and do the right thing.
 
 We similarly define an 'EnumI' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),
@@ -344,16 +346,16 @@ string in a bunch of files and prints all matching lines.  If opening
 or reading a file produces an error, the function should print the
 error message and continue on with the next file.
 
-Error handling is provided by the 'catchI' and 'enumCatch' functions,
-which are roughly equivalent to the standard library @'catch'@ and
-@'throwIO'@ functions.  Because @'catch'@ only works in the IO monad,
-'catchI' and 'enumCatch' work by propagating synchronous exceptions
-through the 'Iter' monad.  @'liftIO'@ transforms IO errors into such
-synchronous exceptions.  Unfortunately, there is no way to handle
-asynchronous exceptions such as those that arise in lazily evaluated
-pure code (e.g., divide by zero) or those thrown by another thread
-using @'throwTo'@.  Fortunately, for our @grep@ example, we only need
-to catch IO errors.
+Error handling is provided by the 'catchI', 'enumCatch' and 'throwI'
+functions, which are roughly equivalent to the standard library
+@'catch'@ and @'throwIO'@ functions.  Because @'catch'@ only works in
+the IO monad, 'catchI' and 'enumCatch' work by propagating synchronous
+exceptions through the 'Iter' monad.  @'liftIO'@ transforms IO errors
+into such synchronous exceptions.  Unfortunately, there is no way to
+handle asynchronous exceptions such as those that arise in lazily
+evaluated pure code (e.g., divide by zero) or those thrown by another
+thread using @'throwTo'@.  Fortunately, for our @grep@ example, we
+only need to catch IO errors.
 
 Here is the @grep@ code.  We will analyze it below.
 
