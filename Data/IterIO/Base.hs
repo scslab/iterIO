@@ -92,12 +92,12 @@ module Data.IterIO.Base
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iteratees
-    , nullI, dataI, chunkI
+    , nullI, dataI, chunkI, atEOFI
     , wrapI, runI, popI, joinI, returnI, resultI
     -- * Some basic Enumerators
     , enumPure
     , iterLoop
-    , inumNop, inumSplit
+    , inumNop, inumRepeat, inumSplit
     -- * Control functions
     , CtlCmd, CtlReq(..), CtlHandler
     , ctlI, safeCtlI
@@ -1120,6 +1120,15 @@ dataI = IterF nextChunk
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 chunkI = IterF $ \c -> if null c then chunkI else return c
 
+-- | Does not actually consume any input, but returns 'True' if there
+-- is no more input data to be had.
+atEOFI :: (Monad m, ChunkData t) => Iter t m Bool
+atEOFI = IterF check
+    where
+      check c@(Chunk t eof) | not (null t) = Done False c
+                            | eof          = Done True c
+                            | otherwise    = atEOFI
+
 -- | Wrap a function around an 'Iter' to transform its result.  The
 -- 'Iter' will be fed 'Chunk's as usual for as long as it remains in
 -- the 'IterF' or 'IterM' states.  When the 'Iter' enters a state
@@ -1753,6 +1762,17 @@ iterLoop = do
 -- unmodified.
 inumNop :: (ChunkData t, Monad m) => EnumI t t m a
 inumNop = enumI' dataI
+
+-- | Repeat an 'EnumI' until an end of file is received or a failure
+-- occurs.
+inumRepeat :: (ChunkData tOut, MonadIO m, Show tIn) =>
+              (EnumI tOut tIn m a) -> (EnumI tOut tIn m a)
+inumRepeat inum iter0 = do
+  eof <- atEOFI
+  if eof then return iter0 else resultI (inum iter0) >>= check
+    where
+      check (Done iter (Chunk _ False)) = inumRepeat inum iter
+      check res                         = res
 
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an

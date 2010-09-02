@@ -15,11 +15,12 @@ usage = do
 main :: IO ()
 main = do
   av <- getArgs
+  hSetBuffering stdout NoBuffering
   case av of
-    -- The decision to put inumG[un]zip the the left or right of |$ is
+    -- The decision to put inumG[un]zip to the left or right of |$ is
     -- arbitrary, so we do one of each.
     []     -> enumHandle stdin |$ inumGzip ..| handleI stdout
-    ["-d"] -> enumHandle stdin |.. inumGunzip |$ handleI stdout
+    ["-d"] -> enumHandle stdin |.. inumRepeat inumGunzip |$ handleI stdout
     _      -> usage
 
 -- Local Variables:

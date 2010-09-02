@@ -27,6 +27,7 @@ import Data.IterIO.ZlibInt
 -- Create the state using 'deflateInit2' or 'inflateInit2'.
 data ZState = ZState { zStream :: (ForeignPtr ZStream)
                      , zOp :: (ZFlush -> IO CInt)
+                     , zFinish :: !ZFlush
                      , zInChunk :: !(ForeignPtr Word8)
                      , zOutChunk :: !(ForeignPtr Word8)
                      , zOut :: L.ByteString -> L.ByteString
@@ -35,6 +36,7 @@ data ZState = ZState { zStream :: (ForeignPtr ZStream)
 defaultZState :: ZState
 defaultZState = ZState { zStream = error "must allocate zStream"
                        , zOp = error "must define zOp"
+                       , zFinish = z_FINISH
                        , zInChunk = S.nullForeignPtr
                        , zOutChunk = S.nullForeignPtr 
                        , zOut = id
@@ -103,6 +105,11 @@ inflateInit2 windowBits = do
   return defaultZState { zStream = z
                        , zOp = \flush -> withForeignPtr z $ \zp ->
                          c_inflate zp flush
+                       , zFinish = z_NO_FLUSH
+                       -- Library documentation makes it sound like
+                       -- you don't need Z_FINISH for inflating, and
+                       -- it could cause problems if the output buffer
+                       -- is not large enough.
                        }
 
 type ZM = StateT ZState IO
@@ -192,7 +199,8 @@ zExec flush = do
                                       return r
     _ | r < 0                   -> do cm <- zPeek msg
                                       m <- if cm == nullPtr
-                                           then return "zlib failed"
+                                           then return $ "zlib failed ("
+                                                    ++ show r ++ ")"
                                            else liftIO $ peekCString cm
                                       liftIO $ throwIO $ ErrorCall m
     _ | otherwise               -> return r
@@ -211,7 +219,8 @@ zCodec zs0 = do
       runz False L.Empty = return (z_OK, L.Empty)
       runz eof s = do
                s' <- zPushIn s
-               let flush = if eof && L.null s' then z_FINISH else z_NO_FLUSH
+               flush <- if eof && L.null s' then gets zFinish
+                                            else return z_NO_FLUSH
                r <- zExec flush
                if r == z_STREAM_END || L.null s'
                  then (,) r `liftM` zPopIn s'
@@ -240,7 +249,11 @@ inumGzip iter = do
   inumZState zs iter
 
 -- | An 'EnumI' that uncompresses a data in either the zlib or gzip
--- format.
+-- format.  Note that this only uncompresses one gzip stream.  Thus,
+-- if you feed in the concatenation of multiple gzipped files,
+-- @inumGunzip@ will stop after the first one.  If this is not what
+-- you want, then use @'inumRepeat' inumGunzip@ to decode repeated
+-- gzip streams.
 inumGunzip :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
 inumGunzip iter = do
   zs <- liftIO $ inflateInit2 (32 + max_wbits)
