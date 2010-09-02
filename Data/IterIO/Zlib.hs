@@ -1,6 +1,14 @@
 
-module Data.IterIO.Zlib (ZState, deflateInit2, inflateInit2, zCodec
-                        , inumZState, inumZlib, inumGzip, inumGunzip) where
+module Data.IterIO.Zlib (-- * Codec and EnumI functions
+                         ZState, deflateInit2, inflateInit2, zCodec
+                        , inumZState, inumZlib, inumGzip, inumGunzip
+                        -- * Constants from zlib.h
+                        , max_wbits, max_mem_level, def_mem_level, zlib_version
+                        , z_DEFAULT_COMPRESSION
+                        , ZStrategy, z_FILTERED, z_HUFFMAN_ONLY, z_RLE
+                        , z_FIXED, z_DEFAULT_STRATEGY
+                        , ZMethod, z_DEFLATED
+                        ) where
 
 import Prelude hiding (null)
 import Control.Exception (throwIO, ErrorCall(..))
@@ -43,15 +51,23 @@ newZStream initfn = do
 
 -- | Create a 'ZState' for compression.  See the description of
 -- @deflateInit2@ in the zlib.h C header file for a more detailed
--- description of the arguments.
+-- description of the arguments.  Note in particular that the value of
+-- @windowBits@ determines the encapsulation format of the compressed
+-- data:
+--
+--   *   8..15 = zlib format
+--
+--   *  24..31 = gzip format
+--
+--   * -8..-15 = means raw zlib format with no header
 deflateInit2 :: CInt
              -- ^ Compression level (use 'z_DEFAULT_COMPRESSION' for defualt)
              -> ZMethod
              -- ^ Method (use z_DEFLATED)
              -> CInt
-             -- ^ windowBits (e.g., 'max_wbits')
+             -- ^ @windowBits@ (e.g., 'max_wbits')
              -> CInt
-             -- ^ memLevel (e.g., 'def_mem_level')
+             -- ^ @memLevel@ (e.g., 'def_mem_level')
              -> ZStrategy
              -- ^ strategy (e.g., 'z_DEFAULT_STRATEGY')
              -> IO ZState
@@ -66,7 +82,17 @@ deflateInit2 level method windowBits memLevel strategy = do
 
 -- | Create a 'Zstate' for uncompression.  See the description of
 -- @inflateInit2@ in the zlib.h C header file for a more detailed
--- description of the arguments.
+-- description of the arguments.  Note in particular that the value of
+-- @windowBits@ determines the encapsulation format of the compressed
+-- data:
+--
+--   *   8..15 = zlib format
+--
+--   *  24..31 = gzip format
+--
+--   *  40..47 = automatically determine zlib/gzip format
+--
+--   * -8..-15 = means raw zlib format with no header
 inflateInit2 :: CInt
              -- ^ windowBits
              -> IO ZState
@@ -154,6 +180,8 @@ zExec flush = do
                                       liftIO $ throwIO $ ErrorCall m
     _ | otherwise               -> return r
               
+-- | A 'Codec' for compressing or uncompressing a stream of
+-- 'L.ByteString's with zlib.
 zCodec :: (MonadIO m) => ZState -> Codec L.ByteString m L.ByteString
 zCodec zs0 = do
   (Chunk dat eof) <- chunkI
@@ -198,8 +226,8 @@ inumGzip iter = do
                              def_mem_level z_DEFAULT_STRATEGY)
   inumZState zs iter
 
--- | An 'EnumI' that uncompresses a data stream in either the zip or
--- gzip format.
+-- | An 'EnumI' that uncompresses a data in either the zlib or gzip
+-- format.
 inumGunzip :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
 inumGunzip iter = do
   zs <- liftIO $ inflateInit2 (32 + max_wbits)
