@@ -1,6 +1,6 @@
 
 module Data.IterIO.Zlib (ZState, deflateInit2, inflateInit2, zCodec
-                        , inumZlib, inumGzip, inumGunzip) where
+                        , inumZState, inumZlib, inumGzip, inumGunzip) where
 
 import Prelude hiding (null)
 import Control.Exception (throwIO, ErrorCall(..))
@@ -15,8 +15,8 @@ import Foreign.C
 import Data.IterIO.Base
 import Data.IterIO.ZlibInt
 
-import Debug.Trace
-
+-- | State used by 'inumZState', the most generic zlib 'EnumI'.
+-- Create the state using 'deflateInit2' or 'inflateInit2'.
 data ZState = ZState { zStream :: (ForeignPtr ZStream)
                      , zOp :: (ZFlush -> IO CInt)
                      , zInChunk :: !(ForeignPtr Word8)
@@ -41,6 +41,9 @@ newZStream initfn = do
          when (err /= z_OK) $ throwIO $ ErrorCall "newZStream: init failed"
   return zs
 
+-- | Create a 'ZState' for compression.  See the description of
+-- @deflateInit2@ in the zlib.h C header file for a more detailed
+-- description of the arguments.
 deflateInit2 :: CInt
              -- ^ Compression level (use 'z_DEFAULT_COMPRESSION' for defualt)
              -> ZMethod
@@ -61,6 +64,9 @@ deflateInit2 level method windowBits memLevel strategy = do
                          c_deflate zp flush
                        }
 
+-- | Create a 'Zstate' for uncompression.  See the description of
+-- @inflateInit2@ in the zlib.h C header file for a more detailed
+-- description of the arguments.
 inflateInit2 :: CInt
              -- ^ windowBits
              -> IO ZState
@@ -138,6 +144,9 @@ zExec flush = do
   case () of
     _ | r == z_OK && avail == 0 -> zExec flush
     _ | r == z_NEED_DICT        -> liftIO $ throwIO $ ErrorCall "zlib NEED_DICT"
+    _ | r == z_STREAM_END       -> do zPopOut
+                                      zPoke avail_out 0
+                                      return r
     _ | r < 0                   -> do cm <- zPeek msg
                                       m <- if cm == nullPtr
                                            then return "zlib failed"
@@ -148,7 +157,6 @@ zExec flush = do
 zCodec :: (MonadIO m) => ZState -> Codec L.ByteString m L.ByteString
 zCodec zs0 = do
   (Chunk dat eof) <- chunkI
-  liftIO $ putTraceMsg $ "EOF is " ++ show eof
   (r, zs) <- liftIO $ runStateT (runz eof $ L.toChunks dat) zs0
   if eof || r == z_STREAM_END
     then return $ CodecE $ zOut zs L.empty
@@ -167,23 +175,35 @@ zCodec zs0 = do
                   zPopOut
                   modify $ \zs -> zs { zOp = error "zOp called after EOF" }
                   return r
-                      
 
-inumZlib :: (MonadIO m) =>
-            ZState
-         -> EnumI L.ByteString L.ByteString m a
-inumZlib zs = enumCI noCtls (zCodec zs)
-            
+-- | The most general zlib 'EnumI', which allows any mode permitted by
+-- the 'deflateInit2' and 'inflateInit2' functions.
+inumZState :: (MonadIO m) =>
+              ZState
+           -> EnumI L.ByteString L.ByteString m a
+inumZState zs = enumCI noCtls (zCodec zs)
+
+-- | An 'EnumI' that compresses in zlib format.  To uncompress, use
+-- 'inumGunzip'.
+inumZlib :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
+inumZlib iter = do
+  zs <- liftIO (deflateInit2 z_DEFAULT_COMPRESSION z_DEFLATED max_wbits
+                             def_mem_level z_DEFAULT_STRATEGY)
+  inumZState zs iter
+
+-- | An 'EnumI' that compresses in gzip format.
 inumGzip :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
 inumGzip iter = do
-  zs <- liftIO (deflateInit2 z_DEFAULT_COMPRESSION z_DEFLATED
-                             max_wbits def_mem_level z_DEFAULT_STRATEGY)
-  inumZlib zs iter
+  zs <- liftIO (deflateInit2 z_DEFAULT_COMPRESSION z_DEFLATED (16 + max_wbits)
+                             def_mem_level z_DEFAULT_STRATEGY)
+  inumZState zs iter
 
+-- | An 'EnumI' that uncompresses a data stream in either the zip or
+-- gzip format.
 inumGunzip :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
 inumGunzip iter = do
-  zs <- liftIO (inflateInit2 $ 32 + max_wbits)
-  inumZlib zs iter
+  zs <- liftIO $ inflateInit2 (32 + max_wbits)
+  inumZState zs iter
 
 -- Local Variables:
 -- haskell-program-name: "ghci -lz"

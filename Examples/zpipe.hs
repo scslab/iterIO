@@ -16,10 +16,11 @@ main :: IO ()
 main = do
   av <- getArgs
   case av of
-    []     -> enumHandle stdin |.. inumGzip |$ handleI stdout
-    ["-d"] -> enumHandle stdin |$ inumGunzip ..| handleI stdout
+    -- The decision to put inumG[un]zip the the left or right of |$ is
+    -- arbitrary, so we do one of each.
+    []     -> enumHandle stdin |$ inumGzip ..| handleI stdout
+    ["-d"] -> enumHandle stdin |.. inumGunzip |$ handleI stdout
     _      -> usage
-
 
 -- Local Variables:
 -- haskell-program-name: "ghci -lz"

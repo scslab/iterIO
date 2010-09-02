@@ -212,7 +212,7 @@ sockDgramI s mdest = do
 data SizeC = SizeC deriving (Typeable)
 instance CtlCmd SizeC Integer
 
-data SeekC = SeekC SeekMode Integer deriving (Typeable)
+data SeekC = SeekC !SeekMode !Integer deriving (Typeable)
 instance CtlCmd SeekC ()
 
 data TellC = TellC deriving (Typeable)

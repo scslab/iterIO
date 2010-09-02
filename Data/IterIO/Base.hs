@@ -156,7 +156,7 @@ instance ChunkData () where
 -- end-of-file condition.  An iteratee that receives a @Chunk@ with
 -- EOF 'True' must return a result (or failure); it is an error to
 -- demand more data after an EOF.
-data Chunk t = Chunk t Bool deriving (Eq)
+data Chunk t = Chunk !t !Bool deriving (Eq)
 
 instance (Show t) => Show (Chunk t) where
     showsPrec _ (Chunk t eof) rest =
@@ -204,7 +204,7 @@ class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
 -- | A request for a control operation
 data CtlReq t m a = forall carg cres. (CtlCmd carg cres) =>
-                    CtlReq carg (Maybe cres -> Iter t m a)
+                    CtlReq !carg !(Maybe cres -> Iter t m a)
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
 -- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
@@ -224,23 +224,23 @@ data CtlReq t m a = forall carg cres. (CtlCmd carg cres) =>
 --
 -- Note that @Iter t@ is a 'MonadTrans' and @Iter t m@ is a a 'Monad'
 -- (as discussed in the documentation for module "Data.IterIO").
-data Iter t m a = IterF (Chunk t -> Iter t m a)
+data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- ^ The iteratee requires more input.
-                | IterM (m (Iter t m a))
+                | IterM !(m (Iter t m a))
                 -- ^ The iteratee must execute monadic bind in monad @m@
-                | IterC (CtlReq t m a)
+                | IterC !(CtlReq t m a)
                 -- ^ A control request for enclosing enumerators
                 | Done a (Chunk t)
                 -- ^ Sufficient input was received; the 'Iter' is
                 -- returning a result of type @a@.  In adition, the
                 -- 'Iter' has a 'Chunk' containing any residual input
                 -- that was not consumed to produce the result.
-                | IterFail SomeException
+                | IterFail !SomeException
                 -- ^ The iteratee failed.
-                | EnumOFail SomeException (Iter t m a)
+                | EnumOFail !SomeException (Iter t m a)
                 -- ^ An 'EnumO' failed; the result includes the status
                 -- of the iteratee at the time the enumerator failed.
-                | EnumIFail SomeException a
+                | EnumIFail !SomeException a
                 -- ^ An 'EnumI' failed; this result includes status of
                 -- the Iteratee.  (The type @a@ will always be
                 -- @'Iter' t m a\'@ for some @a'@ in the result of an
@@ -502,6 +502,7 @@ runIter :: (ChunkData t, Monad m) =>
            Iter t m a
         -> Chunk t
         -> Iter t m a
+runIter iter c | null c           = iter
 runIter (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
     where
       noEOF (Done _ (Chunk _ True)) = error "runIter: IterF returned bad EOF"
@@ -1392,13 +1393,13 @@ type Codec tArg m tRes = Iter tArg m (CodecR tArg m tRes)
 -- | The result type of a 'Codec' that translates from type @tArg@ to
 -- @tRes@ in monad @m@.  The result potentially includes a new 'Codec'
 -- for translating subsequent input.
-data CodecR tArg m tRes = CodecF { unCodecF :: (Codec tArg m tRes)
-                                 , unCodecR :: tRes }
+data CodecR tArg m tRes = CodecF { unCodecF :: !(Codec tArg m tRes)
+                                 , unCodecR :: !tRes }
                           -- ^ This is the normal 'Codec' result,
                           -- which includes another 'Codec' (often the
                           -- same as one that was just called) for
                           -- processing further input.
-                        | CodecE { unCodecR :: tRes }
+                        | CodecE { unCodecR :: !tRes }
                           -- ^ This constructor is used if the 'Codec'
                           -- is ending--i.e., returning for the last
                           -- time--and thus cannot provide another
