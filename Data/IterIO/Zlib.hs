@@ -13,7 +13,7 @@ module Data.IterIO.Zlib (-- * Codec and EnumI functions
 import Prelude hiding (null)
 import Control.Exception (throwIO, ErrorCall(..))
 import Control.Monad.State.Strict
-import qualified Data.ByteString as S
+-- import qualified Data.ByteString as S
 import qualified Data.ByteString.Internal as S
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Internal as L
@@ -132,28 +132,29 @@ zMinusPtr curf basef = withZFP basef $ \base ->
                          cur <- zPeek curf
                          return $ cur `minusPtr` base
 
-zPushIn :: [S.ByteString] -> ZM [S.ByteString]
+zPushIn :: L.ByteString -> ZM L.ByteString
 zPushIn s = do
   avail <- zPeek avail_in
-  if avail > 0
-    then return s
-    else do
-      let (fp, offset, len) = S.toForeignPtr $ head s
-      modify $ \zs -> zs { zInChunk = fp }
-      zPokeFP next_in fp offset
-      zPoke avail_in $ fromIntegral len
-      return $ tail s
+  if avail > 0 then return s else pushit s
+    where
+      pushit (L.Chunk h t) = do
+              let (fp, offset, len) = S.toForeignPtr h
+              modify $ \zs -> zs { zInChunk = fp }
+              zPokeFP next_in fp offset
+              zPoke avail_in $ fromIntegral len
+              return t
+      pushit L.Empty = return L.Empty
 
-zPopIn :: ZM S.ByteString
-zPopIn = do
+zPopIn :: L.ByteString -> ZM L.ByteString
+zPopIn s = do
   len <- zPeek avail_in
   if len <= 0
-    then return S.empty
+    then return s
     else do
       fptr <- gets zInChunk
       offset <- zMinusPtr next_in zInChunk
       zPoke avail_in 0
-      return $ S.fromForeignPtr fptr offset $ fromIntegral len
+      return $ L.chunk (S.fromForeignPtr fptr offset $ fromIntegral len) s
 
 zOutLen :: ZM Int
 zOutLen = zMinusPtr next_out zOutChunk
@@ -196,64 +197,25 @@ zExec flush = do
                                       liftIO $ throwIO $ ErrorCall m
     _ | otherwise               -> return r
 
-{-
 -- | A 'Codec' for compressing or uncompressing a stream of
 -- 'L.ByteString's with zlib.
 zCodec :: (MonadIO m) => ZState -> Codec L.ByteString m L.ByteString
 zCodec zs0 = do
   (Chunk dat eof) <- chunkI
-  ((r, s), zs) <- liftIO $ runStateT (runz eof $ L.toChunks dat) zs0
+  ((r, rest), zs) <- liftIO $ runStateT (runz eof dat) zs0
   if eof || r == z_STREAM_END
-    then return $ CodecE $ zOut zs L.empty
-    else return $ CodecF (zCodec zs { zOut = id }) $ zOut zs L.empty
+    then Done (CodecE $ zOut zs L.empty) (Chunk rest eof)
+    else Done (CodecF (zCodec zs { zOut = id }) $ zOut zs L.empty)
+             (Chunk rest eof)
     where
-      runz False [] = return (z_OK, [])
-      runz False s  = do s' <- zPushIn s
-                         r <- zExec z_NO_FLUSH
-                         if null s' || r == z_STREAM_END
-                           then return (r, s')
-                           else runz False s'
-      runz True []  = zExec z_FINISH >>= finish []
-      runz True s   = do s' <- zPushIn s
-                         let flush = if null s' then z_STREAM_END
-                                                else z_NO_FLUSH
-
-                         r <- zExec $ 
-                         if null s'
-                           then finish
-                           else r <- zExec z_NO_FLUSH
-                                if r == z_STREAM_END
-                                  then
-                                      runz True s'
-      finish s r = do r <- zExec z_FINISH
-                      zPopOut
-                      modify $ \zs -> zs { zOp = error "zOp called after EOF" }
-                      return (r, s)
--}
-
--- | A 'Codec' for compressing or uncompressing a stream of
--- 'L.ByteString's with zlib.
-zCodec :: (MonadIO m) => ZState -> Codec L.ByteString m L.ByteString
-zCodec zs0 = do
-  (Chunk dat eof) <- chunkI
-  (r, zs) <- liftIO $ runStateT (runz eof $ L.toChunks dat) zs0
-  if eof || r == z_STREAM_END
-    then return $ CodecE $ zOut zs L.empty
-    else return $ CodecF (zCodec zs { zOut = id }) $ zOut zs L.empty
-    where
-      runz False [] = return z_OK
-      runz False s  = do s' <- zPushIn s
-                         r <- zExec z_NO_FLUSH
-                         if null s' then return r else runz False s'
-      runz True []  = finish
-      runz True s   = do s' <- zPushIn s
-                         if null s'
-                           then finish
-                           else zExec z_NO_FLUSH >> runz True s'
-      finish = do r <- zExec z_FINISH
-                  zPopOut
-                  modify $ \zs -> zs { zOp = error "zOp called after EOF" }
-                  return r
+      runz False L.Empty = return (z_OK, L.Empty)
+      runz eof s = do
+               s' <- zPushIn s
+               let flush = if eof && L.null s' then z_FINISH else z_NO_FLUSH
+               r <- zExec flush
+               if r == z_STREAM_END || L.null s'
+                 then (,) r `liftM` zPopIn s'
+                 else runz eof s'
 
 -- | The most general zlib 'EnumI', which allows any mode permitted by
 -- the 'deflateInit2' and 'inflateInit2' functions.
