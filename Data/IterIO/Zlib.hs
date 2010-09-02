@@ -122,6 +122,16 @@ zPokeFP f fp offset = withZFP zStream $ \z ->
                       liftIO $ withForeignPtr fp $ \p ->
                       poke (f z) $ p `plusPtr` offset
 
+zMinusPtr :: (Ptr ZStream -> Ptr (Ptr Word8))
+          -> (ZState -> ForeignPtr Word8)
+          -> ZM Int
+zMinusPtr curf basef = withZFP basef $ \base ->
+                       if base == nullPtr
+                       then return 0
+                       else do
+                         cur <- zPeek curf
+                         return $ cur `minusPtr` base
+
 zPushIn :: [S.ByteString] -> ZM [S.ByteString]
 zPushIn s = do
   avail <- zPeek avail_in
@@ -134,13 +144,19 @@ zPushIn s = do
       zPoke avail_in $ fromIntegral len
       return $ tail s
 
+zPopIn :: ZM S.ByteString
+zPopIn = do
+  len <- zPeek avail_in
+  if len <= 0
+    then return S.empty
+    else do
+      fptr <- gets zInChunk
+      offset <- zMinusPtr next_in zInChunk
+      zPoke avail_in 0
+      return $ S.fromForeignPtr fptr offset $ fromIntegral len
+
 zOutLen :: ZM Int
-zOutLen = withZFP zOutChunk $ \base ->
-          if base == nullPtr
-            then return 0
-            else do
-              lim <- zPeek next_out
-              return $ minusPtr lim base
+zOutLen = zMinusPtr next_out zOutChunk
 
 zPopOut :: ZM ()
 zPopOut = do
@@ -150,6 +166,7 @@ zPopOut = do
             out <- liftM (. L.chunk ochunk) $ gets zOut
             modify $ \zs -> zs { zOutChunk = S.nullForeignPtr
                                , zOut = out }
+            zPoke avail_out 0
 
 zMkSpace :: ZM ()
 zMkSpace = do
@@ -171,7 +188,6 @@ zExec flush = do
     _ | r == z_OK && avail == 0 -> zExec flush
     _ | r == z_NEED_DICT        -> liftIO $ throwIO $ ErrorCall "zlib NEED_DICT"
     _ | r == z_STREAM_END       -> do zPopOut
-                                      zPoke avail_out 0
                                       return r
     _ | r < 0                   -> do cm <- zPeek msg
                                       m <- if cm == nullPtr
@@ -179,7 +195,42 @@ zExec flush = do
                                            else liftIO $ peekCString cm
                                       liftIO $ throwIO $ ErrorCall m
     _ | otherwise               -> return r
-              
+
+{-
+-- | A 'Codec' for compressing or uncompressing a stream of
+-- 'L.ByteString's with zlib.
+zCodec :: (MonadIO m) => ZState -> Codec L.ByteString m L.ByteString
+zCodec zs0 = do
+  (Chunk dat eof) <- chunkI
+  ((r, s), zs) <- liftIO $ runStateT (runz eof $ L.toChunks dat) zs0
+  if eof || r == z_STREAM_END
+    then return $ CodecE $ zOut zs L.empty
+    else return $ CodecF (zCodec zs { zOut = id }) $ zOut zs L.empty
+    where
+      runz False [] = return (z_OK, [])
+      runz False s  = do s' <- zPushIn s
+                         r <- zExec z_NO_FLUSH
+                         if null s' || r == z_STREAM_END
+                           then return (r, s')
+                           else runz False s'
+      runz True []  = zExec z_FINISH >>= finish []
+      runz True s   = do s' <- zPushIn s
+                         let flush = if null s' then z_STREAM_END
+                                                else z_NO_FLUSH
+
+                         r <- zExec $ 
+                         if null s'
+                           then finish
+                           else r <- zExec z_NO_FLUSH
+                                if r == z_STREAM_END
+                                  then
+                                      runz True s'
+      finish s r = do r <- zExec z_FINISH
+                      zPopOut
+                      modify $ \zs -> zs { zOp = error "zOp called after EOF" }
+                      return (r, s)
+-}
+
 -- | A 'Codec' for compressing or uncompressing a stream of
 -- 'L.ByteString's with zlib.
 zCodec :: (MonadIO m) => ZState -> Codec L.ByteString m L.ByteString
