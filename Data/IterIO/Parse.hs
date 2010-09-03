@@ -7,7 +7,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orEmpty, (<?>)
                          , foldrI, foldr1I, foldrMinMaxI
                          , foldlI, foldl1I, foldMI, foldM1I
-                         , peekI, skipI, ensureI
+                         , skipI, ensureI
                          , skipWhileI, skipWhile1I
                          , whileI, while1I, whileMaxI, whileMinMaxI
                          , whileStateI
@@ -219,22 +219,24 @@ foldM1I f z0 iter = iter >>= f z0 >>= \z -> foldMI f z iter
 skipI :: Applicative f => f a -> f ()
 skipI = (() <$)
 
+{-
 -- | Peeks at the next input element without consuming it.  Throws an
 -- 'IterEOF' exception if an end of file is encountered.
-peekI :: (LL.ListLike t e, Monad m) => Iter t m e
-peekI = IterF $ \c@(Chunk t eof) ->
+peekHeadI :: (LL.ListLike t e, Monad m) => Iter t m e
+peekHeadI = IterF $ \c@(Chunk t eof) ->
         if LL.null t
         then if eof
              then throwEOFI "peekI"
              else peekI
         else Done (LL.head t) c
+-}
 
 -- | Ensures the next input element satisfies a predicate or throws a
 -- parse error.  Does not consume any input.
 ensureI :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m ()
 ensureI test = do
-  e <- peekI
+  e <- peekI headI
   if test e then return () else expectedI "ensureI predicate"
 
 -- | Skip all input elements encountered until an element is found

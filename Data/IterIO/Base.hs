@@ -92,7 +92,7 @@ module Data.IterIO.Base
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iteratees
-    , nullI, dataI, chunkI, atEOFI
+    , nullI, dataI, chunkI, peekI, atEOFI
     , wrapI, runI, popI, joinI, returnI, resultI
     -- * Some basic Enumerators
     , enumPure
@@ -1119,6 +1119,17 @@ dataI = IterF nextChunk
 -- | Returns a non-empty 'Chunk' or an EOF 'Chunk'.
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 chunkI = IterF $ \c -> if null c then chunkI else return c
+
+-- | Runs an 'Iter' without consuming any input if the 'Iter'
+-- succeeds.  (See 'tryBI' if you want to avoid consuming input when
+-- the 'Iter' fails.)
+peekI :: (ChunkData t, Monad m) =>
+         Iter t m a
+      -> Iter t m a
+peekI iter0 = copyInput iter0 >>= check
+    where
+      check (Done a _, c) = Done a c
+      check (iter, _)     = iter
 
 -- | Does not actually consume any input, but returns 'True' if there
 -- is no more input data to be had.

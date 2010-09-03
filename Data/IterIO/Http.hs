@@ -313,7 +313,8 @@ request_line = do
                  }
 
 request_headers :: (Monad m) => Map S (HttpReq -> Iter L m HttpReq)
-request_headers = Map.fromList $ map (\(a, b) -> (S8.pack a, b)) $
+request_headers = Map.fromList $
+                  map (\(a, b) -> (S8.map toLower $ S8.pack a, b)) $
     [
       ("Host", host_hdr)
     , ("Cookie", cookie_hdr)
@@ -326,9 +327,6 @@ host_hdr req = do
 
 cookie_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 cookie_hdr req = do
-  -- string "Cookie:"
-  -- _vers <- kEqVal $ string "$Version"
-  -- sep
   cookies <- sepBy1 (kEqVal token') sep <* (spaces >> crlf)
   return req { reqCookies = cookies }
     where
@@ -336,7 +334,7 @@ cookie_hdr req = do
 
 any_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 any_hdr req = do
-  field <- token
+  field <- S8.map toLower <$> token
   char ':'
   olws
   req' <- case Map.lookup field request_headers of
