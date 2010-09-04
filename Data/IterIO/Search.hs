@@ -8,9 +8,6 @@ import qualified Data.ByteString.Lazy.Search as Search
 
 import Data.IterIO
 
--- import Control.Monad.Trans
--- import System.IO
-
 -- | Feeds input to an Iteratee until some boundary string is found.
 -- The boundary string is then discarded.
 inumStopString :: (Monad m) =>

@@ -6,6 +6,7 @@ module Data.IterIO.Http (HttpReq(..)
                         , comment, qvalue
                         ) where
 
+import Control.Monad.Trans (MonadTrans(..))
 import Data.Array.Unboxed
 import Data.Bits
 import qualified Data.ByteString as S
@@ -220,13 +221,13 @@ isUnreserved :: Word8 -> Bool
 isUnreserved c = rfc3986_syntax ! c .&. rfc3986_unreserved /= 0
 -}
 
-hostI :: (Monad m) => Iter L m S
-hostI = (strictify <$> (bracketed <|> percent_decode regnamechar)
-         <++> (char ':' <:> whileI (isDigit . w2c) <|> nil))
-        <?> "host"
+hostI :: (Monad m) => Iter L m (S, Maybe Int)
+hostI = (,) <$> host <*> (Just <$> port <|> return Nothing) <?> "host"
     where
-      regnamechar c = 0 /= rfc3986_syntax ! c
-                      .&. (rfc3986_unreserved .|. rfc3986_sub_delims)
+      host = strictify <$> (bracketed <|> percent_decode regnamechar)
+      port = do _ <- char ':'; whileI (isDigit . w2c) >>= readI
+      regnamechar c = (rfc3986_syntax ! c
+                       .&. (rfc3986_unreserved .|. rfc3986_sub_delims)) /= 0
       addrchar c = 0 /= rfc3986_syntax ! c .&. rfc3986_addrchars
       bracketed = char '[' <:> percent_decode addrchar <++> char ']' <:> nil
 
@@ -243,7 +244,7 @@ pathI = dopath <?> "path"
       qpcharslash c = rfc3986_test rfc3986_pcharslash c || c == eord '?'
  
 -- | Returns (scheme, host, path, query)
-absUri :: (Monad m) => Iter L m (S, S, S, S)
+absUri :: (Monad m) => Iter L m (S, S, Maybe Int, S, S)
 absUri = do
   scheme <- strictify <$> satisfy (isAlpha . w2c)
             <:> while1I (rfc3986_test rfc3986_schemechars)
@@ -251,21 +252,21 @@ absUri = do
   optional $ userinfo >> string "@"
   authority <- hostI
   (path, query) <- pathI
-  return (scheme, authority, path, query)
+  return (scheme, fst authority, snd authority, path, query)
     where
       userinfo = percent_decode $ \c ->
                  rfc3986_test (rfc3986_unreserved .|. rfc3986_sub_delims) c
                  || c == eord ':'
   
 -- | Returns (scheme, host, path, query)
-uri :: (Monad m) => Iter L m (S, S, S, S)
+uri :: (Monad m) => Iter L m (S, S, Maybe Int, S, S)
 uri = absUri
       <|> path
-      <|> char '*' *> return (S.empty, S.empty, S8.pack "*", S.empty)
+      <|> char '*' *> return (S.empty, S.empty, Nothing, S8.pack "*", S.empty)
       <?> "URI"
     where
       path = do (p, q) <- ensureI (== eord '/') *> pathI
-                return (S8.pack "", S8.pack "", p, q)
+                return (S.empty, S.empty, Nothing, p, q)
 
 
 --
@@ -277,6 +278,7 @@ data HttpReq = HttpReq {
     , reqPath :: S
     , reqQuery :: S
     , reqHost :: S
+    , reqPort :: Maybe Int
     , reqVers :: (Int, Int)
     , reqHeaders :: [(S, S)]
     , reqCookies :: [(S, S)]
@@ -298,7 +300,7 @@ request_line :: (Monad m) => Iter L m HttpReq
 request_line = do
   method <- strictify <$> while1I (isUpper . w2c)
   spaces
-  (_, host, path, query) <- uri
+  (_, host, mport, path, query) <- uri
   spaces
   (major, minor) <- hTTPvers
   optional spaces
@@ -307,6 +309,7 @@ request_line = do
                  , reqPath = path
                  , reqQuery = query
                  , reqHost = host
+                 , reqPort = mport
                  , reqVers = (major, minor)
                  , reqHeaders = []
                  , reqCookies = []
@@ -322,12 +325,12 @@ request_headers = Map.fromList $
 
 host_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 host_hdr req = do
-  host <- hostI
-  return req { reqHost = host }
+  (host, mport) <- hostI
+  return req { reqHost = host, reqPort = mport }
 
 cookie_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 cookie_hdr req = do
-  cookies <- sepBy1 (kEqVal token') sep <* (spaces >> crlf)
+  cookies <- sepBy1 (kEqVal token') sep
   return req { reqCookies = cookies }
     where
       sep = do olws; char ';' <|> char ','
@@ -337,14 +340,13 @@ any_hdr req = do
   field <- S8.map toLower <$> token
   char ':'
   olws
-  req' <- case Map.lookup field request_headers of
-            Nothing -> strictify <$> text >>= return . addhdr field
-            Just f  -> f req
+  val <- strictify <$> text
   crlf
-  return req'
-    where
-      addhdr field val = req { reqHeaders = (field, val) : reqHeaders req }
-            
+  let req' = req { reqHeaders = (field, val) : reqHeaders req }
+  case Map.lookup field request_headers of
+    Nothing -> return req'
+    Just f  -> lift $ enumPure (L.fromChunks [val]) |$ f req' <* (olws >> eofI)
+
 httpreqI :: Monad m => Iter L m HttpReq
 httpreqI = do
   -- Section 4.1 of RFC2616:  "In the interest of robustness, servers

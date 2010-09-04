@@ -12,7 +12,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , whileI, while1I, whileMaxI, whileMinMaxI
                          , whileStateI
                          , concatI, concat1I, concatMinMaxI
-                         , readI
+                         , readI, eofI
                          -- * Applicative combinators
                          , (<$>), (<$), Applicative(..), (<**>)
                          , (>$>), (<++>), (<:>), nil
@@ -389,6 +389,13 @@ readI s' = let s = LL.toString s'
                 [a] -> return a
                 []  -> throwI $ IterParseErr $ "readI can't parse: " ++ s
                 _   -> throwI $ IterParseErr $ "readI ambiguous: " ++ s
+
+-- | Ensures the input is at the end-of-file marker, or else throws an
+-- exception.
+eofI :: (ChunkData t, Monad m) => Iter t m ()
+eofI = do
+  eof <- atEOFI
+  if eof then return () else expectedI "EOF"
 
 -- | 'mappend' the result of two 'Applicative' types returning
 -- 'Monoid' types (@\<++> = 'liftA2' 'mappend'@).  Has the same fixity
