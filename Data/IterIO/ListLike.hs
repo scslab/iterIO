@@ -177,7 +177,7 @@ stringExactI len | len <= 0  = return mempty
             let acc' = LL.append acc t
             in if LL.length t == len then return acc' else accumulate acc'
 
--- | Put strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
+-- | Puts strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
 -- writes an EOF to the handle.  Note that this does not put the
 -- handle into binary mode.  To do this, you may need to call
 -- @'hSetBinaryMode' h 'True'@ on the handle before using it with
@@ -185,7 +185,7 @@ stringExactI len | len <= 0  = return mempty
 -- UTF-8.  (On the other hand, if the 'Handle' corresponds to a socket
 -- and the socket is being read in another thread, calling
 -- 'hSetBinaryMode' can cause deadlock, so in this case it is better
--- to have the other end of the connection call 'hSetBinaryMode'.)
+-- to have the thread handling reads call 'hSetBinaryMode'.)
 handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            Handle
         -> Iter t m ()
@@ -206,12 +206,19 @@ sockDgramI s mdest = do
 -- Control functions
 --
 
+-- | A control command requesting the size of the current file being
+-- enumerated.
 data SizeC = SizeC deriving (Typeable)
 instance CtlCmd SizeC Integer
 
+-- | A control command for seeking within a file, when a file is being
+-- enumerated.
 data SeekC = SeekC !SeekMode !Integer deriving (Typeable)
 instance CtlCmd SeekC ()
 
+-- | A control command for determining the current offset within a
+-- file.  Note that this will only be accurate when there is not
+-- left-over input data.
 data TellC = TellC deriving (Typeable)
 instance CtlCmd TellC Integer
 
