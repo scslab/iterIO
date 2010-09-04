@@ -11,14 +11,14 @@ module Data.IterIO.ListLike
     , headI, safeHeadI
     , lineI, safeLineI
     , stringExactI, stringMaxI
-    , handleI, handleModeI, sockDgramI
+    , handleI, sockDgramI
     -- * Control requests
     , SeekMode(..)
     , SizeC(..), SeekC(..), TellC(..)
     , fileCtl
     -- * Outer enumerators
     , enumDgram, enumDgramFrom
-    , enumHandle, enumHandle', enumHandleMode
+    , enumHandle, enumHandle', enumNonBinHandle
     , enumFile, enumFile'
     -- * Inner enumerators
     , inumLog, inumhLog
@@ -177,22 +177,19 @@ stringExactI len | len <= 0  = return mempty
             let acc' = LL.append acc t
             in if LL.length t == len then return acc' else accumulate acc'
 
--- | Put byte strings to a file handle then write an EOF to it.  Note
--- that this puts the handle in binary mode (with 'hSetBinaryMode').
--- If you do not want that behavior, use 'handleModeI'.
+-- | Put strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
+-- writes an EOF to the handle.  Note that this does not put the
+-- handle into binary mode.  To do this, you may need to call
+-- @'hSetBinaryMode' h 'True'@ on the handle before using it with
+-- @handleI@.  Otherwise, Haskell by default will treat the data as
+-- UTF-8.  (On the other hand, if the 'Handle' corresponds to a socket
+-- and the socket is being read in another thread, calling
+-- 'hSetBinaryMode' can cause deadlock, so in this case it is better
+-- to have the other end of the connection call 'hSetBinaryMode'.)
 handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            Handle
         -> Iter t m ()
-handleI h = do
-  liftIO $ hSetBinaryMode h True
-  handleModeI h
-
--- | A variant of 'handleI' that uses the handle as is, without putint
--- it in binary mode.
-handleModeI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
-               Handle
-            -> Iter t m ()
-handleModeI h = putI (liftIO . LL.hPutStr h) (liftIO $ hShutdown h 1)
+handleI h = putI (liftIO . LL.hPutStr h) (liftIO $ hShutdown h 1)
 
 -- | Sends a list of packets to a datagram socket.
 sockDgramI :: (MonadIO m, SendRecvString t) =>
@@ -248,28 +245,29 @@ enumDgramFrom sock = enumO $ iterToCodec $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgramFrom" else return [(msg, addr)]
 
--- | Feed data from a file handle into an 'Iter' in Lazy
+-- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.
 enumHandle' :: (MonadIO m) => Handle -> EnumO L.ByteString m a
 enumHandle' = enumHandle
 
--- | Like 'enumHandle'', but can use any 'LL.ListLikeIO' type for the
--- data instead of just 'L.ByteString'.  Note that @enumHandle@ calls
--- @'hSetBinaryMode' h 'True'@ on the handle before using it.  If you
--- do not want this behavior, use 'enumHandleMode'.
+-- | Puts a handle into binary mode with 'hSetBinaryMode', then
+-- enumerates data read from the handle to feed an 'Iter' with any
+-- 'LL.ListLikeIO' input type.
 enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
-               Handle
-            -> EnumO t m a
+              Handle
+           -> EnumO t m a
 enumHandle h iter = do
   liftIO $ hSetBinaryMode h True
-  enumHandleMode h iter
+  enumNonBinHandle h iter
 
--- | A variant of 'enumHandle' that uses the file as is, in its
--- current mode, instead of first calling @'hSetBinaryMode' h 'True'@.
-enumHandleMode :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
-                  Handle
-               -> EnumO t m a
-enumHandleMode h = enumCO (fileCtl h) $ iterToCodec $ do
+-- | Feeds an 'Iter' with data from a file handle, using any input
+-- type in the 'LL.ListLikeIO' class.  Note that @enumNonBinHandle@
+-- uses the handle as is, unlike 'enumHandle', and so can be used if
+-- you want to read the data in non-binary form.
+enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
+                    Handle
+                 -> EnumO t m a
+enumNonBinHandle h = enumCO (fileCtl h) $ iterToCodec $ do
   _ <- liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
   if null buf then throwEOFI "enumHandle" else return buf
@@ -277,12 +275,14 @@ enumHandleMode h = enumCO (fileCtl h) $ iterToCodec $ do
 -- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
 
 -- | Enumerate the contents of a file as a series of lazy
--- 'L.ByteString's.
+-- 'L.ByteString's.  (This is a type-restricted version of
+-- 'enumFile'.)
 enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
 enumFile' = enumFile
 
--- | Like 'enumFile'', but can use any 'LL.ListLikeIO' type for the
--- data read from the file.
+-- | Enumerate the contents of a file for an 'Iter' taking input in
+-- any 'LL.ListLikeIO' type.  Note that the file is opened with
+-- 'openBinaryFile' to ensure binary mode.
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
              FilePath
           -> EnumO t m a
