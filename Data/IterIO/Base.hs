@@ -1314,7 +1314,7 @@ type EnumO t m a = Iter t m a -> Iter t m a
 -- > type EnumI' tOut tIn m a = Iter tIn m a -> Iter tOut m a
 --
 -- In fact, given an @EnumI@ object @inum@, it is possible to
--- construct a function of type @EnumI'@ as @(enumI '..|')@.  But
+-- construct a function of type @EnumI'@ with @(inum '..|')@.  But
 -- sometimes one might like to concatenate @EnumI@s.  For instance,
 -- consider a network protocol that changes encryption or compression
 -- modes midstream.  Transcoding is done by @EnumI@s.  To change
