@@ -103,7 +103,7 @@ inumGrep re = enumI' $ do
     where
       packedRe = S8.pack re
 
-lengthI :: (Monad m) => Iter [t] m Int
+lengthI :: (Show t, Monad m) => Iter [t] m Int
 lengthI = count 0
     where
       count n = do

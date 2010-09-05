@@ -76,7 +76,7 @@ feed t iter = rerun $ runIter iter (chunk t)
 -- connected datagram sockets.  'genSendTo' accepts 'Nothing' as a
 -- destination address and then calls the @send@ (rather than
 -- @sendto@) system call.
-class SendRecvString t where
+class (Show t) => SendRecvString t where
     genRecvFrom :: Socket -> Int -> IO (t, Int, SockAddr)
     genSendTo :: Socket -> t -> Maybe SockAddr -> IO Int
 

@@ -69,7 +69,7 @@ putI putfn eoffn = do
 -- | Send datagrams using a supplied function.  The datagrams are fed
 -- as a list of packets, where each element of the list should be a
 -- separate datagram.
-sendI :: (Monad m) =>
+sendI :: (Show t, Monad m) =>
          (t -> Iter [t] m a)
       -> Iter [t] m ()
 sendI sendfn = do

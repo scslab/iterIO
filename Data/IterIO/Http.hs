@@ -6,7 +6,6 @@ module Data.IterIO.Http (HttpReq(..)
                         , comment, qvalue
                         ) where
 
-import Control.Monad.Trans (MonadTrans(..))
 import Data.Array.Unboxed
 import Data.Bits
 import qualified Data.ByteString as S
@@ -28,7 +27,6 @@ import Data.IterIO.Parse
 -- import Data.IterIO.Search
 
 -- import System.IO
-
 -- import Debug.Trace
 
 type L = L8.ByteString
@@ -91,9 +89,9 @@ text_except except = concat1I (while1I ok <|> lws)
 hex :: (Monad m) => Iter L m Int
 hex = headI >>= digit <?> "hex digit"
     where
-      digit c | c > 127   = expectedI "hex digit"
+      digit c | c > 127   = expectedI (show $ w2c c) "hex digit"
               | otherwise = case hexTab ! c of
-                              -1 -> expectedI "hex digit"
+                              -1 -> expectedI (show $ w2c c) "hex digit"
                               n  -> return $ fromIntegral n
       hexTab :: UArray Word8 Int8
       hexTab = listArray (0,127) $ fmap digitval ['\0'..'\177']
@@ -131,7 +129,7 @@ percent_decode test = foldrI L.cons' L.empty getc
         case c :: Word8 of
           _ | c == eord '%' -> getval
           _ | test c        -> return c
-          _                 -> expectedI "percent_decode predicate"
+          _                 -> expectedI (show c) "percent_decode predicate"
       getval = do hi <- hex; lo <- hex; return $ toEnum $ 16 * hi + lo
 
 -- | Parse a backslash-escaped character.
@@ -165,10 +163,10 @@ qvalue = do char 'q'; olws; char '='; olws; frac <|> one
                              optional $ whileMinMaxI 0 3 (== eord '0')
                return 1000
 
-kEqVal :: (Monad m) => Iter L m L -> Iter L m (S, S)
-kEqVal kiter = do
+parameter :: (Monad m) => Iter L m (S, S)
+parameter = do
   olws
-  k <- strictify <$> kiter
+  k <- token
   olws; char '='; olws
   v <- token <|> quoted_string
   return (k, v)
@@ -282,8 +280,20 @@ data HttpReq = HttpReq {
     , reqVers :: (Int, Int)
     , reqHeaders :: [(S, S)]
     , reqCookies :: [(S, S)]
+    , reqContentType :: Maybe (S, [(S,S)])
     } deriving (Show)
 
+defaultHttpReq :: HttpReq
+defaultHttpReq = HttpReq { reqMethod = S.empty
+                         , reqPath = S.empty
+                         , reqQuery = S.empty
+                         , reqHost = S.empty
+                         , reqPort = Nothing
+                         , reqVers = (0, 0)
+                         , reqHeaders = []
+                         , reqCookies = []
+                         , reqContentType = Nothing
+                         }
 
 hTTPvers :: (Monad m) => Iter L m (Int, Int)
 hTTPvers = do
@@ -305,15 +315,14 @@ request_line = do
   (major, minor) <- hTTPvers
   optional spaces
   skipI crlf
-  return HttpReq { reqMethod = method
-                 , reqPath = path
-                 , reqQuery = query
-                 , reqHost = host
-                 , reqPort = mport
-                 , reqVers = (major, minor)
-                 , reqHeaders = []
-                 , reqCookies = []
-                 }
+  return defaultHttpReq {
+                 reqMethod = method
+               , reqPath = path
+               , reqQuery = query
+               , reqHost = host
+               , reqPort = mport
+               , reqVers = (major, minor)
+               }
 
 request_headers :: (Monad m) => Map S (HttpReq -> Iter L m HttpReq)
 request_headers = Map.fromList $
@@ -321,6 +330,7 @@ request_headers = Map.fromList $
     [
       ("Host", host_hdr)
     , ("Cookie", cookie_hdr)
+    , ("Content-Type", content_type_hdr)
     ]
 
 host_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
@@ -330,10 +340,22 @@ host_hdr req = do
 
 cookie_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 cookie_hdr req = do
-  cookies <- sepBy1 (kEqVal token') sep
+  cookies <- sepBy1 parameter sep
   return req { reqCookies = cookies }
     where
       sep = do olws; char ';' <|> char ','
+
+{-
+peekaboo :: (Monad m) => String -> Iter L m ()
+peekaboo str = IterF $ \c@(Chunk t _) ->
+               trace (str ++ ": " ++ L8.unpack t) $ Done () c
+-}
+
+content_type_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+content_type_hdr req = do
+  typ <- token <++> char '/' <:> token
+  parms <- many $ olws >> char ';' >> parameter
+  return req { reqContentType = Just (typ, parms) }
 
 any_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 any_hdr req = do
@@ -345,7 +367,9 @@ any_hdr req = do
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
   case Map.lookup field request_headers of
     Nothing -> return req'
-    Just f  -> lift $ enumPure (L.fromChunks [val]) |$ f req' <* (olws >> eofI)
+    Just f  -> enumPure (L.fromChunks [val]) .|$
+               (f req' <* (optional spaces >> eofI)
+                      <?> (S8.unpack field ++ " header"))
 
 httpreqI :: Monad m => Iter L m HttpReq
 httpreqI = do
@@ -402,8 +426,41 @@ inumFromChunks = enumI getsize
         skipI crlf
         return $ CodecE L8.empty
 
-
 {-
+postReq :: L
+postReq = L8.pack
+ "POST /testSubmit HTTP/1.1\n\
+ \Host: localhost:8000\n\
+ \User-Agent: Mozilla/5.0 (X11; U; Linux i686 (x86_64); en-US; rv:1.9.2.8) Gecko/20100722 Firefox/3.6.8\n\
+ \Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\n\
+ \Accept-Language: en-us,en;q=0.5\n\
+ \Accept-Encoding: gzip,deflate\n\
+ \Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\n\
+ \Keep-Alive: 115\n\
+ \Connection: keep-alive\n\
+ \Content-Type: multipart/form-data; boundary=---------------------------28986267117678495841915281966\n\
+ \Content-Length: 561\n\
+ \\n\
+ \-----------------------------28986267117678495841915281966\n\
+ \Content-Disposition: form-data; name=\"justatestkey\"\n\
+ \\n\
+ \nothing\n\
+ \-----------------------------28986267117678495841915281966\n\
+ \Content-Disposition: form-data; name=\"hate\"\n\
+ \\n\
+ \666\n\
+ \-----------------------------28986267117678495841915281966\n\
+ \Content-Disposition: form-data; name=\"file1\"; filename=\"x\"\n\
+ \Content-Type: application/octet-stream\n\
+ \\n\
+ \search scs.stanford.edu uun.org\n\
+ \nameserver 127.0.0.1\n\
+ \nameserver 64.81.79.2\n\
+ \nameserver 216.231.41.2\n\
+ \\n\
+ \-----------------------------28986267117678495841915281966--\n"
+
+
 -- | Mime boundary characters
 bcharTab :: UArray Word8 Bool
 bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']

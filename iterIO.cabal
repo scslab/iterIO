@@ -22,23 +22,28 @@ Description:
         better error handling, referential transparency, and
         convenient composition of protocol layers or parsers.  New
         users should see the tutorial in the "Data.IterIO" module
-        documentation.  The approach was originally advocated by Oleg
+        documentation.
+
+	.
+
+	The Iteratee approach was originally advocated by Oleg
         Kiselyov (see talk slides at
         <http://okmij.org/ftp/Streams.html#iteratee>).  The main
         implementation by Kiselyov and John Lato is simply called
         /iteratee/ (<http://hackage.haskell.org/package/iteratee>).
-        This package is an experimental from-scratch re-implementation
-        of the iteratee concepts with a new interface designed to
-        simplify many of the abstractions and make them easier to use.
-        However, Kiselyov and Lato are continuing to improve the
-        original iteratee package, which may someday subsume this one.
-        The author of this package is particularly grateful to John
-        Lato for helping him understand much of the important design
-        rationale behind the original iteratee package.  The latest
-        development version of the iterIO sources is available via git
-        by executing:
-        
-        @git clone http:\/\/www.scs.stanford.edu\/~dm\/repos\/iterIO.git@
+        This package is a re-implementation of the Iteratee concepts
+        with a new interface designed to simplify many of the
+        abstractions and make them easier to use.  The author of this
+        package is particularly grateful to John Lato for helping him
+        understand much of the important design rationale behind the
+        original iteratee package.
+
+	.
+
+        The latest development version of the iterIO sources is
+        available via git by executing:
+        .       
+        > git clone http://www.scs.stanford.edu/~dm/repos/iterIO.git
 
 Library
   Build-Depends: base >= 4 && < 5,

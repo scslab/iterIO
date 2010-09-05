@@ -4,7 +4,7 @@
 -- "Data.Applicative" or inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
-                          (<|>), (\/), orEmpty, (<?>)
+                          (<|>), (\/), orEmpty, (<?>), expectedI
                          , foldrI, foldr1I, foldrMinMaxI
                          , foldlI, foldl1I, foldMI, foldM1I
                          , skipI, ensureI
@@ -151,9 +151,29 @@ infixr 3 `orEmpty`
 -- > infix 0 <?>
 --
 (<?>) :: (ChunkData t, Monad m) => Iter t m a -> String -> Iter t m a
-iter <?> expected =
-    mapExceptionI (\(IterNoParse _) -> IterExpected [expected]) iter
+(<?>) iter@(IterF _) expected = do
+  saw <- IterF $ \c -> Done c c
+  flip mapExceptionI iter $
+    \(IterNoParse _) -> IterExpected (take 50 (show saw) ++ "...") [expected]
+(<?>) iter expected
+      | isIterActive iter = apNext (<?> expected) iter
+      | isIterError iter  = flip mapExceptionI iter $ \(IterNoParse _) ->
+                            IterExpected "no input" [expected]
+      | otherwise         = iter
 infix 0 <?>
+  
+{-
+iter <?> expected = mapExceptionI domap iter
+    where
+      domap (IterNoParse e) =
+          case cast e of
+            Just (IterExpected saw _) -> IterExpected saw [expected]
+            Nothing                   -> IterExpected "" [expected]
+-}
+
+-- | Throw an iteratee error that describes expected input not found.
+expectedI :: String -> String -> Iter t m a
+expectedI saw target = throwI $ IterExpected saw [target]
 
 -- | Repeatedly invoke an Iteratee, and right fold a function over the
 -- results.
@@ -236,8 +256,15 @@ peekHeadI = IterF $ \c@(Chunk t eof) ->
 ensureI :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m ()
 ensureI test = do
-  e <- peekI headI
-  if test e then return () else expectedI "ensureI predicate"
+  me <- peekI safeHeadI
+  case me of
+    Just e | test e -> return ()
+    Just e          -> do t <- showt $ LL.singleton e
+                          expectedI t "ensureI predicate"
+    Nothing         -> expectedI "EOF" "ensureI predicate"
+    where
+      showt :: (Monad m, ChunkData t) => t -> Iter t m String
+      showt = return . chunkShow
 
 -- | Skip all input elements encountered until an element is found
 -- that does not match the specified predicate.
@@ -353,7 +380,7 @@ whileMinMaxI nmin nmax test = do
   result <- whileMaxI nmax test
   if LL.length result >= nmin
     then return result
-    else expectedI "whileMinMaxI minimum"
+    else expectedI "too few" "whileMinMaxI minimum"
 
 -- | Repeatedly execute an 'Iter' returning a 'Monoid' and 'mappend'
 -- all the results in a right fold.
@@ -392,10 +419,12 @@ readI s' = let s = LL.toString s'
 
 -- | Ensures the input is at the end-of-file marker, or else throws an
 -- exception.
-eofI :: (ChunkData t, Monad m) => Iter t m ()
+eofI :: (ChunkData t, Monad m, Show t) => Iter t m ()
 eofI = do
-  eof <- atEOFI
-  if eof then return () else expectedI "EOF"
+  Chunk t eof <- peekI chunkI
+  if eof && null t
+    then return ()
+    else expectedI (chunkShow t) "EOF"
 
 -- | 'mappend' the result of two 'Applicative' types returning
 -- 'Monoid' types (@\<++> = 'liftA2' 'mappend'@).  Has the same fixity
@@ -497,11 +526,13 @@ sepEndBy1 item sep =
 
                  
 -- | Read the next input element if it satisfies some predicate.
-satisfy :: (ChunkData t, LL.ListLike t e, Monad m) =>
+satisfy :: (ChunkData t, LL.ListLike t e, Enum e, Monad m) =>
            (e -> Bool) -> Iter t m e
 satisfy test = do
   e <- headI
-  if test e then return e else expectedI "satify predicate"
+  if test e
+    then return e
+    else expectedI (show $ chr $ fromEnum e) "satify predicate"
 
 -- | Read input that exactly matches a character.
 char :: (ChunkData t, LL.ListLike t e, Eq e, Enum e, Monad m) =>
@@ -519,4 +550,4 @@ string fulltarget = doMatch ft
         m <- stringMaxI $ LL.length target
         if not (LL.null m) && LL.isPrefixOf m target
           then doMatch $ LL.drop (LL.length m) target
-          else expectedI $ show fulltarget
+          else expectedI (show $ LL.toString m) $ show $ LL.toString target

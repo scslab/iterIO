@@ -25,9 +25,7 @@ myListen pn = do
 
 testreq :: (MonadIO m) => Iter L m ()
 testreq = do
-  liftIO $ putStrLn "Got this far"
   req <- httpreqI
-  liftIO $ putStrLn "But not this far"
   liftIO $ print req
 
 main :: IO ()

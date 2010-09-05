@@ -76,7 +76,7 @@ module Data.IterIO.Base
      ChunkData(..), Chunk(..)
     , Iter(..), EnumO, EnumI
     -- * Concatenation and fusing operators
-    , (|$)
+    , (|$), (.|$)
     , cat, catI
     , (|..), (..|..), (..|)
     -- * Enumerator construction functions
@@ -86,7 +86,7 @@ module Data.IterIO.Base
     , enumCI, enumI, enumI'
     -- * Exception and error functions
     , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
-    , throwI, throwEOFI, expectedI
+    , throwI, throwEOFI
     , tryI, tryBI, catchI, catchBI, handlerI, handlerBI
     , enumCatch, enumHandler, inumCatch
     , resumeI, verboseResumeI, mapExceptionI
@@ -104,6 +104,7 @@ module Data.IterIO.Base
     , noCtls, ctl, ctl', ctlHandler
     -- * Other functions
     , runIter, run, chunk, chunkEOF
+    , isIterError, isIterActive, apNext
     ) where
 
 import Prelude hiding (null)
@@ -120,7 +121,9 @@ import Data.List (intercalate)
 import Data.Monoid
 import Data.Typeable
 import qualified Data.ByteString as S
+import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString.Lazy.Char8 as L8
 import System.Environment
 import System.IO
 import System.IO.Error (mkIOError, eofErrorType, isEOFError)
@@ -142,14 +145,19 @@ import System.IO.Unsafe
 -- library explicitly feeds @null@ chunks to iteratees.
 class (Monoid t) => ChunkData t where
     null :: t -> Bool
-instance ChunkData [a] where
+    chunkShow :: t -> String
+instance (Show a) => ChunkData [a] where
     null = Prelude.null
+    chunkShow = show
 instance ChunkData L.ByteString where
     null = L.null
+    chunkShow = show . L8.unpack
 instance ChunkData S.ByteString where
     null = S.null
+    chunkShow = show . S8.unpack
 instance ChunkData () where
     null _ = True
+    chunkShow _ = "()"
 
 -- | @Chunk@ is a wrapper around a 'ChunkData' type that also includes
 -- an EOF flag that is 'True' if the data is followed by an
@@ -158,9 +166,9 @@ instance ChunkData () where
 -- demand more data after an EOF.
 data Chunk t = Chunk !t !Bool deriving (Eq)
 
-instance (Show t) => Show (Chunk t) where
+instance (ChunkData t) => Show (Chunk t) where
     showsPrec _ (Chunk t eof) rest =
-        "Chunk " ++ show t ++ if eof then "+EOF" ++ rest else rest
+        "Chunk " ++ chunkShow t ++ if eof then "+EOF" ++ rest else rest
 
 -- | Constructor function that builds a chunk containing data and a
 -- 'False' EOF flag.
@@ -191,6 +199,7 @@ instance (ChunkData t) => Monoid (Chunk t) where
 instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
     null (Chunk _ True)  = False
+    chunkShow = show
 
 
 -- Note that the Ctl types were originally done without
@@ -246,18 +255,22 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- @'Iter' t m a\'@ for some @a'@ in the result of an
                 -- 'EnumI'.)
 
-instance (ChunkData t) => Show (Iter t m a) where
+instance (Show a, ChunkData t) => Show (Iter t m a) where
     showsPrec _ (IterF _) rest = "IterF _" ++ rest
     showsPrec _ (IterM _) rest = "IterM _" ++ rest
+    showsPrec _ (Done a c) rest = "Done (" ++ show a ++ ") " ++ show c ++ rest
+{-
     showsPrec _ (Done _ (Chunk t eof)) rest =
         "Done _ (Chunk " ++ (if null t then "mempty " else "_ ")
                          ++ show eof ++ ")" ++ rest
-    showsPrec _ (IterC _) rest = "IterC _ _" ++ rest
+-}
+    showsPrec _ (IterC (CtlReq a _)) rest = "IterC " ++ show (typeOf a)
+                                            ++ " _" ++ rest
     showsPrec _ (IterFail e) rest = "IterFail " ++ show e ++ rest
     showsPrec _ (EnumOFail e i) rest =
         "EnumOFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
-    showsPrec _ (EnumIFail e _) rest =
-        "EnumIFail " ++ show e ++ " _" ++ rest
+    showsPrec _ (EnumIFail e a) rest =
+        "EnumIFail " ++ show e ++ " (" ++ (shows a $ ")" ++ rest)
 
 instance (ChunkData t, Monad m) => Functor (Iter t m) where
     fmap = liftM
@@ -563,13 +576,13 @@ instance Exception IterEOF where
     fromException = noParseFromException
 
 -- | Iteratee expected particular input and did not receive it.
-data IterExpected = IterExpected [String] deriving (Typeable)
+data IterExpected = IterExpected String [String] deriving (Typeable)
 instance Show IterExpected where
-    showsPrec _ (IterExpected [token]) rest =
-        "Iteratee expected " ++ token ++ rest
-    showsPrec _ (IterExpected tokens) rest =
-        "Iteratee expected one of ["
-        ++ intercalate ", " tokens ++ "]" ++ rest
+    showsPrec _ (IterExpected saw [token]) rest =
+        "Iter expected " ++ token ++ ", saw " ++ saw ++ rest
+    showsPrec _ (IterExpected saw tokens) rest =
+        "Iter expected one of ["
+        ++ intercalate ", " tokens ++ "]," ++ " saw " ++ saw ++ rest
 instance Exception IterExpected where
     toException = noParseToException
     fromException = noParseFromException
@@ -595,10 +608,11 @@ combineExpected :: (ChunkData t, Monad m) =>
                 -> Iter t m a
 combineExpected (IterNoParse e) iter =
     case cast e of
-      Just (IterExpected e1) -> mapExceptionI (combine e1) iter
-      _                      -> iter
+      Just (IterExpected saw1 e1) -> mapExceptionI (combine saw1 e1) iter
+      _                        -> iter
     where
-      combine e1 (IterExpected e2) = IterExpected $ e1 ++ e2
+      combine saw1 e1 (IterExpected saw2 e2) =
+          IterExpected (if null saw2 then saw1 else saw2) $ e1 ++ e2
 
 -- | Try two Iteratees and return the result of executing the second
 -- if the first one throws an 'IterNoParse' exception.  The statement
@@ -753,10 +767,6 @@ throwI e = IterFail $ toException e
 throwEOFI :: String -> Iter t m a
 throwEOFI loc = throwI $ IterEOF $ mkIOError eofErrorType loc Nothing Nothing
 
--- | Throw an iteratee error that describes expected input not found.
-expectedI :: String -> Iter t m a
-expectedI target = throwI $ IterExpected [target]
-
 -- | Internal function used by 'tryI' and 'backtrackI' when re-propagating
 -- exceptions that don't match the requested exception type.  (To make
 -- the overall types of those two funcitons work out, a 'Right'
@@ -799,7 +809,6 @@ copyInput iter1 = doit id iter1
       doit acc iter@(IterF _) =
           IterF $ \c -> doit (acc . mappend c) (runIter iter c)
       doit acc iter | isIterActive iter = apNext (doit acc) iter
-      doit acc (Done a c)               = Done (return a, acc mempty) c
       doit acc iter                     = return (iter, acc mempty)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
@@ -939,7 +948,7 @@ catchBI iter handler = copyInput iter >>= uncurry check
     where
       check iter'@(Done _ _) _ = iter'
       check err input          = case fromException $ getIterError err of
-                                   Just e -> Done () input >> handler e
+                                   Just e  -> runIter (handler e) input
                                    Nothing -> err
 
 -- | A version of 'catchI' with the arguments reversed, analogous to
@@ -1319,6 +1328,17 @@ type EnumI tOut tIn m a = Iter tIn m a -> Iter tOut m (Iter tIn m a)
 -- errors, so that enumCatch statements only catch enumerator
 -- failures.
 infixr 2 |$
+
+-- | @.|$@ is a variant of @|$@ than allows you to apply an 'EnumO'
+-- from within an 'Iter' monad.  @enum .|$ iter@ is sort of equivalent
+-- to @'lift' (enum |$ iter)@, except that the latter will call
+-- 'throw' on failures, which causes an asynchron that cannot be
+-- caught within the outer 'Iter'.  @.|$@, by contrast, propagates
+-- exceptions within the outer 'Iter' monad.
+(.|$) :: (ChunkData tOut, ChunkData tIn, Monad m) =>
+         EnumO tIn m a -> Iter tIn m a -> Iter tOut m a
+(.|$) enum iter = runI $ enum $ wrapI (>>= return) iter
+infixr 2 .|$
 
 -- | Concatenate two outer enumerators, forcing them to be executed in
 -- turn in the monad @m@.  Note that the deceptively simple definition:
