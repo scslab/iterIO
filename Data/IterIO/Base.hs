@@ -1158,9 +1158,9 @@ atEOFI = IterF check
 
 -- | Wrap a function around an 'Iter' to transform its result.  The
 -- 'Iter' will be fed 'Chunk's as usual for as long as it remains in
--- the 'IterF' or 'IterM' states.  When the 'Iter' enters a state
--- other than 'IterF' or 'IterM', @wrapI@ passes it through the
--- tranformation function.
+-- one of the 'IterF', 'IterM', or 'IterC' states.  When the 'Iter'
+-- enters a state other than one of these, @wrapI@ passes it through
+-- the tranformation function.
 wrapI :: (ChunkData t, Monad m) =>
          (Iter t m a -> Iter t m b) -- ^ Transformation function
       -> Iter t m a                 -- ^ Original 'Iter'
