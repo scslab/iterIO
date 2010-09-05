@@ -31,6 +31,9 @@ foreign import ccall unsafe "zlib.h inflate"
 foreign import ccall unsafe "zlib.h &inflateEnd"
     c_inflateEnd :: FunPtr (Ptr ZStream -> IO ())
 
+-- | Use this value for zlib format.  Add 16 for gzip format.  Negate
+-- for raw zlib format.  When uncompressing, add 32 to determine
+-- zlib/gzip format automatically.
 max_wbits :: CInt
 max_wbits = #const MAX_WBITS
 

@@ -264,13 +264,13 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
 iterShows :: (ChunkData t) => Iter t m a -> ShowS
 iterShows (IterF _) rest = "IterF _" ++ rest
 iterShows (IterM _) rest = "IterM _" ++ rest
-iterShows (Done _ c) rest = "Done _ " ++ show c
+iterShows (Done _ c) rest = "Done _ " ++ shows c rest
 iterShows (IterC (CtlReq a _)) rest =
     "IterC " ++ show (typeOf a) ++ " _" ++ rest
 iterShows (IterFail e) rest = "IterFail " ++ show e ++ rest
 iterShows (EnumOFail e i) rest =
     "EnumOFail " ++ (shows e $ " " ++ iterShows i rest)
-iterShows (EnumIFail e a) rest = "EnumIFail " ++ (shows e $ " _" ++ rest)
+iterShows (EnumIFail e _) rest = "EnumIFail " ++ (shows e $ " _" ++ rest)
 
 -- | Show the current state of an 'Iter'.  If type @a@ is in the
 -- 'Show' class, you can simply use the ordinary 'show' function.)

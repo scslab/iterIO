@@ -63,7 +63,7 @@ newZStream initfn = do
 --
 --   * -8..-15 = means raw zlib format with no header
 deflateInit2 :: CInt
-             -- ^ Compression level (use 'z_DEFAULT_COMPRESSION' for defualt)
+             -- ^ Compression level (use 'z_DEFAULT_COMPRESSION' for default)
              -> ZMethod
              -- ^ Method (use 'z_DEFLATED')
              -> CInt
