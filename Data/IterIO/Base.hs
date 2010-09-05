@@ -402,14 +402,15 @@ getIterError (IterM _)       = error "getIterError: no error (in IterM state)"
 getIterError (IterC _)       = error "getIterError: no error (in IterC state)"
 getIterError _               = error "getIterError: no error to extract"
 
--- | True if an iteratee /or/ an enclosing enumerator has experienced
--- a failure.  (@isIterError@ is always 'True' when 'isEnumError' is
--- 'True', but the converse is not true.)
+-- | True if an iteratee or an enclosing enumerator has experienced
+-- a failure.
 isIterError :: Iter t m a -> Bool
 isIterError (IterFail _)    = True
 isIterError (EnumOFail _ _) = True
 isIterError (EnumIFail _ _) = True
 isIterError _               = False
+-- (@isIterError@ is always 'True' when 'isEnumError' is 'True', but
+-- the converse is not true.)
 
 -- | True if an enumerator enclosing an iteratee has experienced a
 -- failure (but not if the iteratee itself failed).
@@ -438,11 +439,17 @@ isIterActive (IterC _) = True
 isIterActive _         = False
 
 -- | Apply a function to the next state of an 'Iter' if it is still
--- active, or the current state if it is not.
+-- active, or to the current state if it is not.  In other words, when
+-- the 'Iter' is in the 'IterF' state, feed it an input chunk, then
+-- then apply the function to the resulting 'Iter'.  When in the
+-- 'IterM' state, execute the monadic action, then apply the function.
+-- In the 'IterC' state, try executing the control request, then apply
+-- the function to the result of the (successful or unsuccessful)
+-- operation.
 apNext :: (Monad m) =>
-         (Iter t m a -> Iter t m b)
-      -> Iter t m a
-      -> Iter t m b
+          (Iter t m a -> Iter t m b)
+       -> Iter t m a
+       -> Iter t m b
 apNext f (IterF iterf)            = IterF $ f . iterf
 apNext f (IterM iterm)            = IterM $ iterm >>= return . f
 apNext f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
@@ -498,7 +505,7 @@ unEOF = wrapI fixeof
 -- Even though it is equivalent to:
 --
 -- @
---      runIter ('Done' () ('Chunk' 'mempty' True)) ('Chunk' 'mempty' False)
+--      runIter ('Done' () ('Chunk' 'mempty' False)) ('Chunk' 'mempty' True)
 -- @
 --
 -- in which the first argument to @runIter@ appears to be discarding
