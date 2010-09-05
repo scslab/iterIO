@@ -45,9 +45,9 @@ foreign import ccall unsafe "sys/socket.h shutdown"
 -- Deprecated
 --
 
--- | Creates a 'Codec' from an 'Iter' @iter@ that returns 'Chunk's.
--- The 'Codec' returned will keep offering to translate more input
--- until @iter@ returns a 'Chunk' with the EOF bit set.
+-- | Creates a 'Codec' from an 'Iter' that returns 'Chunk's.  The
+-- 'Codec' returned will keep offering to translate more input until
+-- The 'Iter' returns a 'Chunk' with the EOF bit set.
 chunkerToCodec :: (ChunkData t, Monad m) => Iter t m (Chunk a) -> Codec t m a
 chunkerToCodec iter = do
   Chunk d eof <- iter
@@ -111,9 +111,9 @@ instance SendRecvString L.ByteString where
 -- to write an EOF to a socket while still being able to read from it.
 -- This is very important when the same file handle is being used to
 -- to read data in an 'EnumO' and to write data in an 'Iter'.  Proper
--- protocol functioning may require the 'Iter' to send an EOF over the
--- socket, but the 'EnumO' may still be reading from the socket in a
--- different thread.
+-- protocol functioning may require the 'Iter' to send an EOF (e.g., a
+-- TCP FIN segment), but the 'EnumO' may still be reading from the
+-- socket in a different thread.
 hShutdown                            :: Handle -> CInt -> IO Int
 
 #if __GLASGOW_HASKELL__ <= 611
