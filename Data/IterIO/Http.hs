@@ -379,7 +379,7 @@ httpreqI = do
   -- stream at the beginning of a message and receives a CRLF first,
   -- it should ignore the CRLF."
   skipMany crlf
-  request_line >>= next_hdr
+  (request_line >>= next_hdr) <* crlf
     where
       next_hdr req = seq req $ any_hdr req \/ return req $ next_hdr
 
