@@ -389,7 +389,7 @@ httpreqI = do
 --
 
 -- | HTTP Chunk encoder
-inumToChunks :: (Monad m) => EnumI L L m a
+inumToChunks :: (Monad m) => Inum L L m a
 inumToChunks = enumI $ iterToCodec doChunk
     where
       doChunk = do
@@ -402,7 +402,7 @@ inumToChunks = enumI $ iterToCodec doChunk
         return $ L8.append chunksize $ L8.append s trailer
 
 -- | HTTP Chunk decoder
-inumFromChunks :: (Monad m) => EnumI L L m a
+inumFromChunks :: (Monad m) => Inum L L m a
 inumFromChunks = enumI getsize
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
@@ -483,7 +483,7 @@ linesI = many1 lineChar `sepBy` crlf
 put :: L8.ByteString -> IO ()
 put = Prelude.putStrLn . show . L8.unpack
 
-enumHdr :: (Monad m) => EnumO L8.ByteString m a
+enumHdr :: (Monad m) => Onum L8.ByteString m a
 enumHdr = enumPure $ L.append header
           $ L.cycle $ L8.pack "And some extra crap\r\n"
     where

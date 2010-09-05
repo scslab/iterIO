@@ -15,7 +15,7 @@ import Data.IterIO
 
 filterLines :: (Monad m) =>
                String
-            -> EnumI L.ByteString [L.ByteString] m a
+            -> Inum L.ByteString [L.ByteString] m a
 filterLines s = enumI' $ do
                   line <- lineI
                   return $ if match line then [line] else []
@@ -32,7 +32,7 @@ printLines = do
                  printLines
     Nothing -> return ()
 
-enumFileCatchError :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
+enumFileCatchError :: (MonadIO m) => FilePath -> Onum L.ByteString m a
 enumFileCatchError file = enumFile file `enumCatch` enumCatchIO
     where
       enumCatchIO :: (ChunkData t, MonadIO m) =>

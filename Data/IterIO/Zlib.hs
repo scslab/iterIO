@@ -1,5 +1,5 @@
 
-module Data.IterIO.Zlib (-- * Codec and EnumI functions
+module Data.IterIO.Zlib (-- * Codec and Inum functions
                          ZState, deflateInit2, inflateInit2, zCodec
                         , inumZState, inumZlib, inumGzip, inumGunzip
                         -- * Constants from zlib.h
@@ -23,7 +23,7 @@ import Foreign.C
 import Data.IterIO.Base
 import Data.IterIO.ZlibInt
 
--- | State used by 'inumZState', the most generic zlib 'EnumI'.
+-- | State used by 'inumZState', the most generic zlib 'Inum'.
 -- Create the state using 'deflateInit2' or 'inflateInit2'.
 data ZState = ZState { zStream :: (ForeignPtr ZStream)
                      , zOp :: (ZFlush -> IO CInt)
@@ -226,35 +226,35 @@ zCodec zs0 = do
                  then (,) r `liftM` zPopIn s'
                  else runz eof s'
 
--- | The most general zlib 'EnumI', which allows any mode permitted by
+-- | The most general zlib 'Inum', which allows any mode permitted by
 -- the 'deflateInit2' and 'inflateInit2' functions.
 inumZState :: (MonadIO m) =>
               ZState
-           -> EnumI L.ByteString L.ByteString m a
+           -> Inum L.ByteString L.ByteString m a
 inumZState zs = enumCI noCtls (zCodec zs)
 
--- | An 'EnumI' that compresses in zlib format.  To uncompress, use
+-- | An 'Inum' that compresses in zlib format.  To uncompress, use
 -- 'inumGunzip'.
-inumZlib :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
+inumZlib :: (MonadIO m) => Inum L.ByteString L.ByteString m a
 inumZlib iter = do
   zs <- liftIO (deflateInit2 z_DEFAULT_COMPRESSION z_DEFLATED max_wbits
                              def_mem_level z_DEFAULT_STRATEGY)
   inumZState zs iter
 
--- | An 'EnumI' that compresses in gzip format.
-inumGzip :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
+-- | An 'Inum' that compresses in gzip format.
+inumGzip :: (MonadIO m) => Inum L.ByteString L.ByteString m a
 inumGzip iter = do
   zs <- liftIO (deflateInit2 z_DEFAULT_COMPRESSION z_DEFLATED (16 + max_wbits)
                              def_mem_level z_DEFAULT_STRATEGY)
   inumZState zs iter
 
--- | An 'EnumI' that uncompresses a data in either the zlib or gzip
+-- | An 'Inum' that uncompresses a data in either the zlib or gzip
 -- format.  Note that this only uncompresses one gzip stream.  Thus,
 -- if you feed in the concatenation of multiple gzipped files,
 -- @inumGunzip@ will stop after the first one.  If this is not what
 -- you want, then use @'inumRepeat' inumGunzip@ to decode repeated
 -- gzip streams.
-inumGunzip :: (MonadIO m) => EnumI L.ByteString L.ByteString m a
+inumGunzip :: (MonadIO m) => Inum L.ByteString L.ByteString m a
 inumGunzip iter = do
   zs <- liftIO $ inflateInit2 (32 + max_wbits)
   inumZState zs iter

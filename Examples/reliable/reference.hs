@@ -36,7 +36,7 @@ connect_fix s@(MkSocket _ _ _ _ status) addr = do
 
 
 {-
-pktPrint :: EnumI [Packet] [Packet] IO ()
+pktPrint :: Inum [Packet] [Packet] IO ()
 pktPrint iter = do
   pkt <- headI
   liftIO $ hPutStrLn stderr $ show pkt
@@ -44,7 +44,7 @@ pktPrint iter = do
 -}
 
 {-
-rawPktPrint :: String -> EnumI [L.ByteString] [L.ByteString] IO ()
+rawPktPrint :: String -> Inum [L.ByteString] [L.ByteString] IO ()
 rawPktPrint prefix iter = do
   mraw <- safeHeadI
   case mraw of
@@ -57,7 +57,7 @@ rawPktPrint prefix iter = do
                     feedI (rawPktPrint prefix) [raw] iter
 -}
 
-rawPktPrint :: String -> EnumI [L.ByteString] [L.ByteString] IO ()
+rawPktPrint :: String -> Inum [L.ByteString] [L.ByteString] IO ()
 rawPktPrint prefix = enumI' dopkt
     where
       dopkt = do

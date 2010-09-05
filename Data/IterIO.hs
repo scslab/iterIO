@@ -27,11 +27,12 @@ referential transparency (which should, after all, be one of the big
 advantages of Haskell), and equally convenient composition of protocol
 layers and parsers without worrying about IO chunk boundaries.
 
-Enumerators, implemented by the type 'EnumO', are so called because
-they enumerate all data elements (e.g., bytes or packets) in some
-source such as a file or socket.  Hence, an enumerator should be
-viewed as a /source/ outputting chunks of data whose type is a
-@'Monoid'@.
+Enumerators, implemented by the type 'Onum' (short for
+/outer enumerator/, for reasons that will become clear below), are so
+called because they enumerate all data elements (e.g., bytes or
+packets) in some source such as a file or socket.  Hence, an
+enumerator should be viewed as a /source/ outputting chunks of data
+whose type is a @'Monoid'@.
 
 Conversely, iteratees, implemented by the type 'Iter', should be
 viewed as /sinks/ consuming data.  When executing IO, the library
@@ -50,7 +51,7 @@ Here is a simple example:
 
 'enumFile' enumerates the contents of a file.  'lineI' returns a line
 of input (discarding the newline).  '|$' is the /pipe apply/ operator
-that applies an 'EnumO' to an 'Iter', returning the result of the
+that applies an 'Onum' to an 'Iter', returning the result of the
 'Iter'--in this case the first line of the file named @path@.
 
 An `Iter`'s main purpose may not be to produce a result.  Some 'Iter's
@@ -118,10 +119,10 @@ simply passes the unused input on to the next invocation of 'lineI'.
 Both of these actions are hidden by the syntax, making most code much
 easier to read and write.
 
-That explains the iteratee type 'Iter'.  The enumerator type, 'EnumO',
+That explains the iteratee type 'Iter'.  The enumerator type, 'Onum',
 has the same three type arguments.  Thus, the type of 'enumFile' as
 instantiated in the above examples is
-@'enumFile' :: 'EnumO' String IO a@.  Most 'EnumO' types are
+@'enumFile' :: 'Onum' String IO a@.  Most 'Onum' types are
 polymorphic in the last argument, so as to be able to return whatever
 type the iteratee is returning.  (In fact, 'enumFile' is polymorphic
 in the first two arguments, too, so as to work with multiple
@@ -173,9 +174,9 @@ condition.  ('lineI' throws an exception on EOF.)
 What about the @grep@ command?  @grep@ sits in the middle of a
 pipeline, so it acts both as a data sink and as a data source.  In the
 iteratee world, we call such a pipeline stage an /inner enumerator/, or
-'EnumI'.  Before defining our @grep@ equivalent, since multiple
+'Inum'.  Before defining our @grep@ equivalent, since multiple
 pipeline stages are going to be considering the file one line at a
-time, let's first build an 'EnumI' to separate input into lines:
+time, let's first build an 'Inum' to separate input into lines:
 
 @
     import Data.ByteString as S
@@ -186,14 +187,14 @@ time, let's first build an 'EnumI' to separate input into lines:
     -- | Break input into lines of type S.ByteString, as this type
     -- works most conveniently with regular expressions.  (Otherwise,
     -- we would prefer lazy ByteStrings.)
-    inumToLines :: (Monad m) => 'EnumI' S.ByteString [S.ByteString] m a
+    inumToLines :: (Monad m) => 'Inum' S.ByteString [S.ByteString] m a
     inumToLines = 'enumI'' $ do
                     line <- 'lineI'
                     return [line]
 @
 
-'EnumI' takes four type arguments, compared to only three for 'EnumO'.
-That's because an 'EnumI' is acting as both an iteratee and an
+'Inum' takes four type arguments, compared to only three for 'Onum'.
+That's because an 'Inum' is acting as both an iteratee and an
 enumerator, and it needn't be processing the same type of data in both
 roles.  In the above example, when acting as an iteratee,
 @inumToLines@ sinks data of type @S.ByteString@ (the first type
@@ -204,7 +205,7 @@ per line of the file.
 
 (Note that data is often viewed as flowing inwards from an outer
 enumerator, through inner enumerators, to iteratees.  Thus, inner
-enumerators often have types like @'EnumI' tOut tIn m a@, where @tOut@
+enumerators often have types like @'Inum' tOut tIn m a@, where @tOut@
 is the outer data type, i.e., the input type of the inner enumerator.
 You should read @tOut@ and @tIn@ as \"outer type\" and \"inner type\",
 which is unfortunately the opposite of \"output type\" and \"input
@@ -212,7 +213,7 @@ type\".)
 
 
 Inner-enumerators are generally constructed using either 'enumI' or
-`enumI'`, and by convention most 'EnumI' functions have names starting
+`enumI'`, and by convention most 'Inum' functions have names starting
 \"@inum@...\".  'enumI'' takes an argument of type @Iter t1 m t2@ that
 transcodes type @t1@ to type @t2@.  (For @inumToLines@, @t1@ is
 @S.ByteString@ and @t2@ is @[S.ByteString]@).  'enumI' is like
@@ -223,15 +224,15 @@ EOF explicitly.  In @inumToLines@, we do not need to keep state and
 are happy just to let 'lineI' throw an exception on EOF.  `enumI'`
 will catch the EOF exception and do the right thing.
 
-We similarly define an 'EnumI' to filter out lines not matching a
+We similarly define an 'Inum' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),
-and a simple 'EnumI' to count list elements (since @lineCountI ::
+and a simple 'Inum' to count list elements (since @lineCountI ::
 'Iter' String m Int@ has input data type @String@, while after
 @inumToLines@ we need an 'Iter' with input data type
 @[S.ByteString]@).
 
 @
-    inumGrep :: (Monad m) => String -> 'EnumI' [S.ByteString] [S.ByteString] m a
+    inumGrep :: (Monad m) => String -> 'Inum' [S.ByteString] [S.ByteString] m a
     inumGrep re = `enumI'` $ do
       line <- 'headI'
       return $ if line =~ packedRe then [line] else []
@@ -251,25 +252,25 @@ and a simple 'EnumI' to count list elements (since @lineCountI ::
 @
 
 Now we are almost ready to assemble all the pieces.  But recall that
-the '|$' operator applies one 'EnumO' to one 'Iter', yet now we have
-two 'EnumO's (because we want to look through two files), and three
-'EnumI's that we want to compose into a pipeline.  The library
+the '|$' operator applies one 'Onum' to one 'Iter', yet now we have
+two 'Onum's (because we want to look through two files), and three
+'Inum's that we want to compose into a pipeline.  The library
 supports two types of composition for pipeline stages:
 /concatenation/ and /fusing/.
 
-Two 'EnumO's of the same type can be /concatenated/ with the 'cat'
+Two 'Onum's of the same type can be /concatenated/ with the 'cat'
 function, producing a new data source that enumerates all of the
-data in the first 'EnumO' followed by all of the data in the second.  (There
+data in the first 'Onum' followed by all of the data in the second.  (There
 is a similar 'catI' function for inner enumerators, though it is less
 frequently used.)
 
 There are three /fusing/ operators.  The '|..' operator fuses an
-'EnumO' to an 'EnumI', producing a new 'EnumO'.  (Mnemonic: it
+'Onum' to an 'Inum', producing a new 'Onum'.  (Mnemonic: it
 produces a pipeline that is open on the right hand side, as it still
 needs to be applied to an iteratee with '|$'.)  The '..|' operator
-fuses an 'EnumI' to an 'Iter', producing a new 'Iter'.  Finally, there
-is a '..|..' operator that fuses two 'EnumI's into a single, new
-'EnumI', composing their effects.
+fuses an 'Inum' to an 'Iter', producing a new 'Iter'.  Finally, there
+is a '..|..' operator that fuses two 'Inum's into a single, new
+'Inum', composing their effects.
 
 The fusing operators bind more tightly than the infix concatenation
 functions, which in turn bind more tightly than '|$'.  (Concatenation
@@ -286,8 +287,8 @@ following Haskell equivalent to the above Unix pipeline:
                         '..|' lengthI
 @
 
-One often has a choice as to whether to fuse an 'EnumI' to the
-'EnumO', or to the 'Iter'.  For example, @grepCount@ could
+One often has a choice as to whether to fuse an 'Inum' to the
+'Onum', or to the 'Iter'.  For example, @grepCount@ could
 alternatively have been implemented as:
 
 @
@@ -305,13 +306,13 @@ need to handle input errors differently from output errors.  Often
 output errors are more serious than input errors.  For instance, in
 the above example, if 'enumFile' fails because one of the files does
 not exist, you might want to continue processing lines from the next
-file.  In fact, 'EnumO' failures preserve the 'Iter' state so as to
-allow it to be passed off to another 'EnumO'.  Conversely, if the
+file.  In fact, 'Onum' failures preserve the 'Iter' state so as to
+allow it to be passed off to another 'Onum'.  Conversely, if the
 iteratee @lengthI@ fails, there is not much point in continuing the
 program.
 
-As a rule of thumb, you should fuse an 'EnumI' to an 'EnumO' when you
-want to be able to recover from the `EnumI`'s failure.  In the
+As a rule of thumb, you should fuse an 'Inum' to an 'Onum' when you
+want to be able to recover from the `Inum`'s failure.  In the
 @grepCount@ example, if, for instance, a regular expression fails to
 compile, this is catastrophic for the program, which is why the first
 version fused @inumGrep@ to the @Iter@.
@@ -381,8 +382,8 @@ Here is the @grep@ code.  We will analyze it below.
 There are two cases.  If the list of files to search is null, @grep@
 simply reads from standard input, in which case there is only one
 input stream and we do not care about resuming.  In the second case,
-we use @'foldr1' cat@ to concatenate a list of 'EnumO's, a fairly
-common idiom.  Each 'EnumO' is generated by the function @enumLines@,
+we use @'foldr1' cat@ to concatenate a list of 'Onum's, a fairly
+common idiom.  Each 'Onum' is generated by the function @enumLines@,
 which fuses 'enumFile' to our previously defined @inumToLines@, but
 also wraps the exception handler function @handler@ around the
 enumerator using the 'enumCatch' function.

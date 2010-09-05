@@ -55,7 +55,7 @@ lineCountI = count 0
           Nothing -> return n
 
 
-inumGrep' :: (MonadIO m) => String -> EnumI L.ByteString L.ByteString m a
+inumGrep' :: (MonadIO m) => String -> Inum L.ByteString L.ByteString m a
 inumGrep' re iter = do
   Right cre <- liftIO $ compile 0 0 $ S8.pack re
   flip enumI' iter $ do
@@ -91,12 +91,12 @@ grep re files
                           linesOutI
           Nothing -> return ()
 
-inumToLines :: (Monad m) => EnumI S.ByteString [S.ByteString] m a
+inumToLines :: (Monad m) => Inum S.ByteString [S.ByteString] m a
 inumToLines = enumI' $ do
                 line <- lineI
                 return [line]
 
-inumGrep :: (Monad m) => String -> EnumI [S.ByteString] [S.ByteString] m a
+inumGrep :: (Monad m) => String -> Inum [S.ByteString] [S.ByteString] m a
 inumGrep re = enumI' $ do
   line <- headI
   return $ if line =~ packedRe then [line] else []
@@ -115,20 +115,20 @@ lengthI = count 0
 catchTest1 :: IO ()
 catchTest1 = myEnum |$ fail "bad Iter"
     where
-      myEnum :: EnumO String IO ()
+      myEnum :: Onum String IO ()
       myEnum iter = catchI (enumPure "test" iter) handler
       handler (SomeException _) _ = do
         liftIO $ hPutStrLn stderr "ignoring exception"
         return ()
 
 
-inumBad :: (ChunkData t, Monad m) => EnumI t t m a
+inumBad :: (ChunkData t, Monad m) => Inum t t m a
 inumBad = enumI $ fail "inumBad"
 
 catchTest2 :: IO ()
 catchTest2 = myEnum |.. inumBad |$ nullI
     where
-      myEnum :: EnumO String IO (Iter String IO ())
+      myEnum :: Onum String IO (Iter String IO ())
       myEnum iter = catchI (enumPure "test" iter) handler
       handler (SomeException _) _ = do
         liftIO $ hPutStrLn stderr "ignoring exception"

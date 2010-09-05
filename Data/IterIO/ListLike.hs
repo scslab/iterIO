@@ -237,7 +237,7 @@ fileCtl h = ctlHandler
 -- each datagram) into an Iteratee.
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
-          -> EnumO [t] m a
+          -> Onum [t] m a
 enumDgram sock = enumO $ iterToCodec $ do
   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgram" else return [msg]
@@ -247,14 +247,14 @@ enumDgram sock = enumO $ iterToCodec $ do
 -- SockAddr) pairs (one for each datagram) into an Iteratee.
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
-              -> EnumO [(t, SockAddr)] m a
+              -> Onum [(t, SockAddr)] m a
 enumDgramFrom sock = enumO $ iterToCodec $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgramFrom" else return [(msg, addr)]
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.
-enumHandle' :: (MonadIO m) => Handle -> EnumO L.ByteString m a
+enumHandle' :: (MonadIO m) => Handle -> Onum L.ByteString m a
 enumHandle' = enumHandle
 
 -- | Puts a handle into binary mode with 'hSetBinaryMode', then
@@ -262,7 +262,7 @@ enumHandle' = enumHandle
 -- 'LL.ListLikeIO' input type.
 enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
               Handle
-           -> EnumO t m a
+           -> Onum t m a
 enumHandle h iter = do
   liftIO $ hSetBinaryMode h True
   enumNonBinHandle h iter
@@ -273,7 +273,7 @@ enumHandle h iter = do
 -- you want to read the data in non-binary form.
 enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
-                 -> EnumO t m a
+                 -> Onum t m a
 enumNonBinHandle h = enumCO (fileCtl h) $ iterToCodec $ do
   _ <- liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
@@ -284,7 +284,7 @@ enumNonBinHandle h = enumCO (fileCtl h) $ iterToCodec $ do
 -- | Enumerate the contents of a file as a series of lazy
 -- 'L.ByteString's.  (This is a type-restricted version of
 -- 'enumFile'.)
-enumFile' :: (MonadIO m) => FilePath -> EnumO L.ByteString m a
+enumFile' :: (MonadIO m) => FilePath -> Onum L.ByteString m a
 enumFile' = enumFile
 
 -- | Enumerate the contents of a file for an 'Iter' taking input in
@@ -292,7 +292,7 @@ enumFile' = enumFile
 -- 'openBinaryFile' to ensure binary mode.
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
              FilePath
-          -> EnumO t m a
+          -> Onum t m a
 enumFile path = enumCObracket (liftIO $ openBinaryFile path ReadMode)
                 (liftIO . hClose) fileCtl codec
     where
@@ -314,7 +314,7 @@ enumFile path = enumCObracket (liftIO $ openBinaryFile path ReadMode)
 inumLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            FilePath             -- ^ Path to log to
         -> Bool                 -- ^ True to truncate file
-        -> EnumI t t m a
+        -> Inum t t m a
 inumLog path trunc iter = do
   h <- liftIO $ openBinaryFile path (if trunc then WriteMode else AppendMode)
   liftIO $ hSetBuffering h NoBuffering
@@ -324,7 +324,7 @@ inumLog path trunc iter = do
 -- file name.  Closes the handle when done.
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle
-         -> EnumI t t m a
+         -> Inum t t m a
 inumhLog h = enumI $ iterToCodec $ do
                Chunk buf eof <- chunkI
                liftIO $ do

@@ -44,16 +44,16 @@ connect_fix s@(MkSocket _ _ _ _ status) addr = do
   connect s addr
 
 data Target a b = Target {
-      tUSource :: EnumO [L.ByteString] TM a
+      tUSource :: Onum [L.ByteString] TM a
     , tUDrain :: Iter [L.ByteString] TM ()
-    , tSource :: EnumO L.ByteString TM b
+    , tSource :: Onum L.ByteString TM b
     , tDrain :: Iter L.ByteString TM ()
     , tKill :: IO ()
     }
 type Targ = Target () Bool
 
 {-
-enumConcat :: (Monad m, Monoid t) => EnumI [t] t m a
+enumConcat :: (Monad m, Monoid t) => Inum [t] t m a
 enumConcat iter = do
   next <- safeHeadI
   case next of
@@ -70,7 +70,7 @@ pktshow (DataP ackno seqno payload) =
                     then L8.unpack (L.take 20 payload) ++ "..."
                     else L8.unpack payload)
 
-pktDebug :: (MonadIO m) => String -> EnumI [L.ByteString] [L.ByteString] m a
+pktDebug :: (MonadIO m) => String -> Inum [L.ByteString] [L.ByteString] m a
 pktDebug prefix = enumI' $ do
   raw <- headI
   case pktparse raw of
@@ -81,7 +81,7 @@ pktDebug prefix = enumI' $ do
   return [raw]
 
 {-
-pktPut :: (Monad m) => EnumI [Packet] L.ByteString m a
+pktPut :: (Monad m) => Inum [Packet] L.ByteString m a
 pktPut iter = safeHeadI >>= process
     where
       process Nothing = return iter
@@ -91,7 +91,7 @@ pktPut iter = safeHeadI >>= process
       process _            = pktPut iter
 -}
 
-pktPut :: (Monad m) => EnumI [Packet] L.ByteString m a
+pktPut :: (Monad m) => Inum [Packet] L.ByteString m a
 pktPut = enumI' $ headI >>= process
     where
       process (DataP _ _ payload)
@@ -158,7 +158,7 @@ startServer = do
     when gdb $ notify (head targ) ph
     return $ ServerProc peer tcpSock (kill ph 15 >> sClose tcpSock)
 
-enumAccept :: (MonadIO m) => Socket -> MVar Handle -> EnumO L.ByteString m a
+enumAccept :: (MonadIO m) => Socket -> MVar Handle -> Onum L.ByteString m a
 enumAccept sock mv iter = do
   (s, _) <- liftIO $ accept sock
   h <- liftIO $ socketToHandle s ReadWriteMode
@@ -275,7 +275,7 @@ expectI goal | L.null goal = return True
     then expectI $ L.drop (L.length actual) goal
     else return False
 
-lE :: (Monad m) => Int -> EnumO L.ByteString m a
+lE :: (Monad m) => Int -> Onum L.ByteString m a
 lE n0 = enumO $ codec n0
     where
       codec n
@@ -290,13 +290,13 @@ lE n0 = enumO $ codec n0
                                else CodecF (codec $ n - linelen))
                           (L8.pack $ str ++ "\n")
 
-packE :: (Monad m) => EnumI L.ByteString L.ByteString m a
+packE :: (Monad m) => Inum L.ByteString L.ByteString m a
 packE = enumI' $ do
   packet' <- stringExactI $ fromIntegral L.defaultChunkSize
   let packet = L.fromChunks [S8.concat $ L.toChunks packet']
   return packet
 
-cE :: (Monad m) => Char -> Int -> EnumO L.ByteString m a
+cE :: (Monad m) => Char -> Int -> Onum L.ByteString m a
 cE c len iter =
     runIter iter (Chunk (L8.replicate (fromIntegral len) c) False)
 nI :: (Monad m) => Int -> Iter L.ByteString m Bool
@@ -307,7 +307,7 @@ nI n = do
     n' | n == n' -> return False
     n'           -> nI n'
 
-a4E :: (Monad m) => String -> Int -> EnumO L.ByteString m a
+a4E :: (Monad m) => String -> Int -> Onum L.ByteString m a
 a4E key len = enumO $ enumChunks (a4new key) len
     where
       enumChunks a4 n

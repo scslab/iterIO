@@ -77,7 +77,7 @@ inWindow wsz next seqno
 relSend :: forall m. (MonadIO m) =>
            Endpoint
         -> (m () -> m ThreadId)
-        -> EnumI L.ByteString [L.ByteString] m ()
+        -> Inum L.ByteString [L.ByteString] m ()
 relSend ep fork iter = doSend 0 1
     where
       inMyWindow = inWindow $ epWin ep
@@ -121,12 +121,12 @@ relSend ep fork iter = doSend 0 1
 relReceive :: forall m a. (MonadIO m) =>
               Endpoint
            -> Iter [L.ByteString] m ()
-           -> EnumI [L.ByteString] [Packet] m a
+           -> Inum [L.ByteString] [Packet] m a
 relReceive ep sender startiter = getPkts 1 Map.empty startiter
     where
       done = liftIO $ signalQSem (epRdone ep)
 
-      getPkts :: SeqNo -> Queue -> EnumI [L.ByteString] [Packet] m a
+      getPkts :: SeqNo -> Queue -> Inum [L.ByteString] [Packet] m a
       getPkts next q iter = do
         rawpkt <- liftM (fromMaybe L.empty) safeHeadI
         case pktparse rawpkt of
@@ -139,7 +139,7 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
                  doNext [] next (enqPacket next q p) iter
 
       doNext :: [Packet] -> SeqNo -> Queue
-             -> EnumI [L.ByteString] [Packet] m a
+             -> Inum [L.ByteString] [Packet] m a
       doNext pkts next q iter =
         case Map.lookup next q of
           Just pkt -> doNext (pkt:pkts) (next+1) (Map.delete next q) iter

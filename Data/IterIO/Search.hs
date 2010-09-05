@@ -12,7 +12,7 @@ import Data.IterIO
 -- The boundary string is then discarded.
 inumStopString :: (Monad m) =>
                   L8.ByteString
-               -> EnumI L8.ByteString L8.ByteString m a
+               -> Inum L8.ByteString L8.ByteString m a
 inumStopString pat0 = enumI $ nextChunk L8.empty
     where
       spat = Search.strictify pat0

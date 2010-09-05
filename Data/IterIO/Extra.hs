@@ -110,9 +110,9 @@ instance SendRecvString L.ByteString where
 -- | Flushes a file handle and calls the /shutdown/ system call so as
 -- to write an EOF to a socket while still being able to read from it.
 -- This is very important when the same file handle is being used to
--- to read data in an 'EnumO' and to write data in an 'Iter'.  Proper
+-- to read data in an 'Onum' and to write data in an 'Iter'.  Proper
 -- protocol functioning may require the 'Iter' to send an EOF (e.g., a
--- TCP FIN segment), but the 'EnumO' may still be reading from the
+-- TCP FIN segment), but the 'Onum' may still be reading from the
 -- socket in a different thread.
 hShutdown                            :: Handle -> CInt -> IO Int
 
