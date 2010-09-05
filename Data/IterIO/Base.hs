@@ -79,7 +79,7 @@ module Data.IterIO.Base
     , (|$), (.|$)
     , cat, catI
     , (|..), (..|..), (..|)
-    -- * Enumerator construction functions
+    -- * Enum construction functions
     , Codec, CodecR(..)
     , iterToCodec
     , enumCO, enumO, enumO', enumCObracket, enumObracket
@@ -91,10 +91,11 @@ module Data.IterIO.Base
     , enumCatch, enumHandler, inumCatch
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
-    -- * Some basic Iteratees
+    -- * Some basic Iters
     , nullI, dataI, chunkI, peekI, atEOFI
+    -- * Low-level Iter-manipulation functions
     , wrapI, runI, popI, joinI, returnI, resultI
-    -- * Some basic Enumerators
+    -- * Some basic Enums
     , enumPure
     , iterLoop
     , inumNop, inumRepeat, inumSplit
@@ -104,7 +105,8 @@ module Data.IterIO.Base
     , noCtls, ctl, ctl', ctlHandler
     -- * Other functions
     , runIter, run, chunk, chunkEOF
-    , isIterError, isIterActive, apNext
+    , isIterError, isEnumError, isIterActive, apNext
+    , iterShows, iterShow
     ) where
 
 import Prelude hiding (null)
@@ -168,7 +170,7 @@ data Chunk t = Chunk !t !Bool deriving (Eq)
 
 instance (ChunkData t) => Show (Chunk t) where
     showsPrec _ (Chunk t eof) rest =
-        "Chunk " ++ chunkShow t ++ if eof then "+EOF" ++ rest else rest
+        chunkShow t ++ if eof then "+EOF" ++ rest else rest
 
 -- | Constructor function that builds a chunk containing data and a
 -- 'False' EOF flag.
@@ -255,22 +257,33 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- @'Iter' t m a\'@ for some @a'@ in the result of an
                 -- 'EnumI'.)
 
+-- | Show the current state of an 'Iter', prepending it to some
+-- remaining input (the standard 'ShowS' optimization).  Note that if
+-- type @a@ is in class 'Show', you are better off simply using the
+-- 'shows' function.
+iterShows :: (ChunkData t) => Iter t m a -> ShowS
+iterShows (IterF _) rest = "IterF _" ++ rest
+iterShows (IterM _) rest = "IterM _" ++ rest
+iterShows (Done _ c) rest = "Done _ " ++ show c
+iterShows (IterC (CtlReq a _)) rest =
+    "IterC " ++ show (typeOf a) ++ " _" ++ rest
+iterShows (IterFail e) rest = "IterFail " ++ show e ++ rest
+iterShows (EnumOFail e i) rest =
+    "EnumOFail " ++ (shows e $ " " ++ iterShows i rest)
+iterShows (EnumIFail e a) rest = "EnumIFail " ++ (shows e $ " _" ++ rest)
+
+-- | Show the current state of an 'Iter'.  If type @a@ is in the
+-- 'Show' class, you can simply use the ordinary 'show' function.)
+iterShow :: (ChunkData t) => Iter t m a -> String
+iterShow iter = iterShows iter ""
+
 instance (Show a, ChunkData t) => Show (Iter t m a) where
-    showsPrec _ (IterF _) rest = "IterF _" ++ rest
-    showsPrec _ (IterM _) rest = "IterM _" ++ rest
-    showsPrec _ (Done a c) rest = "Done (" ++ show a ++ ") " ++ show c ++ rest
-{-
-    showsPrec _ (Done _ (Chunk t eof)) rest =
-        "Done _ (Chunk " ++ (if null t then "mempty " else "_ ")
-                         ++ show eof ++ ")" ++ rest
--}
-    showsPrec _ (IterC (CtlReq a _)) rest = "IterC " ++ show (typeOf a)
-                                            ++ " _" ++ rest
-    showsPrec _ (IterFail e) rest = "IterFail " ++ show e ++ rest
+    showsPrec _ (Done a c) rest = "Done " ++ (shows a $ " " ++ shows c rest)
     showsPrec _ (EnumOFail e i) rest =
-        "EnumOFail " ++ show e ++ " (" ++ (shows i $ ")" ++ rest)
+        "EnumOFail " ++ (shows e $ " (" ++ (shows i $ ")" ++ rest))
     showsPrec _ (EnumIFail e a) rest =
-        "EnumIFail " ++ show e ++ " (" ++ (shows a $ ")" ++ rest)
+        "EnumIFail " ++ (shows e $ " (" ++ (shows a $ ")" ++ rest))
+    showsPrec _ iter rest       = iterShows iter rest
 
 instance (ChunkData t, Monad m) => Functor (Iter t m) where
     fmap = liftM
@@ -402,15 +415,14 @@ getIterError (IterM _)       = error "getIterError: no error (in IterM state)"
 getIterError (IterC _)       = error "getIterError: no error (in IterC state)"
 getIterError _               = error "getIterError: no error to extract"
 
--- | True if an iteratee or an enclosing enumerator has experienced
--- a failure.
+-- | True if an iteratee or an enclosing enumerator has experienced a
+-- failure.  (@isIterError@ is always 'True' when 'isEnumError' is
+-- 'True', but the converse is not true.)
 isIterError :: Iter t m a -> Bool
 isIterError (IterFail _)    = True
 isIterError (EnumOFail _ _) = True
 isIterError (EnumIFail _ _) = True
 isIterError _               = False
--- (@isIterError@ is always 'True' when 'isEnumError' is 'True', but
--- the converse is not true.)
 
 -- | True if an enumerator enclosing an iteratee has experienced a
 -- failure (but not if the iteratee itself failed).
@@ -583,7 +595,10 @@ instance Exception IterEOF where
     fromException = noParseFromException
 
 -- | Iteratee expected particular input and did not receive it.
-data IterExpected = IterExpected String [String] deriving (Typeable)
+data IterExpected = IterExpected {
+      iexpReceived :: String    -- ^ Input actually received
+    , iexpWanted :: [String]    -- ^ List of inputs expected
+    } deriving (Typeable)
 instance Show IterExpected where
     showsPrec _ (IterExpected saw [token]) rest =
         "Iter expected " ++ token ++ ", saw " ++ saw ++ rest
@@ -622,10 +637,14 @@ combineExpected (IterNoParse e) iter =
           IterExpected (if null saw2 then saw1 else saw2) $ e1 ++ e2
 
 -- | Try two Iteratees and return the result of executing the second
--- if the first one throws an 'IterNoParse' exception.  The statement
--- @multiParse a b@ is similar to @'ifParse' a return b@, but the
--- two functions operate differently.  Depending on the situation,
--- only one of the two formulations is correct.  Specifically:
+-- if the first one throws an 'IterNoParse' exception.  Note that
+-- "Data.IterIO.Parse" defines @'<|>'@ as an infix synonym for this
+-- function.
+--
+-- The statement @multiParse a b@ is similar to @'ifParse' a return
+-- b@, but the two functions operate differently.  Depending on the
+-- situation, only one of the two formulations is correct.
+-- Specifically:
 -- 
 --  * @'ifParse' a f b@ works by first executing @a@, saving a copy of
 --    all input consumed by @a@.  If @a@ throws a parse error, the
@@ -635,7 +654,7 @@ combineExpected (IterNoParse e) iter =
 --    without backtracking (so any error thrown within @f@ will not be
 --    caught by this 'ifParse' expression).
 --
---  * Istead of saving input, @multiParse a b@ executes both @a@ and
+--  * Instead of saving input, @multiParse a b@ executes both @a@ and
 --    @b@ concurrently as input chunks arrive.  If @a@ throws a parse
 --    error, then the result of executing @b@ is returned.  If @a@
 --    either succeeds or throws an exception not of class
@@ -649,9 +668,9 @@ combineExpected (IterNoParse e) iter =
 --
 -- The main restriction on 'ifParse' is that @a@ must not consume
 -- unbounded amounts of input, or the program may exhaust memory
--- saving the input for backtracking.  Note that the second
--- argument to 'ifParse' ('return') is a continuation
--- for @a@ when @a@ succeeds.
+-- saving the input for backtracking.  Note that the second argument
+-- to 'ifParse' (i.e., 'return' in @ifParse a return b@) is a
+-- continuation for @a@ when @a@ succeeds.
 --
 -- The advantage of @multiParse@ is that it can avoid storing
 -- unbounded amounts of input for backtracking purposes if both
@@ -674,9 +693,9 @@ combineExpected (IterNoParse e) iter =
 -- a parse error at any point in the input, then the result is
 -- identical to having defined @total = return -1@.  But @return -1@
 -- succeeds immediately, consuming no input, which means that @total@
--- must return all left-over input for the next monad (i.e., @next@ in
--- @total >>= next@).  Since @total@ has to look arbitrarily far into
--- the input to determine that @parseAndSumIntegerList@ fails, in
+-- must return all left-over input for the next action (i.e., @next@
+-- in @total >>= next@).  Since @total@ has to look arbitrarily far
+-- into the input to determine that @parseAndSumIntegerList@ fails, in
 -- practice @total@ will have to save all input until it knows that
 -- @parseAndSumIntegerList@ suceeds.
 --
@@ -733,6 +752,9 @@ multiParse a b
 -- @failure@ is fed the same input that @iter@ was).  If @iter@ throws
 -- any other type of exception, @ifParse@ passes the exception back
 -- and does not execute @failure@.
+--
+-- See "Data.IterIO.Parse" for a discussion of this function and the
+-- related infix operator @\\/@ (which is a synonym for 'ifNoParse').
 ifParse :: (ChunkData t, Monad m) =>
            Iter t m a
         -- ^ Iteratee @iter@ to run with backtracking
@@ -748,8 +770,8 @@ ifParse iter yes no = do
     Right a  -> yes a
     Left err -> combineExpected err no
 
--- | This function is just 'ifParse' with the second and third
--- arguments reversed.
+-- | @ifNoParse@ is just 'ifParse' with the second and third arguments
+-- reversed.
 ifNoParse :: (ChunkData t, Monad m) =>
              Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
 ifNoParse iter no yes = ifParse iter yes no
@@ -759,9 +781,9 @@ ifNoParse iter no yes = ifParse iter yes no
 -- to be categorized properly and avoid situations in which, for
 -- instance, functions holding 'MVar's are prematurely terminated.
 -- (Most Iteratee code does not assume the Monad parameter @m@ is in
--- the 'MonadIO' class, and so cannot use 'catch' or 'onException' to
--- clean up after exceptions.)  Use 'throwI' in preference to 'throw'
--- whenever possible.
+-- the 'MonadIO' class, and so cannot use 'catch' or @'onException'@
+-- to clean up after exceptions.)  Use 'throwI' in preference to
+-- 'throw' whenever possible.
 throwI :: (Exception e) => e -> Iter t m a
 throwI e = IterFail $ toException e
 
@@ -881,10 +903,10 @@ tryBI iter1 = copyInput iter1 >>= errToEither
 -- >         liftIO $ hPutStrLn stderr "ignoring exception"
 -- >         return ()
 --
--- Note that @myEnum@ is an 'EnumO', but it actually takes an
--- argument, @iter@, reflecting the usually hidden fact that 'EnumO's
--- are actually functions.  Thus, @catchI@ is wrapped around the
--- result of applying @'enumPure' \"test\"@ to an 'Iter'.
+-- Note that @myEnum@ is an 'EnumO', but it takes an argument, @iter@,
+-- reflecting the usually hidden fact that 'EnumO's are actually
+-- functions.  Thus, @catchI@ is wrapped around the result of applying
+-- @'enumPure' \"test\"@ to an 'Iter'.
 --
 -- Another subtlety to keep in mind is that, when fusing enumerators,
 -- the type of the outer enumerator must reflect the fact that it is
@@ -961,7 +983,7 @@ catchBI iter handler = copyInput iter >>= uncurry check
 -- | A version of 'catchI' with the arguments reversed, analogous to
 -- @'handle'@ in the standard library.  (A more logical name for this
 -- function might be @handleI@, but that name is used for the file
--- handle iteratee.)
+-- handle iteratee in "Data.IterIO.ListLike".)
 handlerI :: (Exception e, ChunkData t, Monad m) =>
           (e -> Iter t m a -> Iter t m a)
          -- ^ Exception handler
@@ -1054,7 +1076,7 @@ inumCatch enum handler = wrapI check . enum
 -- >    test3 = enumCatch (enumPure "test" |.. inumBad) skipError |$ nullI
 --
 -- Note that both @\`enumCatch\`@ and ``inumCatch`` have the default
--- infix precedence (9), which binds more tightly than any
+-- infix precedence (@infixl 9@), which binds more tightly than any
 -- concatenation or fusing operators.
 enumCatch :: (Exception e, ChunkData t, Monad m) =>
               EnumO t m a
@@ -1334,9 +1356,11 @@ infixr 2 |$
 -- | @.|$@ is a variant of @|$@ than allows you to apply an 'EnumO'
 -- from within an 'Iter' monad.  @enum .|$ iter@ is sort of equivalent
 -- to @'lift' (enum |$ iter)@, except that the latter will call
--- 'throw' on failures, which causes an asynchron that cannot be
--- caught within the outer 'Iter'.  @.|$@, by contrast, propagates
--- exceptions within the outer 'Iter' monad.
+-- 'throw' on failures, which causes an exception that cannot be
+-- caught within the outer 'Iter'.  (Language-level exceptions, as
+-- opposed to Monadic ones, can only be caught in the @IO@ Monad.)
+-- @.|$@, by contrast, propagates exceptions within the outer 'Iter'
+-- monad.
 (.|$) :: (ChunkData tOut, ChunkData tIn, Monad m) =>
          EnumO tIn m a -> Iter tIn m a -> Iter tOut m a
 (.|$) enum iter = runI $ enum $ wrapI (>>= return) iter
@@ -1425,7 +1449,7 @@ infixr 4 ..|
 -- translate more input, it returns a 'CodecR' in the 'CodecF' state.
 -- This convention allows @Codec@s to maintain state from one
 -- invocation to the next by currying the state into the codec
--- function the next time it is invoked.  A @Codec@ that cannot
+-- function for the next time it is invoked.  A @Codec@ that cannot
 -- process more input returns a 'CodecR' in the 'CodecE' state,
 -- possibly including some final output.
 type Codec tArg m tRes = Iter tArg m (CodecR tArg m tRes)
@@ -1437,7 +1461,7 @@ data CodecR tArg m tRes = CodecF { unCodecF :: !(Codec tArg m tRes)
                                  , unCodecR :: !tRes }
                           -- ^ This is the normal 'Codec' result,
                           -- which includes another 'Codec' (often the
-                          -- same as one that was just called) for
+                          -- same as the one that was just called) for
                           -- processing further input.
                         | CodecE { unCodecR :: !tRes }
                           -- ^ This constructor is used if the 'Codec'
@@ -1488,16 +1512,11 @@ enumCO cf codec0 (IterC req)    =
 enumCO _ _ iter                 = iter
 
 -- | Construct an outer enumerator given a 'Codec' that generates data
--- of type @t@.
+-- of type @t@.  (@enumO@ is simply a variant of 'enumCO' that rejects
+-- all control requests.)
 enumO :: (Monad m, ChunkData t) =>
          Codec () m t
-         -- ^ This is the computation that produces input.  It is run
-         -- with EOF, and never gets fed any input.  The type of this
-         -- argument could alternatively have been just @m t@, but
-         -- then there would be no way to signal failure.  (We don't
-         -- want to assume @m@ is a member of @MonadIO@; thus we
-         -- cannot catch exceptions that aren't propagated via monadic
-         -- types.)
+         -- ^ The computation that produces input.
       -> EnumO t m a
          -- ^ Returns an outer enumerator that feeds input chunks
          -- (obtained from the first argument) into an iteratee.
@@ -1545,6 +1564,13 @@ enumCObracket before after cf codec iter0 = tryI (runI before) >>= checkBefore
 -- >           buf <- liftIO $ hWaitForInput h (-1) >> L.hGetNonBlocking h 8192
 -- >           return $ if null buf then CodecE L.empty
 -- >                                else CodecF (doGet h) buf
+--
+-- (As a side note, the simple 'L.hGet' function can block when there
+-- is some input data but not as many bytes as requested.  Thus, in
+-- order to work with named pipes and process data as it arrives, it
+-- is best to call 'hWaitForInput' followed by 'L.hGetNonBlocking'
+-- rather than simply 'L.hGet'.  This is a common idiom in enumerators
+-- that use 'Handle's.)
 enumObracket :: (Monad m, ChunkData t) =>
                 (Iter () m b)
              -- ^ Before action
@@ -1562,11 +1588,11 @@ enumObracket before after codec iter0 = tryI (runI before) >>= checkBefore
       checkAfter iter _                                     = iter 
 
 -- | Build an inner enumerator given a 'Codec' that returns chunks of
--- the appropriate type.  Makes an effort to send an EOF to the codec
--- if the inner 'Iter' fails, so as to facilitate cleanup.  However,
--- if a containing 'EnumO' or 'EnumI' fails, code handling that
--- failure will have to send an EOF or the codec will not be able to
--- clean up.
+-- the appropriate type and a 'CtlHandler' to handle control requests.
+-- Makes an effort to send an EOF to the codec if the inner 'Iter'
+-- fails, so as to facilitate cleanup.  However, if a containing
+-- 'EnumO' or 'EnumI' fails, code handling that failure will have to
+-- send an EOF or the codec will not be able to clean up.
 enumCI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
           CtlHandler tIn m a
        -- ^ Control request handler
@@ -1595,20 +1621,18 @@ enumCI cf codec0 iter
                   | isIterError codec    = EnumIFail (getIterError codec) iter
                   | otherwise            = return iter
 
--- | Build an inner enumerator given a 'Codec' that returns chunks of
--- the appropriate type.  Makes an effort to send an EOF to the codec
--- if the inner 'Iter' fails, so as to facilitate cleanup.  However,
--- if a containing 'EnumO' or 'EnumI' fails, code handling that
--- failure will have to send an EOF or the codec will not be able to
--- clean up.
+-- | A variant of 'enumCI' that passes all control requests from the
+-- innner 'Iter' through to enclosing enumerators.  (If you want to
+-- reject all control requests, use @'enumCI' 'noCtls'@ instead of
+-- @enumCI@.)
 enumI :: (Monad m, ChunkData tOut, ChunkData tIn) =>
          Codec tOut m tIn
       -- ^ Codec to be invoked to produce transcoded chunks.
       -> EnumI tOut tIn m a
 enumI = enumCI IterC
 
--- | Transcode (until codec throws an EOF error, or until after it has
--- received EOF).
+-- | A variant of 'enumI' that transcodes data using a stateless
+-- translation 'Iter' instead of a 'Codec'
 enumI' :: (Monad m, ChunkData tOut, ChunkData tIn) =>
           Iter tOut m tIn
        -- ^ This Iteratee will be executed repeatedly to produce

@@ -1,6 +1,6 @@
 
 -- | This module contains functions to help parsing input from within
--- iteratees.  Many of the operators are either imported from
+-- 'Iter's.  Many of the operators are either imported from
 -- "Data.Applicative" or inspired by "Text.Parsec".
 
 module Data.IterIO.Parse (-- * Iteratee combinators
@@ -36,7 +36,7 @@ import Data.IterIO.ListLike
 
 -- | An infix synonym for 'multiParse' that allows LL(*) parsing of
 -- alternatives by executing both Iteratees on input chunks as they
--- arrive.  Note this is similar to @\<|>@ method of the
+-- arrive.  This is similar to the @\<|>@ method of the
 -- @'Alternative'@ class in "Control.Applicative", but the
 -- @'Alternative'@ operator has left fixity, while for efficiency this
 -- one has:
@@ -51,7 +51,7 @@ infixr 3 <|>
 -- alternatives by keeping a copy of input data consumed by the first
 -- Iteratee so as to backtrack and execute the second Iteratee if the
 -- first one fails.  Returns a function that takes a continuation for
--- the first Iteratee, should it succeed.  The code:
+-- the first 'Iter', should it succeed.  The code:
 --
 -- >     iter1 \/ iter2 $ \iter1Result -> doSomethingWith iter1Result
 --
@@ -144,7 +144,9 @@ orEmpty = (\/ return mempty)
 infixr 3 `orEmpty`
 
 -- | @iter \<?\> token@ replaces any kind of parse failure in @iter@
--- with an exception equivalent to calling @'expectedI' token@.
+-- with an exception equivalent to calling @'expectedI' prefix token@
+-- where @prefix@ is a prefix of the input that was fed to @token@ and
+-- caused it to fail.
 --
 -- Has fixity:
 --
@@ -171,24 +173,28 @@ iter <?> expected = mapExceptionI domap iter
             Nothing                   -> IterExpected "" [expected]
 -}
 
--- | Throw an iteratee error that describes expected input not found.
-expectedI :: String -> String -> Iter t m a
+-- | Throw an 'Iter' exception that describes expected input not
+-- found.
+expectedI :: String             -- ^ Input actually received
+          -> String             -- ^ Description of input that was wanted
+          -> Iter t m a
 expectedI saw target = throwI $ IterExpected saw [target]
 
--- | Repeatedly invoke an Iteratee, and right fold a function over the
--- results.
+-- | Repeatedly invoke an 'Iter', and right-folding a function over
+-- the results.
 foldrI :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
 foldrI f z iter = iter \/ return z $ f >$> foldrI f z iter
 
--- | Repeatedly invoke an Iteratee, and right fold a function over the
--- results.  Requires the Iteratee to succeed at least once.
+-- | A variant of 'foldrI' that requires the 'Iter' to succeed at
+-- least once.
 foldr1I :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
 foldr1I f z iter = f <$> iter <*> foldrI f z iter
 
--- | A version of 'foldrI' that must parse between a minimum and a
--- maximum number of items.
+-- | A variant of 'foldrI' that requires the 'Iter' to succeed at
+-- least a minimum number of items and stops parsing after executing
+-- the 'Iter' some maximum number of times.
 foldrMinMaxI :: (ChunkData t, Monad m) =>
                 Int             -- ^ Minimum number to parse
              -> Int             -- ^ Maximum number to parse
@@ -203,9 +209,8 @@ foldrMinMaxI nmin nmax f z iter
     | nmax < 0    = throwI $ IterParseErr "foldrMinMaxI: negative max"
     | otherwise   = iter \/ return z $ f >$> foldrMinMaxI 0 (nmax - 1) f z iter
 
--- | Strict left fold over an iteratee (until it throws an
--- 'IterNoParse' exception).  @foldlI f z iter@ is sort of equivalent
--- to:
+-- | Strict left fold over an 'Iter' (until it throws an 'IterNoParse'
+-- exception).  @foldlI f z iter@ is sort of equivalent to:
 --
 -- > ... (f <$> (f <$> (f z <$> iter) <*> iter) <*> iter) ...
 foldlI :: (ChunkData t, Monad m) =>
@@ -213,8 +218,8 @@ foldlI :: (ChunkData t, Monad m) =>
 foldlI f z0 iter = foldNext z0
     where foldNext z = z `seq` iter \/ return z $ \a -> foldNext (f z a)
 
--- | A version of 'foldlI' that fails if the Iteratee argument does
--- not succeed at least once.
+-- | A version of 'foldlI' that fails if the 'Iter' argument does not
+-- succeed at least once.
 foldl1I :: (ChunkData t, Monad m) =>
            (b -> a -> b) -> b -> Iter t m a -> Iter t m b
 foldl1I f z iter = iter >>= \a -> foldlI f (f z a) iter
@@ -227,7 +232,7 @@ foldMI :: (ChunkData t, Monad m) =>
 foldMI f z0 iter = foldNext z0
     where foldNext z = iter \/ return z $ f z >=> foldNext
 
--- | A variant of 'foldMI' that requires the Iteratee to succeed at
+-- | A variant of 'foldMI' that requires the 'Iter' to succeed at
 -- least once.
 foldM1I :: (ChunkData t, Monad m) =>
            (b -> a -> Iter t m b) -> b -> Iter t m a -> Iter t m b
@@ -238,18 +243,6 @@ foldM1I f z0 iter = iter >>= f z0 >>= \z -> foldMI f z iter
 -- error if the Iteratee fails.  (Like @skip x = x >> return ()@.)
 skipI :: Applicative f => f a -> f ()
 skipI = (() <$)
-
-{-
--- | Peeks at the next input element without consuming it.  Throws an
--- 'IterEOF' exception if an end of file is encountered.
-peekHeadI :: (LL.ListLike t e, Monad m) => Iter t m e
-peekHeadI = IterF $ \c@(Chunk t eof) ->
-        if LL.null t
-        then if eof
-             then throwEOFI "peekI"
-             else peekI
-        else Done (LL.head t) c
--}
 
 -- | Ensures the next input element satisfies a predicate or throws a
 -- parse error.  Does not consume any input.
@@ -388,7 +381,7 @@ concatI :: (ChunkData t, Monoid s, Monad m) =>
            Iter t m s -> Iter t m s
 concatI iter = foldrI mappend mempty iter
 
--- | Like 'concatI', but fails if the Iteratee doesn't return at least
+-- | Like 'concatI', but fails if the 'Iter' doesn't return at least
 -- once.
 concat1I :: (ChunkData t, Monoid s, Monad m) =>
            Iter t m s -> Iter t m s
@@ -399,17 +392,17 @@ concat1I iter = foldr1I mappend mempty iter
 concatMinMaxI :: (ChunkData t, Monoid s, Monad m) =>
                  Int            -- ^ Minimum number to parse
               -> Int            -- ^ Maximum number to parse
-              -> Iter t m s     -- ^ Iteratee whose results to concatenate
+              -> Iter t m s     -- ^ 'Iter' whose results to concatenate
               -> Iter t m s
 concatMinMaxI nmin nmax iter = foldrMinMaxI nmin nmax mappend mempty iter
                                
                                
--- | This Iteratee parses a 'LL.StringLike' argument.  It does not
+-- | This 'Iter' parses a 'LL.StringLike' argument.  It does not
 -- consume any Iteratee input.  The only reason it is an Iteratee is
 -- so that it can throw an Iteratee parse error should it fail to
 -- parse the argument string (or should the argument yield an
 -- ambiguous parse).
-readI :: (ChunkData t, LL.StringLike s, Monad m, Read a) => 
+readI :: (ChunkData t, Monad m, LL.StringLike s, Read a) => 
          s -> Iter t m a
 readI s' = let s = LL.toString s'
            in case [a | (a,"") <- reads s] of
@@ -454,12 +447,12 @@ nil = pure mempty
 -- These functions are intended to be similar to those supplied by
 -- "Text.Parsec".
 
--- | Run an iteratee zero or more times (until it fails) and return a
+-- | Run an 'Iter' zero or more times (until it fails) and return a
 -- list-like container of the results.
 many :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
 many = foldrI LL.cons LL.empty
 
--- | Repeatedly run an Iteratee until it fails, and discard all the
+-- | Repeatedly run an 'Iter' until it fails and discard all the
 -- results.
 skipMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
 skipMany = foldlI (\_ _ -> ()) ()
@@ -495,12 +488,12 @@ sepEndBy item sep =
     item `orEmpty` LL.cons >$> sep `orEmpty` (\_ -> sepEndBy item sep)
 
 
--- | Run an iteratee one or more times (until it fails) and return a
+-- | Run an 'Iter' one or more times (until it fails) and return a
 -- list-like container of the results.
 many1 :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
 many1 = foldr1I LL.cons LL.empty
 
--- | A variant of 'skipMany' that throws a parse error if the Iteratee
+-- | A variant of 'skipMany' that throws a parse error if the 'Iter'
 -- does not succeed at least once.
 skipMany1 :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
 skipMany1 = foldl1I (\_ _ -> ()) ()
