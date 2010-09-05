@@ -706,9 +706,9 @@ multiParse a@(IterF _) b
                         multiParse (runIter a c) (runIter b c)
     where
       -- If b is IterM, IterC, or Done, we will just accumulate all
-      -- the input anyway inside 'runIter', so we might as well just
-      -- do it efficiently with 'copyInput' (which is what 'ifParse'
-      -- uses, indirectly, via 'tryBI').
+      -- the input anyway inside 'runIter', so we might as well do it
+      -- efficiently with 'copyInput' (which is what 'ifParse' uses,
+      -- indirectly, via 'tryBI').
       useIfParse (Done _ _) = True
       useIfParse (IterM _)  = True
       useIfParse (IterC _)  = True
@@ -1165,11 +1165,6 @@ wrapI f = next
                     | otherwise         = f iter
 
 
--- XXX the following is no longer true of runI, but should it be true?
--- In the event that the failure is an enumerator failure (either
--- 'EnumIFail' or 'EnumOFail'), @runI@ returns an 'EnumIFail' failure
--- and includes the state of the iteratee.
-
 -- | Runs an Iteratee from within another iteratee (feeding it EOF if
 -- it is in the 'IterF' state) so as to extract a return value.  The
 -- return value is lifted into the invoking Iteratee monadic type.  If
@@ -1322,12 +1317,12 @@ type EnumI tOut tIn m a = Iter tIn m a -> Iter tOut m (Iter tIn m a)
 --
 -- > infixr 2 |$
 (|$) :: (ChunkData t, Monad m) => EnumO t m a -> Iter t m a -> m a
-(|$) enum iter = run $ enum $ wrapI (>>= return) iter
--- The purpose of the wrapI (>>= return) is to convert any EnumIFail
--- (or, less likely, EnumOFail) errors thrown by iter to IterFail
--- errors, so that enumCatch statements only catch enumerator
--- failures.
+(|$) enum iter = run $ enum $ iter >>= return
+-- The purpose of the ">>= return" is to convert any EnumIFail (or,
+-- less likely, EnumOFail) errors thrown by iter to IterFail errors,
+-- so that enumCatch statements only catch enumerator failures.
 infixr 2 |$
+-- (|$) enum iter = run $ enum $ wrapI (>>= return) iter
 
 -- | @.|$@ is a variant of @|$@ than allows you to apply an 'EnumO'
 -- from within an 'Iter' monad.  @enum .|$ iter@ is sort of equivalent
@@ -1391,8 +1386,6 @@ infixl 4 |..
         -> EnumI tMid tIn m a
         -> EnumI tOut tIn m a
 (..|..) outer inner iter = wrapI joinI (outer $ inner iter)
--- wrapI joinI $ outer $ wrapI popI $ inner iter
--- = wrapI (return . joinI . joinI) $ outer $ inner iter
 infixl 5 ..|..
 
 -- | Fuse an inner enumerator that transcodes @tOut@ to @tIn@ with an
@@ -1448,8 +1441,7 @@ data CodecR tArg m tRes = CodecF { unCodecF :: !(Codec tArg m tRes)
 -- | Transform an ordinary 'Iter' into a stateless 'Codec'.
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
 iterToCodec iter = codec
-    where codec = iter >>= return . CodecF codec
--- iter >>= return . CodecF (iterToCodec iter)
+    where codec = CodecF codec `liftM` iter
 
 -- | Construct an outer enumerator given a 'Codec' that generates data
 -- of type @t@ and a 'CtlHandler' to handle control requests.
@@ -1639,16 +1631,6 @@ ctlI carg = safeCtlI carg >>= returnit
       returnit (Just res) = return res
       returnit Nothing    = fail $ "Unsupported CtlCmd " ++ show (typeOf carg)
 
-{-
-wrapCtl :: (ChunkData t, Monad m) =>
-           (CtlReq t m a -> Iter t m a)
-        -> Iter t m a -> Iter t m a
-wrapCtl f = next
-    where next (IterC req)              = apNext next (f req)
-          next iter | isIterActive iter = apNext next iter
-                    | otherwise         = iter
--}
-
 -- | A control request handler that ignores the request argument and
 -- always fails immediately (thereby not passing the control request
 -- up further to other enclosing enumerators).
@@ -1728,26 +1710,6 @@ ctlHandler ctls req = case res of
       ff a b = case a req of
                  Nothing  -> b
                  a'       -> a'
-
-{-
--- | Wrap a handler for a particular kind of 'CtlCmd' request around
--- an 'Iter'.
-enumCtl :: (ChunkData t, Monad m, CtlCmd carg cres) =>
-           (carg -> Iter t m cres) -> EnumO t m a
-enumCtl f = wrapCtl handler
-    where
-      handler (CtlReq carg fr) =
-          case cast carg of
-            Nothing -> fr Nothing
-            Just ca -> do mr <- resultI $ f ca
-                          if isIterError mr
-                            then EnumOFail (getIterError mr) (iterC carg fr)
-                            else mr >>= fr . cast
-
--- | Block all handlers 'CtlCmd' request issued by an 'Iter'.
-filterCtl :: (ChunkData t, Monad m) => EnumO t m a
-filterCtl = wrapCtl $ \(CtlReq _ fr) -> fr Nothing
--}
 
 --
 -- Basic outer enumerators
