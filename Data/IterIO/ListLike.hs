@@ -238,7 +238,7 @@ fileCtl h = ctlHandler
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> Onum [t] m a
-enumDgram sock = mkOnum $ iterToCodec $ do
+enumDgram sock = mkInum $ iterToCodec $ do
   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgram" else return [msg]
 
@@ -248,7 +248,7 @@ enumDgram sock = mkOnum $ iterToCodec $ do
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> Onum [(t, SockAddr)] m a
-enumDgramFrom sock = mkOnum $ iterToCodec $ do
+enumDgramFrom sock = mkInum $ iterToCodec $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgramFrom" else return [(msg, addr)]
 

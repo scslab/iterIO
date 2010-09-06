@@ -77,7 +77,7 @@ grep re files
     | null files = enumHandle stdin |.. inumToLines |$ inumGrep re ..| linesOutI
     | otherwise  = foldr1 cat (map enumLines files) |$ inumGrep re ..| linesOutI
     where
-      enumLines file = enumCatch (enumFile file |.. inumToLines) handler
+      enumLines file = inumCatch (enumFile file |.. inumToLines) handler
       handler :: IOError -> OnumR [S.ByteString] IO a
               -> OnumR [S.ByteString] IO a
       handler e iter = do
@@ -154,6 +154,32 @@ test2 = inumCatch (enumPure "test" |.. inumBad) skipError |$ nullI
 -- Again no exception, because inumCatch is wrapped around inumBad.
 test3 :: IO ()
 test3 = enumPure "test" |.. (inumCatch inumBad skipError) |$ nullI
+
+-- Catches exception, because .|$ propagates failure through the outer
+-- Iter Monad, where it can still be caught.
+apply1 :: IO String
+apply1 = enumPure "test1" |$ iter `catchI` handler
+    where
+      iter = enumPure "test2" .|$ fail "error"
+      handler (SomeException _) _ = return "caught error"
+
+-- Does not catch error, because |$ turns an Iter failure into a
+-- language-level exception, which can only be caught in IO Monad.
+apply2 :: IO String
+apply2 = enumPure "test1" |$ iter `catchI` handler
+    where
+      iter = lift (enumPure "test2" |$ fail "error")
+      handler (SomeException _) _ = return "caught error"
+
+-- Catches the exception, because liftIO uses the IO catch function to
+-- turn language-level exceptions into Monadic Iter failures.  (By
+-- contrast, lift must work for all Monads so cannot this in apply2.)
+apply3 :: IO String
+apply3 = enumPure "test1" |$ iter `catchI` handler
+    where
+      iter = liftIO (enumPure "test2" |$ fail "error")
+      handler (SomeException _) _ = return "caught error"
+
 
 
 main :: IO ()

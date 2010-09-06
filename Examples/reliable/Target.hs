@@ -276,7 +276,7 @@ expectI goal | L.null goal = return True
     else return False
 
 lE :: (Monad m) => Int -> Onum L.ByteString m a
-lE n0 = mkOnum $ codec n0
+lE n0 = mkInum $ codec n0
     where
       codec n
           | n <= 0      = return $ CodecE L.empty
@@ -307,7 +307,7 @@ nI n = do
     n'           -> nI n'
 
 a4E :: (Monad m) => String -> Int -> Onum L.ByteString m a
-a4E key len = mkOnum $ enumChunks (a4new key) len
+a4E key len = mkInum $ enumChunks (a4new key) len
     where
       enumChunks a4 n
           | n <= 0    = return $ CodecE L.empty

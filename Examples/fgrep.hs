@@ -33,7 +33,7 @@ printLines = do
     Nothing -> return ()
 
 enumFileCatchError :: (MonadIO m) => FilePath -> Onum L.ByteString m a
-enumFileCatchError file = enumFile file `enumCatch` enumCatchIO
+enumFileCatchError file = enumFile file `inumCatch` enumCatchIO
     where
       enumCatchIO :: (ChunkData t, MonadIO m) =>
                      IOError -> OnumR t m a -> OnumR t m a
