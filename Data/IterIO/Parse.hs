@@ -145,7 +145,7 @@ infixr 3 `orEmpty`
 
 -- | @iter \<?\> token@ replaces any kind of parse failure in @iter@
 -- with an exception equivalent to calling @'expectedI' prefix token@
--- where @prefix@ is a prefix of the input that was fed to @token@ and
+-- where @prefix@ is a prefix of the input that was fed to @iter@ and
 -- caused it to fail.
 --
 -- Has fixity:

@@ -12,51 +12,49 @@
      return a useful result, or its utility may lie in monadic
      side-effects, such as storing received data to a file.  Iteratees
      are represented by the type @'Iter' t m a@.  @t@ is the type of
-     the data chunks (which must be an instance of 'ChunkData', such
-     as 'String' or lazy 'L.ByteString').  @m@ is the 'Monad' in which
-     the iteratee runs--for instance 'IO' (or an instance of
-     'MonadIO') for the iteratee to perform IO.  @a@ is the result
-     type of the iteratee, for when it has consumed enough input to
-     produce a result.
+     the data chunks the iteratee receives as input.  (@t@ must be an
+     instance of 'ChunkData', such as 'String' or lazy
+     'L.ByteString'.)  @m@ is the 'Monad' in which the iteratee
+     runs--for instance 'IO' (or an instance of 'MonadIO') for the
+     iteratee to perform IO.  @a@ is the result type of the iteratee,
+     for when it has consumed enough input to produce a result.
 
      An enumerator is a data source that feeds data chunks to an
      iteratee.  In this library, all enumerators are also 'Iter's.
-     Hence we use the term /inner enumerator/ and type 'Inum' to
-     represent enumerators.  On the outside, an 'Inum' is just an
-     ordinary 'Iter' that can sink data of some outer type usually
-     designated @tOut@.  On the inside, the 'Inum' feeds data of some
-     potentially different type, @tIn@, to an 'Iter'.  Thus, an 'Inum'
-     can be viewed as transcoding data from its outer type @tOut@ to
-     its inner type @tIn@.  (In general, types @tOut@ and @tIn@ stand
-     for outer and inner, /not/ output and input--as the outer type is
-     really the input type of the 'Inum'.)
+     Hence we use the type 'Inum' (/iterator-enumerator/) to represent
+     enumerators.  An 'Inum' is an 'Iter' that can sink data of some
+     input type usually designated @tIn@.  However, the 'Inum' also
+     feeds data of some potentially different output type, @tOut@, to
+     an 'Iter'.  Thus, an 'Inum' can be viewed as transcoding data
+     from its input type @tIn@ to its output type @tOut@.
 
      'Inum's are generally constructed using the function 'mkInum',
-     which takes a 'Codec' that transcodes from the outer to the inner
-     type.  'mkInum' handles the details of error handling while the
-     'Codec' simply transforms data.
+     which takes a 'Codec' that transcodes from the input to the
+     output type.  'mkInum' handles the details of error handling
+     while the 'Codec' simply transforms data.
 
      An important special kind of 'Inum' is an /outer enumerator/,
      which is just an 'Inum' with the void input type @'()'@.  Outer
      enumerators are sources of data.  Rather than transcode input
-     data, they must produce the data from monadic actions (or from
-     pure data in the case of 'enumPure').  The type 'Onum' is a
-     synonym for an 'Inum' with outer type @'()'@.
+     data, they produce data from monadic actions (or from pure data
+     in the case of 'enumPure').  The type 'Onum' represents outer
+     enumerators and is a synonym for 'Inum' with an input type of
+     @'()'@.
 
-     IO is performed by applying an 'Onum' to an 'Iter', using the
-     '|$' (\"pipe apply\") binary operator.
+     To execute iteratee-based IO, you must apply an 'Onum' to an
+     'Iter' with the '|$' (\"pipe apply\") binary operator.
 
      An important property of enumerators and iteratees is that they
      can be /fused/.  The '|..' operator fuses two 'Inum's together
-     (provided the inner type of the first is the outer type of the
-     second), yielding a new 'Inum' that transcodes from the outer
-     type of the first to the inner type of the second.  Similarly,
+     (provided the output type of the first is the input type of the
+     second), yielding a new 'Inum' that transcodes from the input
+     type of the first to the output type of the second.  Similarly,
      the '..|' operator fuses an 'Inum' to an 'Iter', yielding a new
      'Iter' with a potentially different input type.
 
-     Enumerators can also be concatenated using the 'cat' function.
-     Thus, @enum1 ``cat`` enum2@ produces an enumerator whose effect
-     is to feed first @enum1@'s data then @enum2@'s data to an 'Iter'.
+     Enumerators can also be concatenated with the 'cat' function.
+     @enum1 ``cat`` enum2@ produces an enumerator whose effect is to
+     feed first @enum1@'s data then @enum2@'s data to an 'Iter'.
 
  -}
 
@@ -83,7 +81,7 @@ module Data.IterIO.Base
     -- * Some basic Iters
     , nullI, dataI, chunkI, peekI, atEOFI
     -- * Low-level Iter-manipulation functions
-    , wrapI, runI, popI, joinI, returnI, resultI
+    , wrapI, runI, joinI, returnI, resultI
     -- * Some basic Enums
     , enumPure
     , iterLoop
@@ -129,10 +127,9 @@ import System.IO.Unsafe
 -- must be a 'Monoid', but must additionally provide a predicate,
 -- @null@, for testing whether an object is equal to 'mempty'.
 -- Feeding a @null@ chunk to an iteratee followed by any other chunk
--- should have the same effect as just feeding the second chunk,
--- except that some or all of the effects may happen at the time the
--- iteratee receives the @null@ chunk, which is why sometimes the
--- library explicitly feeds @null@ chunks to iteratees.
+-- should have the same effect as just feeding the second chunk.
+-- @ChunkData@ must also be convertable to a String with the
+-- @chunkShow@ method to simplify debugging.
 class (Monoid t) => ChunkData t where
     null :: t -> Bool
     chunkShow :: t -> String
@@ -151,9 +148,9 @@ instance ChunkData () where
 
 -- | @Chunk@ is a wrapper around a 'ChunkData' type that also includes
 -- an EOF flag that is 'True' if the data is followed by an
--- end-of-file condition.  An iteratee that receives a @Chunk@ with
--- EOF 'True' must return a result (or failure); it is an error to
--- demand more data after an EOF.
+-- end-of-file condition.  An 'Iter' that receives a @Chunk@ with EOF
+-- 'True' must return a result (or failure); it is an error to demand
+-- more data (return 'IterF') after an EOF.
 data Chunk t = Chunk !t !Bool deriving (Eq)
 
 instance (ChunkData t) => Show (Chunk t) where
@@ -207,8 +204,8 @@ data CtlReq t m a = forall carg cres. (CtlCmd carg cres) =>
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
 -- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
--- may execute actions (using the monad transformer 'lift' method),
--- and @a@ is the result type of the iteratee.
+-- may execute actions (using the 'MonadTrans' 'lift' method), and @a@
+-- is the result type of the iteratee.
 --
 -- An @Iter@ is in one of several states:  it may require more input
 -- ('IterF'), it may request some control action other than input data
@@ -216,9 +213,10 @@ data CtlReq t m a = forall carg cres. (CtlCmd carg cres) =>
 -- monadic actions in the transformed monad ('IterM'), it may have
 -- produced a result ('Done'), or it may have failed.  Failure is
 -- indicated by 'IterFail' or 'InumFail', depending on whether the
--- failure occured in an iteratee or enumerator.  (In the latter case,
--- when an enumerator failed, the result also includes the state of
--- the inner iteratee, which generally will not have failed.)
+-- failure occured in an iteratee or enumerator.  In the latter case,
+-- when an 'Inum' fails, the 'Iter' it is feeding usually will not
+-- have failed.  Thus, the 'InumFail' type includes the state of the
+-- 'Iter' that the 'Inum' was feeding.
 --
 -- Note that @Iter t@ is a 'MonadTrans' and @Iter t m@ is a a 'Monad'
 -- (as discussed in the documentation for module "Data.IterIO").
@@ -232,27 +230,27 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- ^ Sufficient input was received; the 'Iter' is
                 -- returning a result of type @a@.  In adition, the
                 -- 'Iter' has a 'Chunk' containing any residual input
-                -- that was not consumed to produce the result.
+                -- that was not consumed in producing the result.
                 | IterFail !SomeException
-                -- ^ The iteratee failed.
+                -- ^ The 'Iter' failed.
                 | InumFail !SomeException a
                 -- ^ An 'Inum' failed; this result includes status of
-                -- the Iteratee.  (The type @a@ will always be
-                -- @'Iter' t m a\'@ for some @a'@ in the result of an
-                -- 'Inum'.)
+                -- the Iteratee.  (The type @a@ will always be @'Iter'
+                -- t m a\'@ for some @a'@ in the result of an 'Inum'.)
 
 -- | Show the current state of an 'Iter', prepending it to some
--- remaining input (the standard 'ShowS' optimization).  Note that if
--- type @a@ is in class 'Show', you are better off simply using the
--- 'shows' function.
+-- remaining input (the standard 'ShowS' optimization), when 'a' is in
+-- class 'Show'.  Note that if @a@ is not in 'Show', you can simply
+-- use the 'shows' function.
 iterShows :: (ChunkData t, Show a) => Iter t m a -> ShowS
 iterShows (Done a c) rest = "Done " ++ (shows a $ " " ++ shows c rest)
 iterShows (InumFail e a) rest =
     "InumFail " ++ (shows e $ " (" ++ (shows a $ ")" ++ rest))
 iterShows iter rest = shows iter rest
 
--- | Show the current state of an 'Iter'.  If type @a@ is in the
--- 'Show' class, you can simply use the ordinary 'show' function.)
+-- | Show the current state of an 'Iter' if type @a@ is in the 'Show'
+-- class.  (Otherwise, you can simply use the ordinary 'show'
+-- function.)
 iterShow :: (ChunkData t, Show a) => Iter t m a -> String
 iterShow iter = iterShows iter ""
 
@@ -272,7 +270,7 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
     pure   = return
     (<*>)  = ap
     (*>)   = (>>)
-    a <* b = do r <- a; _ <- b; return r
+    a <* b = do r <- a; b >> return r
 
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
@@ -288,16 +286,17 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
 instance (ChunkData t) => MonadTrans (Iter t) where
     lift m = IterM $ m >>= return . return
 
--- | The 'Iter' insance of 'MonadIO' handles errors specially in the
--- 'liftIO' method.  If the lifted operation throws an exception,
--- 'liftIO' catches the exception and returns it as an 'IterFail'
--- failure.  Moreover, an IO exception satisfying the 'isEOFError'
--- predicate is re-wrapped in an 'IterEOF' type so as to re-parent it
--- below 'IterNoParse' in the exception hierarchy.  ('run' and '|$'
--- un-do the effects of this re-parenting should the exception escape
--- the 'Iter' monad.)  One consequence of this behavior is that with
--- 'Iter', unlike with most monad transformers, 'liftIO' is /not/
--- equivalent to some number of nested calls to 'lift'.
+-- | The 'Iter' insance of 'MonadIO' handles errors specially.  If the
+-- lifted operation throws an exception, 'liftIO' catches the
+-- exception and returns it as an 'IterFail' failure.  Moreover, an IO
+-- exception satisfying the 'isEOFError' predicate is re-wrapped in an
+-- 'IterEOF' type so as to re-parent it below 'IterNoParse' in the
+-- exception hierarchy.  ('run' and '|$' un-do the effects of this
+-- re-parenting should the exception escape the 'Iter' monad.)  One
+-- consequence of this behavior is that with 'Iter', unlike with most
+-- monad transformers, 'liftIO' is /not/ equivalent to some number of
+-- nested calls to 'lift'.  See the documentation of '.|$' for an
+-- example.
 instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
     liftIO m = do
       result <- lift $ liftIO $ try m
@@ -393,11 +392,11 @@ iterC :: (CtlCmd carg cres) => carg -> (Maybe cres -> Iter t m a) -> Iter t m a
 iterC carg fr = IterC (CtlReq carg fr)
 
 getIterError                 :: Iter t m a -> SomeException
-getIterError (IterFail e)    = e
+getIterError (IterFail e)   = e
 getIterError (InumFail e _) = e
-getIterError (IterM _)       = error "getIterError: no error (in IterM state)"
-getIterError (IterC _)       = error "getIterError: no error (in IterC state)"
-getIterError _               = error "getIterError: no error to extract"
+getIterError (IterM _)      = error "getIterError: no error (in IterM state)"
+getIterError (IterC _)      = error "getIterError: no error (in IterC state)"
+getIterError _              = error "getIterError: no error to extract"
 
 -- | True if an iteratee or an enclosing enumerator has experienced a
 -- failure.  (@isIterError@ is always 'True' when 'isEnumError' is
@@ -621,7 +620,7 @@ combineExpected (IterNoParse e) iter =
 --
 -- The statement @multiParse a b@ is similar to @'ifParse' a return
 -- b@, but the two functions operate differently.  Depending on the
--- situation, only one of the two formulations is correct.
+-- situation, only one of the two formulations may be correct.
 -- Specifically:
 -- 
 --  * @'ifParse' a f b@ works by first executing @a@, saving a copy of
@@ -1005,12 +1004,12 @@ handlerBI = flip catchBI
 -- right that is on the same side of '|$'--even enumerators not
 -- lexically scoped within the argument of @inumCatch@.  See
 -- 'enumCatch' for some examples of this behavior.
-inumCatch :: (Exception e, ChunkData tOut, ChunkData tIn, Monad m) =>
-              Inum tOut tIn m a
+inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
+              Inum tIn tOut m a
            -- ^ 'Inum' that might throw an exception
-           -> (e -> InumR tOut tIn m a -> InumR tOut tIn m a)
+           -> (e -> InumR tIn tOut m a -> InumR tIn tOut m a)
            -- ^ Exception handler
-           -> Inum tOut tIn m a
+           -> Inum tIn tOut m a
 inumCatch enum handler iter = wrapI check $ enum iter
     where
       check i@(InumFail e _) = case fromException e of
@@ -1019,12 +1018,12 @@ inumCatch enum handler iter = wrapI check $ enum iter
       check i                = i
 
 -- | 'inumCatch' with the argument order switched.
-inumHandler :: (Exception e, ChunkData tOut, ChunkData tIn, Monad m) =>
-               (e -> InumR tOut tIn m a -> InumR tOut tIn m a)
+inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
+               (e -> InumR tIn tOut m a -> InumR tIn tOut m a)
             -- ^ Exception handler
-            -> Inum tOut tIn m a
+            -> Inum tIn tOut m a
             -- ^ 'Inum' that might throw an exception
-            -> Inum tOut tIn m a
+            -> Inum tIn tOut m a
 inumHandler = flip inumCatch
 
 
@@ -1069,16 +1068,16 @@ inumHandler = flip inumCatch
 -- | Used in an exception handler, after an enumerator fails, to
 -- resume processing of the 'Iter' by the next enumerator in a
 -- concatenated series.  See 'catchI' for an example.
-resumeI :: (ChunkData tOut, Monad m) =>
-           InumR tOut tIn m a -> InumR tOut tIn m a
+resumeI :: (ChunkData tIn, Monad m) =>
+           InumR tIn tOut m a -> InumR tIn tOut m a
 resumeI (InumFail _ iter) = return iter
 resumeI iter              = iter
 
 -- | Like 'resumeI', but if the failure was in an enumerator and the
 -- iteratee is resumable, prints an error message to standard error
 -- before invoking 'resumeI'.
-verboseResumeI :: (ChunkData tOut, MonadIO m) =>
-                  InumR tOut tIn m a -> InumR tOut tIn m a
+verboseResumeI :: (ChunkData tIn, MonadIO m) =>
+                  InumR tIn tOut m a -> InumR tIn tOut m a
 verboseResumeI iter | isEnumError iter = do
   prog <- liftIO $ getProgName
   liftIO $ hPutStrLn stderr $ prog ++ ": " ++ show (getIterError iter)
@@ -1168,11 +1167,11 @@ bindFail iter0 next = do
     InumFail e i -> InumFail e i
     _            -> iter >>= next
 
--- | Runs an Iteratee from within another iteratee (feeding it EOF if
--- it is in the 'IterF' state) so as to extract a return value.  The
--- return value is lifted into the invoking Iteratee monadic type.  If
--- the iteratee being run fails, then @runI@ will propagate the
--- failure by also failing.
+-- | Runs an 'Iter' from within a different 'Iter' monad (feeding it
+-- EOF if it is in the 'IterF' state) so as to extract a return value.
+-- The return value is lifted into the invoking 'Iter' monad.  If the
+-- 'Iter' being run fails, then @runI@ will propagate the failure by
+-- also failing in the enclosing monad..
 runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
@@ -1183,30 +1182,21 @@ runI (InumFail e i)        = InumFail e i
 runI (IterC (CtlReq _ fr)) = runI $ fr Nothing
 runI iter                  = apRun runI iter
 
--- | Pop an 'Iter' back out of an 'Inum'.  This discards any
--- 'InumFail' should the outer enumerator have failed.
-popI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-          Iter tOut m (Iter tIn m a)
-       -> Iter tIn m a
-popI (Done i _)     = i
-popI (IterFail e)   = IterFail e
-popI (InumFail e i) = i `bindFail` InumFail e
-popI iter           = apRun popI iter
-
--- | Join the result of an inner enumerator, so that the result of the
--- inner 'Iter' becomes the result in the outer 'Iter' Monad.  This is
--- similar to 'popI', but where 'popI' returns an 'Iter' taking the
--- inner input type, @joinI@ returns an 'Iter' of the outer input
--- type.  Note that the behavior of @joinI@ is very similar to what
--- one would obtain by defining @joinI iter = iter >>= 'runI'@, with
--- one big difference:  In @iter >>= 'runI'@, the @>>=@ operator will
--- translate any enumerator ('EnumOFail' or 'InumFail') failure into
--- an 'IterFail' failure.  By contrast, @joinI@ converts both types of
--- enumerator failure into an 'EnumOFail', thereby preserving the
--- state of the iteratee for possible resumption by 'resumeI'.
-joinI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-         Iter tOut m (Iter tIn m a)
-      -> Iter tOut m a
+-- | Join the result of an 'Inum', turning it into an 'Iter'.  The
+-- behavior of @joinI@ is similar to what one would obtain by defining
+-- @joinI iter = iter >>= 'runI'@, but with more precise error
+-- handling.  Specifically, with @iter >>= 'runI'@, the @'>>='@
+-- operator for 'Iter' translates enumerator failures ('InumFail')
+-- into an iteratee failures ('IterFail'), discarding the state of the
+-- 'Iter' even when the failure occured in an 'Inum'.  By contrast,
+-- @joinI@ preserves enumerator failures, allowing the state of the
+-- non-failed 'Iter' to be resumed by 'resumeI'.  (The fusing
+-- operators '|..' and '..|' use @joinI@ internally, and it is this
+-- error preserving property that allos 'inumCatch' and 'resumeI' to
+-- work properly.)
+joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
+         InumR tIn tOut m a
+      -> Iter tIn m a
 joinI (Done i c)     = runI i `bindFail` flip Done c
 joinI (IterFail e)   = IterFail e
 joinI (InumFail e i) = runI i `bindFail` InumFail e
@@ -1222,9 +1212,9 @@ joinI iter           = apRun joinI iter
 -- 'Iter' produced with @iter <- returnI someOtherIter@ does not need
 -- to worry about the 'IterM' or 'IterC' cases, since the returned
 -- 'Iter' is guaranteed not to be in one of those states.
-returnI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-           Iter tIn m a
-        -> Iter tOut m (Iter tIn m a)
+returnI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+           Iter tOut m a
+        -> Iter tIn m (Iter tOut m a)
 returnI iter@(IterM _) = apRun returnI iter
 returnI iter@(IterC _) = apRun returnI iter
 returnI iter           = return iter
@@ -1249,7 +1239,7 @@ resultI = wrapI fixdone
 -- | Equivalent to:
 --
 -- @
---type Inum tOut tIn m a = 'Iter' tIn m a -> 'Iter' tOut m ('Iter' tIn m a)
+--type Inum tIn tOut m a = 'Iter' tOut m a -> 'Iter' tIn m ('Iter' tOut m a)
 -- @
 --
 -- The most general enumerator type, which can transcode from some
@@ -1258,14 +1248,14 @@ resultI = wrapI fixdone
 -- and feeds it to another Iter (hence also acting like an enumerator
 -- towards that inner 'Iter').  Note that data is viewed as flowing
 -- inwards from the outermost enumerator to the innermost iteratee.
--- Thus @tOut@, the \"outer type\", is actually the type of input fed
--- to an @Inum@, while @tIn@ is what the @Inum@ feeds to an iteratee.
+-- Thus @tIn@, the \"outer type\", is actually the type of input fed
+-- to an @Inum@, while @tOut@ is what the @Inum@ feeds to an iteratee.
 --
 -- @Inum@ is a function from 'Iter's to 'Iter's, where an @Inum@'s
 -- input and output types are different.  A simpler alternative to
 -- @Inum@ might have been:
 --
--- >type Inum' tOut tIn m a = Iter tIn m a -> Iter tOut m a
+-- >type Inum' tIn tOut m a = Iter tOut m a -> Iter tIn m a
 --
 -- In fact, given an @Inum@ object @inum@, it is possible to
 -- construct a function of type @Inum'@ with @(inum '..|')@.  But
@@ -1287,11 +1277,11 @@ resultI = wrapI fixdone
 --
 -- @Inum@s are generally constructed with the 'mkInum' function, which
 -- hides most of the error handling details.
-type Inum tOut tIn m a = Iter tIn m a -> InumR tOut tIn m a
+type Inum tIn tOut m a = Iter tOut m a -> InumR tIn tOut m a
 
 -- | The result of running an 'Inum' is an 'Iter' containing another
 -- 'Iter'.
-type InumR tOut tIn m a = Iter tOut m (Iter tIn m a)
+type InumR tIn tOut m a = Iter tIn m (Iter tOut m a)
 
 -- | An @Onum t m a@ is an outer enumerator that gets data of type
 -- @t@ by executing actions in monad @m@, then feeds the data in
@@ -1364,18 +1354,18 @@ infixr 2 |$
 -- >     where
 -- >       iter = liftIO (enumPure "test2" |$ fail "error")
 -- >       handler (SomeException _) _ = return "caught error"
-(.|$) :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-         Onum tIn m a -> Iter tIn m a -> Iter tOut m a
+(.|$) :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+         Onum tOut m a -> Iter tOut m a -> Iter tIn m a
 (.|$) enum iter = runI $ enum ..| iter
 infixr 2 .|$
 
 -- | Concatenate two enumerators.  Has fixity:
 --
 -- > infixr 3 `cat`
-cat :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-        Inum tOut tIn m a      -- ^
-     -> Inum tOut tIn m a
-     -> Inum tOut tIn m a
+cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+        Inum tIn tOut m a      -- ^
+     -> Inum tIn tOut m a
+     -> Inum tIn tOut m a
 cat a b iter0 = do
   iter <- resultI $ a iter0
   if isIterError iter then iter else iter >>= b
@@ -1383,27 +1373,27 @@ infixr 3 `cat`
 
 -- | Fuse two 'Inum's when the inner type of the first 'Inum' is the
 -- same as the outer type of the second.  More specifically, if
--- @inum1@ transcodes type @tOut@ to @tMid@ and @inum2@ transcodes
--- @tMid@ to @tIn@, then @inum1 |.. inum2@ produces a new 'Inum' that
--- transcodes @tOut@ to @tIn@.  Has fixity:
+-- @inum1@ transcodes type @tIn@ to @tMid@ and @inum2@ transcodes
+-- @tMid@ to @tOut@, then @inum1 |.. inum2@ produces a new 'Inum' that
+-- transcodes @tIn@ to @tOut@.  Has fixity:
 --
 -- > infixl 4 |..
-(|..) :: (ChunkData tOut, ChunkData tMid, ChunkData tIn, Monad m) => 
-         Inum tOut tMid m (Iter tIn m a) -- ^
-      -> Inum tMid tIn m a
-      -> Inum tOut tIn m a
+(|..) :: (ChunkData tIn, ChunkData tMid, ChunkData tOut, Monad m) => 
+         Inum tIn tMid m (Iter tOut m a) -- ^
+      -> Inum tMid tOut m a
+      -> Inum tIn tOut m a
 (|..) outer inner iter = wrapI joinI (outer $ inner iter)
 infixl 4 |..
 
--- | Fuse an 'Inum' that transcodes @tOut@ to @tIn@ with an 'Iter'
--- taking type @tIn@ to produce an 'Iter' taking type @tOut@.  Has
+-- | Fuse an 'Inum' that transcodes @tIn@ to @tOut@ with an 'Iter'
+-- taking type @tOut@ to produce an 'Iter' taking type @tIn@.  Has
 -- fixity:
 --
 -- > infixr 4 ..|
-(..|) :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-         Inum tOut tIn m a     -- ^
-      -> Iter tIn m a
+(..|) :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+         Inum tIn tOut m a     -- ^
       -> Iter tOut m a
+      -> Iter tIn m a
 (..|) inner iter = wrapI joinI (inner iter)
 infixr 4 ..|
 
@@ -1440,24 +1430,24 @@ iterToCodec iter = codec
 
 -- | A variant of 'inumBracket' that also takes a 'CtlHandler' (as a
 -- function of the input).
-inumCBracket :: (Monad m, ChunkData tOut, ChunkData tIn) =>
-                (Iter tOut m b)
+inumCBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
+                (Iter tIn m b)
              -- ^ Before action
-             -> (b -> Iter tOut m c)
+             -> (b -> Iter tIn m c)
              -- ^ After action, as a function of before action result
-             -> (b -> CtlHandler tIn m a)
+             -> (b -> CtlHandler tOut m a)
              -- ^ Control request handler, as funciton of before action result
-             -> (b -> (Codec tOut m tIn))
+             -> (b -> (Codec tIn m tOut))
              -- ^ Input 'Codec', as a funciton of before aciton result
-             -> Inum tOut tIn m a
+             -> Inum tIn tOut m a
 inumCBracket before after cf codec iter0 = tryI before >>= checkBefore
     where
       checkBefore (Left (e, _)) = InumFail e iter0
       checkBefore (Right b)     = resultI (mkInumC (cf b) (codec b) iter0)
                                   >>= checkMain b
-      checkMain b iter = tryI (after b) >>= checkAfter (popI iter)
-      checkAfter iter (Left (e,_)) | not (isIterError iter) = InumFail e iter
-      checkAfter iter _                                     = return iter
+      checkMain b iter = tryI (after b) >>= checkAfter iter
+      checkAfter iter (Left (e,_)) = iter `bindFail` InumFail e
+      checkAfter iter _            = iter
 
 -- | Build an 'Inum' from a @before@ action, an @after@ function, and
 -- an @input@ 'Codec' in a manner analogous to the IO @'bracket'@
@@ -1479,14 +1469,14 @@ inumCBracket before after cf codec iter0 = tryI before >>= checkBefore
 -- is best to call 'hWaitForInput' followed by 'L.hGetNonBlocking'
 -- rather than simply 'L.hGet'.  This is a common idiom in enumerators
 -- that use 'Handle's.)
-inumBracket :: (Monad m, ChunkData tOut, ChunkData tIn) =>
-               (Iter tOut m b)
+inumBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
+               (Iter tIn m b)
             -- ^ Before action
-            -> (b -> Iter tOut m c)
+            -> (b -> Iter tIn m c)
             -- ^ After action, as a function of before action result
-            -> (b -> (Codec tOut m tIn))
+            -> (b -> (Codec tIn m tOut))
             -- ^ Input 'Codec', as a funciton of before aciton result
-            -> Inum tOut tIn m a
+            -> Inum tIn tOut m a
 inumBracket before after codec iter0 =
     inumCBracket before after (const noCtls) codec iter0
 
@@ -1513,12 +1503,12 @@ fixEOF iter0 = fok iter0
 -- fails, so as to facilitate cleanup.  However, if a containing
 -- 'Inum' fails, code handling that failure will have to send an EOF
 -- or the codec will not be able to clean up.
-mkInumC :: (Monad m, ChunkData tOut, ChunkData tIn) =>
-           CtlHandler tIn m a
+mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
+           CtlHandler tOut m a
         -- ^ Control request handler
-        -> Codec tOut m tIn
+        -> Codec tIn m tOut
         -- ^ Codec to be invoked to produce transcoded chunks.
-        -> Inum tOut tIn m a
+        -> Inum tIn tOut m a
 mkInumC cf codec0 iter0 = fixEOF $ process codec0 iter0
     where
       process codec iter@(IterF _) = tryCodec codec iter process
@@ -1542,19 +1532,19 @@ mkInumC cf codec0 iter0 = fixEOF $ process codec0 iter0
 -- innner 'Iter' through to enclosing enumerators.  (If you want to
 -- reject all control requests, use @'mkInumC' 'noCtls'@ instead of
 -- @mkInum@.)
-mkInum :: (Monad m, ChunkData tOut, ChunkData tIn) =>
-          Codec tOut m tIn
+mkInum :: (Monad m, ChunkData tIn, ChunkData tOut) =>
+          Codec tIn m tOut
        -- ^ Codec to be invoked to produce transcoded chunks.
-       -> Inum tOut tIn m a
+       -> Inum tIn tOut m a
 mkInum = mkInumC IterC
 
 -- | A variant of 'mkInum' that transcodes data using a stateless
 -- translation 'Iter' instead of a 'Codec'
-mkInum' :: (Monad m, ChunkData tOut, ChunkData tIn) =>
-           Iter tOut m tIn
+mkInum' :: (Monad m, ChunkData tIn, ChunkData tOut) =>
+           Iter tIn m tOut
         -- ^ This Iteratee will be executed repeatedly to produce
         -- transcoded chunks.
-        -> Inum tOut tIn m a
+        -> Inum tIn tOut m a
 mkInum' fn iter = mkInum (iterToCodec fn) iter
 
 --
@@ -1706,8 +1696,8 @@ inumNop = mkInum' dataI
 
 -- | Repeat an 'Inum' until an end of file is received or a failure
 -- occurs.
-inumRepeat :: (ChunkData tOut, MonadIO m, Show tIn) =>
-              (Inum tOut tIn m a) -> (Inum tOut tIn m a)
+inumRepeat :: (ChunkData tIn, MonadIO m, Show tOut) =>
+              (Inum tIn tOut m a) -> (Inum tIn tOut m a)
 inumRepeat inum iter0 = do
   eof <- atEOFI
   if eof then return iter0 else resultI (inum iter0) >>= check
