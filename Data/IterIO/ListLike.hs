@@ -238,7 +238,7 @@ fileCtl h = ctlHandler
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> Onum [t] m a
-enumDgram sock = enumO $ iterToCodec $ do
+enumDgram sock = mkOnum $ iterToCodec $ do
   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgram" else return [msg]
 
@@ -248,7 +248,7 @@ enumDgram sock = enumO $ iterToCodec $ do
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> Onum [(t, SockAddr)] m a
-enumDgramFrom sock = enumO $ iterToCodec $ do
+enumDgramFrom sock = mkOnum $ iterToCodec $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgramFrom" else return [(msg, addr)]
 
@@ -274,7 +274,7 @@ enumHandle h iter = do
 enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
                  -> Onum t m a
-enumNonBinHandle h = enumCO (fileCtl h) $ iterToCodec $ do
+enumNonBinHandle h = mkInumC (fileCtl h) $ iterToCodec $ do
   _ <- liftIO $ hWaitForInput h (-1)
   buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
   if null buf then throwEOFI "enumHandle" else return buf
@@ -293,7 +293,7 @@ enumFile' = enumFile
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
              FilePath
           -> Onum t m a
-enumFile path = enumCObracket (liftIO $ openBinaryFile path ReadMode)
+enumFile path = inumCBracket (liftIO $ openBinaryFile path ReadMode)
                 (liftIO . hClose) fileCtl codec
     where
       codec h = do
@@ -325,7 +325,7 @@ inumLog path trunc iter = do
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle
          -> Inum t t m a
-inumhLog h = enumI $ iterToCodec $ do
+inumhLog h = mkInum $ iterToCodec $ do
                Chunk buf eof <- chunkI
                liftIO $ do
                  unless (null buf) $ LL.hPutStr h buf `onException` hClose h

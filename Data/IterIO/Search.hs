@@ -13,7 +13,7 @@ import Data.IterIO
 inumStopString :: (Monad m) =>
                   L8.ByteString
                -> Inum L8.ByteString L8.ByteString m a
-inumStopString pat0 = enumI $ nextChunk L8.empty
+inumStopString pat0 = mkInum $ nextChunk L8.empty
     where
       spat = Search.strictify pat0
       lpat = L8.fromChunks [spat]

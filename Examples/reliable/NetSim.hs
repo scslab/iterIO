@@ -35,13 +35,13 @@ rndIntI bound = do
 
 
 dropper :: Float -> NetSim a
-dropper dropProb = enumI' $ do
+dropper dropProb = mkInum' $ do
   packet <- headI
   dropit <- rndBoolI dropProb
   return $ if dropit then [] else [packet]
 
 reorderer :: Float -> NetSim a
-reorderer prob = enumI $ headI >>= oldOrNew
+reorderer prob = mkInum $ headI >>= oldOrNew
   where
     oldOrNew old = do
       new <- headI
@@ -51,13 +51,13 @@ reorderer prob = enumI $ headI >>= oldOrNew
                else CodecF (oldOrNew old) [new]
 
 duplicater :: Float -> NetSim a
-duplicater dupProb = enumI' $ do
+duplicater dupProb = mkInum' $ do
   packet <- headI
   dupit <- rndBoolI dupProb
   return $ (packet:if dupit then [packet] else [])
 
 badlength :: Float -> NetSim a
-badlength prob = enumI' $ do
+badlength prob = mkInum' $ do
   pkt <- headI
   doit <- rndBoolI prob
   return [if doit then corrupt pkt else pkt]
@@ -67,7 +67,7 @@ badlength prob = enumI' $ do
                                  (L.drop 1 pkt)
 
 garbage :: Float -> NetSim a
-garbage prob = enumI' $ do
+garbage prob = mkInum' $ do
   pkt <- headI
   doit <- rndBoolI prob
   if doit
@@ -77,7 +77,7 @@ garbage prob = enumI' $ do
     else return [pkt]
 
 corrupter :: Float -> NetSim a
-corrupter prob = enumI' $ do
+corrupter prob = mkInum' $ do
   pkt <- headI
   doit <- rndBoolI prob
   pkt' <- (if doit then corrupt else return) pkt
@@ -93,7 +93,7 @@ corrupter prob = enumI' $ do
                         return $ L.append a $ L.cons rb c
         
 truncater :: Float -> NetSim a
-truncater prob = enumI' $ do
+truncater prob = mkInum' $ do
   pkt <- headI
   doit <- rndBoolI prob
   return [if doit then L.init pkt else pkt]
@@ -109,7 +109,7 @@ leqtime (TOD as aps) (TOD bs bps) =
     as < bs || as == bs && aps <= bps
 
 excessive :: NetSim a
-excessive = enumI $ doit [] Nothing
+excessive = mkInum $ doit [] Nothing
     where
       holdtime = do to <- lift $ asks tcTimeout
                     let ms = to `div` 2

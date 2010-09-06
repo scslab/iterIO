@@ -188,7 +188,7 @@ time, let's first build an 'Inum' to separate input into lines:
     -- works most conveniently with regular expressions.  (Otherwise,
     -- we would prefer lazy ByteStrings.)
     inumToLines :: (Monad m) => 'Inum' S.ByteString [S.ByteString] m a
-    inumToLines = 'enumI'' $ do
+    inumToLines = 'mkInum'' $ do
                     line <- 'lineI'
                     return [line]
 @
@@ -212,16 +212,16 @@ which is unfortunately the opposite of \"output type\" and \"input
 type\".)
 
 
-Inner-enumerators are generally constructed using either 'enumI' or
-`enumI'`, and by convention most 'Inum' functions have names starting
-\"@inum@...\".  'enumI'' takes an argument of type @Iter t1 m t2@ that
+Inner-enumerators are generally constructed using either 'mkInum' or
+`mkInum'`, and by convention most 'Inum' functions have names starting
+\"@inum@...\".  'mkInum'' takes an argument of type @Iter t1 m t2@ that
 transcodes type @t1@ to type @t2@.  (For @inumToLines@, @t1@ is
-@S.ByteString@ and @t2@ is @[S.ByteString]@).  'enumI' is like
-`enumI'`, but the transcoding function is of type @'CodeC' t1 m t2@,
+@S.ByteString@ and @t2@ is @[S.ByteString]@).  'mkInum' is like
+`mkInum'`, but the transcoding function is of type @'CodeC' t1 m t2@,
 which is designed to allow the transcoder to keep state from one
 invocation to the next (unlike @'Iter' t1 m t2@), as well as to signal
 EOF explicitly.  In @inumToLines@, we do not need to keep state and
-are happy just to let 'lineI' throw an exception on EOF.  `enumI'`
+are happy just to let 'lineI' throw an exception on EOF.  `mkInum'`
 will catch the EOF exception and do the right thing.
 
 We similarly define an 'Inum' to filter out lines not matching a
@@ -233,7 +233,7 @@ and a simple 'Inum' to count list elements (since @lineCountI ::
 
 @
     inumGrep :: (Monad m) => String -> 'Inum' [S.ByteString] [S.ByteString] m a
-    inumGrep re = `enumI'` $ do
+    inumGrep re = `mkInum'` $ do
       line <- 'headI'
       return $ if line =~ packedRe then [line] else []
         where

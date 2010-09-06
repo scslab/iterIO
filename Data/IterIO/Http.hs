@@ -390,7 +390,7 @@ httpreqI = do
 
 -- | HTTP Chunk encoder
 inumToChunks :: (Monad m) => Inum L L m a
-inumToChunks = enumI $ iterToCodec doChunk
+inumToChunks = mkInum $ iterToCodec doChunk
     where
       doChunk = do
         Chunk s eof <- chunkI
@@ -403,7 +403,7 @@ inumToChunks = enumI $ iterToCodec doChunk
 
 -- | HTTP Chunk decoder
 inumFromChunks :: (Monad m) => Inum L L m a
-inumFromChunks = enumI getsize
+inumFromChunks = mkInum getsize
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
       chunk_ext_val = do char '"'; osp; token <|> quoted_string; osp
