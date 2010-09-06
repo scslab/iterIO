@@ -36,7 +36,7 @@ enumFileCatchError :: (MonadIO m) => FilePath -> Onum L.ByteString m a
 enumFileCatchError file = enumFile file `enumCatch` enumCatchIO
     where
       enumCatchIO :: (ChunkData t, MonadIO m) =>
-                     IOError -> Iter t m a -> Iter t m a
+                     IOError -> OnumR t m a -> OnumR t m a
       enumCatchIO _ = verboseResumeI
       -- enumCatchIO e = flip const (e :: IOError) verboseResumeI
 
