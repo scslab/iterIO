@@ -1335,7 +1335,7 @@ type Codec tIn m tOut = Iter tIn m (CodecR tIn m tOut)
 -- potentially includes a new 'Codec' for translating subsequent
 -- input.
 data CodecR tIn m tOut = CodecF { unCodecF :: !(Codec tIn m tOut)
-                                 , unCodecR :: !tOut }
+                                , unCodecR :: !tOut }
                           -- ^ This is the normal 'Codec' result,
                           -- which includes another 'Codec' (often the
                           -- same as the one that was just called) for
@@ -1403,6 +1403,7 @@ inumBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
 inumBracket before after codec iter0 =
     inumCBracket before after (const noCtls) codec iter0
 
+{-
 -- | If an 'Iter' receives EOF, allow it to return 'IterF' and keep
 -- feeding it 'chunkEOF'.  If, however, the 'Iter' issues a successful
 -- control request, then alow it to ask for more data.
@@ -1419,6 +1420,7 @@ fixEOF iter0 = fok iter0
                                           Just _  -> fok $ fr res
       fNOTok iter | isIterActive iter = apNext fNOTok iter
                   | otherwise         = iter
+-}
 
 -- | Build an 'Inum' given a 'Codec' that returns chunks of the
 -- appropriate type and a 'CtlHandler' to handle control requests.
@@ -1432,7 +1434,7 @@ mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
         -> Codec tIn m tOut
         -- ^ Codec to be invoked to produce transcoded chunks.
         -> Inum tIn tOut m a
-mkInumC cf codec0 iter0 = fixEOF $ process codec0 iter0
+mkInumC cf codec0 iter0 = process codec0 iter0
     where
       process codec iter@(IterF _) = tryCodec codec iter process
       process codec (IterC c) = case cf c of
