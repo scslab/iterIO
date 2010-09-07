@@ -7,13 +7,15 @@
 module Data.IterIO.Extra
     ( -- * Deprecated functions
       chunkerToCodec
+    , inumSplit
       -- * Functionality missing from system libraries
     , SendRecvString(..)
     , hShutdown
     ) where
 
+import Control.Concurrent.MVar
 import Control.Monad
--- import Control.Monad.Trans
+import Control.Monad.Trans
 import Foreign.C
 import Foreign.Ptr
 import qualified Data.ByteString as S
@@ -54,6 +56,23 @@ chunkerToCodec iter = do
   if eof
    then return $ CodecE d
    else return $ CodecF (chunkerToCodec iter) d
+
+-- | Returns an 'Iter' that always returns itself until a result is
+-- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
+-- 'Iter' that can safely be fed (e.g., with @'returnI' $ 'feedI' iter
+-- $ 'chunk' input@) from multiple threads.
+inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
+inumSplit iter1 = do
+  mv <- liftIO $ newMVar $ iter1
+  IterF $ iterf mv
+    where
+      iterf mv (Chunk t eof) = do
+        rold <- liftIO $ takeMVar mv
+        rnew <- returnI $ feedI rold $ chunk t
+        liftIO $ putMVar mv rnew
+        case rnew of
+          IterF _ | not eof -> IterF $ iterf mv
+          _                 -> return rnew
 
 --
 -- Some utility functions for things that are made hard by the Haskell

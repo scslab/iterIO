@@ -81,11 +81,11 @@ module Data.IterIO.Base
     -- * Some basic Iters
     , nullI, dataI, chunkI, peekI, atEOFI
     -- * Low-level Iter-manipulation functions
-    , wrapI, runI, runCI, joinI, returnI, resultI
+    , wrapI, runI, joinI, returnI, resultI
     -- * Some basic Enums
     , enumPure
     , iterLoop
-    , inumNop, inumRepeat, inumSplit
+    , inumNop, inumRepeat
     -- * Control functions
     , CtlCmd, CtlReq(..), CtlHandler
     , ctlI, safeCtlI
@@ -1105,16 +1105,6 @@ runI (InumFail e i)        = InumFail e i
 runI (IterC (CtlReq _ fr)) = runI $ fr Nothing
 runI iter                  = apRun runI iter
 
--- | Like 'runI', but allows the 'Iter' to continue issuing control
--- requests.
-runCI :: (ChunkData t1, ChunkData t2, Monad m) =>
-         Iter t1 m a
-      -> Iter t2 m a
-runCI (Done a _)            = return a
-runCI (IterFail e)          = IterFail e
-runCI (InumFail e i)        = InumFail e i
-runCI iter                  = apRun runCI iter
-
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The
 -- behavior of @joinI@ is similar to what one would obtain by defining
 -- @joinI iter = iter >>= 'runI'@, but with more precise error
@@ -1297,9 +1287,7 @@ cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-cat a b iter0 = do
-  iter <- resultI $ a iter0
-  if isIterError iter then iter else iter >>= b
+cat a b iter = a iter `bindFail` b
 infixr 3 `cat`
 
 -- | Fuse two 'Inum's when the inner type of the first 'Inum' is the
@@ -1636,22 +1624,3 @@ inumRepeat inum iter0 = do
     where
       check (Done iter (Chunk _ False)) = inumRepeat inum iter
       check res                         = res
-
--- | Returns an 'Iter' that always returns itself until a result is
--- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
--- 'Iter' that can safely be fed (e.g., with @'returnI' $ 'feedI' iter
--- $ 'chunk' input@) from multiple threads.
-inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
-inumSplit iter1 = do
-  mv <- liftIO $ newMVar $ iter1
-  IterF $ iterf mv
-    where
-      iterf mv (Chunk t eof) = do
-        rold <- liftIO $ takeMVar mv
-        rnew <- returnI $ feedI rold $ chunk t
-        liftIO $ putMVar mv rnew
-        case rnew of
-          IterF _ | not eof -> IterF $ iterf mv
-          _                 -> return rnew
-
-
