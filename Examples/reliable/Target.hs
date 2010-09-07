@@ -28,7 +28,6 @@ import Text.Printf
 import Data.IterIO
 -- import Data.IterIO.Extra
 import Data.IterIO.Base (run)
-import Data.IterIO.Extra (feed)
 
 import Arc4
 import TM
@@ -407,11 +406,12 @@ pingPong ut a b = do
         line <- lineI
         case reads $ L8.unpack line of
           (n, []):_ | n == expect && n == 1 ->
-               do _ <- lift $ feed (L8.pack "0\n") iter
+               do _ <- returnI $ feedI iter $ chunk  (L8.pack "0\n")
                   return True
           (n, []):_ | n == expect && n == 0 -> return True
           (n, []):_ | n == expect ->
-               do r <- lift $ feed (L8.pack $ (show $ n - 1) ++ "\n") iter
+               do r <- returnI $ feedI iter $
+                       chunk (L8.pack $ (show $ n - 1) ++ "\n")
                   minusOne (expect - 2) $ r
           _ -> return False
 

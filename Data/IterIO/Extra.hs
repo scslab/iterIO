@@ -6,7 +6,7 @@
 -- functionality that are missing from the standard Haskell libraries.
 module Data.IterIO.Extra
     ( -- * Deprecated functions
-      chunkerToCodec, feed
+      chunkerToCodec
       -- * Functionality missing from system libraries
     , SendRecvString(..)
     , hShutdown
@@ -54,16 +54,6 @@ chunkerToCodec iter = do
   if eof
    then return $ CodecE d
    else return $ CodecF (chunkerToCodec iter) d
-
--- | Feed pure data directly to an 'Iter', execute any resulting
--- monadic actions (and reject any control requests made by the
--- 'Iter').
-feed :: (Monad m, ChunkData t) => t -> Iter t m a -> m (Iter t m a)
-feed t iter = rerun $ feedI iter (chunk t)
-    where
-      rerun (IterM m)             = m >>= rerun
-      rerun (IterC (CtlReq _ fr)) = rerun $ fr Nothing
-      rerun iter'                 = return iter'
 
 --
 -- Some utility functions for things that are made hard by the Haskell

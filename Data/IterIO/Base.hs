@@ -34,12 +34,12 @@
      while the 'Codec' simply transforms data.
 
      An important special kind of 'Inum' is an /outer enumerator/,
-     which is just an 'Inum' with the void input type @'()'@.  Outer
+     which is just an 'Inum' with the void input type @()@.  Outer
      enumerators are sources of data.  Rather than transcode input
      data, they produce data from monadic actions (or from pure data
      in the case of 'enumPure').  The type 'Onum' represents outer
      enumerators and is a synonym for 'Inum' with an input type of
-     @'()'@.
+     @()@.
 
      To execute iteratee-based IO, you must apply an 'Onum' to an
      'Iter' with the '|$' (\"pipe apply\") binary operator.
@@ -66,7 +66,7 @@ module Data.IterIO.Base
     , (|$), (.|$)
     , cat
     , (|..), (..|)
-    -- * Enum construction functions
+    -- * Enumerator construction functions
     , Codec, CodecR(..)
     , iterToCodec
     , mkInumC, mkInum, mkInum'
@@ -1091,7 +1091,8 @@ bindFail iter0 next = do
 -- EOF if it is in the 'IterF' state) so as to extract a return value.
 -- The return value is lifted into the invoking 'Iter' monad.  If the
 -- 'Iter' being run fails, then @runI@ will propagate the failure by
--- also failing in the enclosing monad.
+-- also failing in the enclosing 'Iter' monad.  'runI' rejects any
+-- control requests from the 'Iter' being run.
 runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
@@ -1107,13 +1108,13 @@ runI iter                  = apRun runI iter
 -- @joinI iter = iter >>= 'runI'@, but with more precise error
 -- handling.  Specifically, with @iter >>= 'runI'@, the @'>>='@
 -- operator for 'Iter' translates enumerator failures ('InumFail')
--- into an iteratee failures ('IterFail'), discarding the state of the
+-- into iteratee failures ('IterFail'), discarding the state of the
 -- 'Iter' even when the failure occured in an 'Inum'.  By contrast,
 -- @joinI@ preserves enumerator failures, allowing the state of the
 -- non-failed 'Iter' to be resumed by 'resumeI'.  (The fusing
 -- operators '|..' and '..|' use @joinI@ internally, and it is this
--- error preserving property that allos 'inumCatch' and 'resumeI' to
--- work properly.)
+-- error preserving property that allows 'inumCatch' and 'resumeI' to
+-- work properly around fused 'Inum's.)
 joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
          InumR tIn tOut m a
       -> Iter tIn m a
@@ -1141,7 +1142,7 @@ returnI iter           = return iter
 
 -- | @resultI@ is like a version of 'returnI' that additionally
 -- ensures the returned 'Iter' is not in the 'IterF' state.  Moreover,
--- if the returned 'Iter' is in the 'Done' state, then the left over
+-- if the returned 'Iter' is in the 'Done' state, then the left-over
 -- data will be pulled up to the enclosing 'Iter', so that the
 -- returned 'Iter' always has 'mempty' data.  (The EOF flag in the
 -- left-over 'Chunk' is preserved, however.)
@@ -1162,55 +1163,52 @@ resultI = wrapI fixdone
 --type Inum tIn tOut m a = 'Iter' tOut m a -> 'Iter' tIn m ('Iter' tOut m a)
 -- @
 --
--- The most general enumerator type, which can transcode from some
--- outer type to some inner type.  Such a function accepts data from
--- an outer enumerator (acting as an 'Iter'), then transcodes the data
--- and feeds it to another Iter (hence also acting like an enumerator
--- towards that inner 'Iter').  Note that data is viewed as flowing
--- inwards from the outermost enumerator to the innermost iteratee.
--- Thus @tIn@, the \"outer type\", is actually the type of input fed
--- to an @Inum@, while @tOut@ is what the @Inum@ feeds to an iteratee.
+-- The type of an /iterator-enumerator/, which transcodes data from
+-- some input type @tIn@ to some output type @tOut@.  An @Inum@ acts
+-- as an 'Iter' when consuming data, then acts as an enumerator when
+-- feeding transcoded data to another 'Iter'.
 --
--- @Inum@ is a function from 'Iter's to 'Iter's, where an @Inum@'s
--- input and output types are different.  A simpler alternative to
--- @Inum@ might have been:
+-- At a high level, one can think of an @Inum@ as a function from
+-- 'Iter's to 'Iter's, where an @Inum@'s input and output types are
+-- different.  A simpler alternative to @Inum@ might have been:
 --
 -- >type Inum' tIn tOut m a = Iter tOut m a -> Iter tIn m a
 --
--- In fact, given an @Inum@ object @inum@, it is possible to
--- construct a function of type @Inum'@ with @(inum '..|')@.  But
--- sometimes one might like to concatenate @Inum@s.  For instance,
--- consider a network protocol that changes encryption or compression
--- modes midstream.  Transcoding is done by @Inum@s.  To change
--- transcoding methods after applying an @Inum@ to an iteratee
--- requires the ability to \"pop\" the iteratee back out of the
--- @Inum@ so as to be able to hand it to another @Inum@.
+-- In fact, given an @Inum@ object @inum@, it is possible to construct
+-- a function of type @Inum'@ with @(inum '..|')@.  But sometimes one
+-- might like to concatenate @Inum@s.  For instance, consider a
+-- network protocol that changes encryption or compression modes
+-- midstream.  Transcoding is done by @Inum@s.  To change transcoding
+-- methods after applying an @Inum@ to an iteratee requires the
+-- ability to \"pop\" the iteratee back out of the @Inum@ so as to be
+-- able to hand it to another @Inum@.  `Inum`'s return type allows the
+-- monadic bind operator '>>=' to accomplish this popping.
 --
 -- An @Inum@ must never feed an EOF chunk to its iteratee.  Instead,
 -- upon receiving EOF, the @Inum@ should simply return the state of
 -- the inner 'Iter' (this is how \"popping\" the iteratee back out
 -- works).  An @Inum@ should also return when the iteratee returns a
--- result or fails, or when the @Inum@ fails.  An @Inum@ may return
--- the state of the iteratee earlier, if it has reached some logical
--- message boundary (e.g., many protocols finish processing headers
--- upon reading a blank line).
+-- result or fails, or when the @Inum@ itself fails.  An @Inum@ may
+-- return the state of the iteratee earlier, if it has reached some
+-- logical message boundary (e.g., many protocols finish processing
+-- headers upon reading a blank line).
 --
 -- @Inum@s are generally constructed with the 'mkInum' function, which
--- hides most of the error handling details.
+-- hides most of the error handling details.  Most @Inum@s are
+-- polymorphic in the last type, @a@, so as work with iteratees
+-- returning any type.
 type Inum tIn tOut m a = Iter tOut m a -> InumR tIn tOut m a
 
 -- | The result of running an 'Inum' is an 'Iter' containing another
 -- 'Iter'.
 type InumR tIn tOut m a = Iter tIn m (Iter tOut m a)
 
--- | An @Onum t m a@ is an outer enumerator that gets data of type
--- @t@ by executing actions in monad @m@, then feeds the data in
--- chunks to an iteratee of type @'Iter' t m a@.  Most enumerators are
--- polymorphic in the last type, @a@, so as work with iteratees
--- returning any type.
---
--- An @Onum@ is just a special form of 'Inum' in which the outer type
--- is @()@--so that there is no meaningful input data.
+-- | An @Onum t m a@ is just an 'Inum' in which the input is
+-- @()@--i.e., @'Inum' () t m a@--so that there is no meaningful input
+-- data to transcode.  Such an enumerator is called an
+-- /outer enumerator/, because it must produce the data it feeds to
+-- 'Iter's by either executing actions in monad @m@, for from its own
+-- internal pure state (as for 'enumPure').
 --
 -- Under no circumstances should an @Onum@ ever feed a chunk with the
 -- EOF bit set to its 'Iter' argument.  When the @Onum@ runs out of
@@ -1219,8 +1217,9 @@ type InumR tIn tOut m a = Iter tIn m (Iter tOut m a)
 -- as happens when enumerators are concatenated with the 'cat'
 -- function.
 --
--- @Onum@s should generally be constructed using the 'mkOnum'
--- function, which takes care of most of the error-handling details.
+-- @Onum@s should generally be constructed using the 'mkInum'
+-- function, just like 'Inum's, the only difference being that for an
+-- @Onum@ the input type of the 'Codec' must be @()@.
 type Onum t m a = Inum () t m a
 
 -- | The result of running an 'Onum'.
@@ -1236,7 +1235,7 @@ type OnumR t m a = InumR () t m a
 (|$) enum iter = run (enum ..| iter)
 infixr 2 |$
 
--- | @.|$@ is a variant of '|$' than allows you to apply an 'Onum'
+-- | @.|$@ is a variant of '|$' that allows you to apply an 'Onum'
 -- from within an 'Iter' monad.  It has fixity:
 --
 -- > infixr 2 .|$
@@ -1268,7 +1267,7 @@ infixr 2 |$
 -- > 
 -- > -- Catches the exception, because liftIO uses the IO catch function to
 -- > -- turn language-level exceptions into Monadic Iter failures.  (By
--- > -- contrast, lift must work for all Monads so cannot this in apply2.)
+-- > -- contrast, lift works for any Monad so cannot do this in apply2.)
 -- > apply3 :: IO String
 -- > apply3 = enumPure "test1" |$ iter `catchI` handler
 -- >     where
@@ -1279,7 +1278,7 @@ infixr 2 |$
 (.|$) enum iter = runI $ enum ..| iter
 infixr 2 .|$
 
--- | Concatenate two enumerators.  Has fixity:
+-- | Concatenate the outputs of two enumerators.  Has fixity:
 --
 -- > infixr 3 `cat`
 cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
@@ -1318,7 +1317,7 @@ infixl 4 |..
 infixr 4 ..|
 
 -- | A @Codec@ is an 'Iter' that tranlates data from some input type
--- @tArg@ to an output type @tRes@ and returns the result in a
+-- @tIn@ to an output type @tOut@ and returns the result in a
 -- 'CodecR'.  If the @Codec@ is capable of repeatedly being invoked to
 -- translate more input, it returns a 'CodecR' in the 'CodecF' state.
 -- This convention allows @Codec@s to maintain state from one
@@ -1326,18 +1325,19 @@ infixr 4 ..|
 -- function for the next time it is invoked.  A @Codec@ that cannot
 -- process more input returns a 'CodecR' in the 'CodecE' state,
 -- possibly including some final output.
-type Codec tArg m tRes = Iter tArg m (CodecR tArg m tRes)
+type Codec tIn m tOut = Iter tIn m (CodecR tIn m tOut)
 
--- | The result type of a 'Codec' that translates from type @tArg@ to
--- @tRes@ in monad @m@.  The result potentially includes a new 'Codec'
--- for translating subsequent input.
-data CodecR tArg m tRes = CodecF { unCodecF :: !(Codec tArg m tRes)
-                                 , unCodecR :: !tRes }
+-- | The result type of a 'Codec' that translates from type @tIn@ to
+-- @tOut@ by executing in monad @'Iter' tIn m@.  The result
+-- potentially includes a new 'Codec' for translating subsequent
+-- input.
+data CodecR tIn m tOut = CodecF { unCodecF :: !(Codec tIn m tOut)
+                                 , unCodecR :: !tOut }
                           -- ^ This is the normal 'Codec' result,
                           -- which includes another 'Codec' (often the
                           -- same as the one that was just called) for
                           -- processing further input.
-                        | CodecE { unCodecR :: !tRes }
+                        | CodecE { unCodecR :: !tOut }
                           -- ^ This constructor is used if the 'Codec'
                           -- is ending--i.e., returning for the last
                           -- time--and thus cannot provide another
@@ -1626,7 +1626,8 @@ inumRepeat inum iter0 = do
 
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
--- 'Iter' that can safely be written from multiple threads.
+-- 'Iter' that can safely be fed (e.g., with @'returnI' $ 'feedI' iter
+-- $ 'chunk' input@) from multiple threads.
 inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
 inumSplit iter1 = do
   mv <- liftIO $ newMVar $ iter1
