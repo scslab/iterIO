@@ -68,7 +68,7 @@ contents of a file to standard output:
 'enumFile'' is like 'enumFile' above, but type restricted to data in
 the lazy 'ByteString' format, which is more efficient than plain
 'String's.  ('enumFile' supports multiple types, but in this example
-there is not enough enformation for Haskell to choose one of them, so
+there is not enough information for Haskell to choose one of them, so
 we must use 'enumfile'' or use @::@ to specify a type explicitly.)
 Once again, '|$' is used to execute the IO actions, but, this time,
 the return value is just @()@; the interesting action lies in the side
@@ -121,12 +121,12 @@ easier to read and write.
 
 That explains the iteratee type 'Iter'.  The enumerator type, 'Onum',
 has the same three type arguments.  Thus, the type of 'enumFile' as
-instantiated in the above examples is
-@'enumFile' :: 'Onum' String IO a@.  Most 'Onum' types are
-polymorphic in the last argument, so as to be able to return whatever
-type the iteratee is returning.  (In fact, 'enumFile' is polymorphic
-in the first two arguments, too, so as to work with multiple
-String-like types and any monad in the @'MonadIO'@ class.)
+instantiated in the above examples is @'enumFile' :: 'Onum' String IO
+a@.  Most 'Onum' types are polymorphic in the last argument, so as to
+be able to return whatever type the 'Iter' is returning.  (In fact,
+'enumFile' is polymorphic in the first two arguments, too, so as to
+work with multiple String-like types and any monad in the @'MonadIO'@
+class.)
 
 Here is an example of an 'Iter' with side effects:
 
@@ -173,10 +173,11 @@ condition.  ('lineI' throws an exception on EOF.)
 
 What about the @grep@ command?  @grep@ sits in the middle of a
 pipeline, so it acts both as a data sink and as a data source.  In the
-iteratee world, we call such a pipeline stage an /inner enumerator/, or
-'Inum'.  Before defining our @grep@ equivalent, since multiple
-pipeline stages are going to be considering the file one line at a
-time, let's first build an 'Inum' to separate input into lines:
+iteratee world, we call such a pipeline stage an
+/iteratee-enumerator/, or 'Inum'.  Before defining our @grep@
+equivalent, since multiple pipeline stages are going to be considering
+the file one line at a time, let's first build an 'Inum' to separate
+input into lines:
 
 @
     import Data.ByteString as S
@@ -195,34 +196,36 @@ time, let's first build an 'Inum' to separate input into lines:
 
 'Inum' takes four type arguments, compared to only three for 'Onum'.
 That's because an 'Inum' is acting as both an iteratee and an
-enumerator, and it needn't be processing the same type of data in both
+enumerator; it needn't be processing the same type of data in both
 roles.  In the above example, when acting as an iteratee,
-@inumToLines@ sinks data of type @S.ByteString@ (the first type
+@inumToLines@ consumes data of type @S.ByteString@ (the first type
 argument), accepting one long stream of unstructured bytes.  However,
 as an enumerator, @inumToLines@ produces output of type
 @[S.ByteString]@ (the second type argument)--a /list/ of strings, one
-per line of the file.
+per line of the file.  In general the type @'Inum' tIn tOut m a@ is an
+iteratee-enumerator taking input type @tin@, producing output type
+@tOut@, and feeding the output to an iteratee of type @'Iter' tOut m
+a@.
 
-(Note that data is often viewed as flowing inwards from an outer
-enumerator, through inner enumerators, to iteratees.  Thus, inner
-enumerators often have types like @'Inum' tOut tIn m a@, where @tOut@
-is the outer data type, i.e., the input type of the inner enumerator.
-You should read @tOut@ and @tIn@ as \"outer type\" and \"inner type\",
-which is unfortunately the opposite of \"output type\" and \"input
-type\".)
+In fact, an 'Onum' is just a special kind of 'Inum' with the void
+input type @()@.  The type @'Onum' t m a@ is just a synonym for
+@'Inum' () t m a@.  Most operations on 'Inum's can be used with
+'Onum's as well, since an 'Onum' /is/ an 'Inum'.  The converse is not
+true, however.  For examply, the '|$' operator requires an 'Onum', as
+it wouldn't know what data to feed to an arbitrary 'Inum'.
 
-
-Inner-enumerators are generally constructed using either 'mkInum' or
-`mkInum'`, and by convention most 'Inum' functions have names starting
-\"@inum@...\".  'mkInum'' takes an argument of type @Iter t1 m t2@ that
-transcodes type @t1@ to type @t2@.  (For @inumToLines@, @t1@ is
-@S.ByteString@ and @t2@ is @[S.ByteString]@).  'mkInum' is like
-`mkInum'`, but the transcoding function is of type @'CodeC' t1 m t2@,
-which is designed to allow the transcoder to keep state from one
-invocation to the next (unlike @'Iter' t1 m t2@), as well as to signal
-EOF explicitly.  In @inumToLines@, we do not need to keep state and
-are happy just to let 'lineI' throw an exception on EOF.  `mkInum'`
-will catch the EOF exception and do the right thing.
+Iteratee-enumerators are generally constructed using either 'mkInum'
+or `mkInum'`, and by convention most 'Inum' functions have names
+starting \"@inum@...\".  'mkInum'' takes an argument of type @Iter tIn
+m tOut@ that consumes input of type @tIn@ to produce output of type
+@tOut@.  (For @inumToLines@, @tIn@ is @S.ByteString@ and @tOut@ is
+@[S.ByteString]@).  'mkInum' is like `mkInum'`, but the transcoding
+function is of type @'Codec' tIn m tOut@, which is designed to allow
+the transcoder to keep state from one invocation to the next (unlike
+@'Iter' tIn m tOut@), as well as to signal EOF explicitly.  In
+@inumToLines@, we do not need to keep state and are happy just to let
+'lineI' throw an exception on EOF.  `mkInum'` will catch the EOF
+exception and do the right thing.
 
 We similarly define an 'Inum' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),
@@ -258,19 +261,17 @@ two 'Onum's (because we want to look through two files), and three
 supports two types of composition for pipeline stages:
 /concatenation/ and /fusing/.
 
-Two 'Onum's of the same type can be /concatenated/ with the 'cat'
-function, producing a new data source that enumerates all of the
-data in the first 'Onum' followed by all of the data in the second.  (There
-is a similar 'catI' function for inner enumerators, though it is less
-frequently used.)
+Two 'Inum's (or 'Onum's) of the same type can be /concatenated/ with
+the 'cat' function, producing a new data source that enumerates all of
+the data in the first 'Inum' followed by all of the data in the
+second.
 
-There are three /fusing/ operators.  The '|..' operator fuses an
-'Onum' to an 'Inum', producing a new 'Onum'.  (Mnemonic: it
-produces a pipeline that is open on the right hand side, as it still
-needs to be applied to an iteratee with '|$'.)  The '..|' operator
-fuses an 'Inum' to an 'Iter', producing a new 'Iter'.  Finally, there
-is a '..|..' operator that fuses two 'Inum's into a single, new
-'Inum', composing their effects.
+There are two /fusing/ operators.  The '|..' operator fuses two
+'Inum's, provided the output type of the first is the input type of
+the second.  (Mnemonic: it produces a pipeline that is open on the
+right hand side, as it still needs to be applied to an iteratee with
+'|$'.)  The '..|' operator fuses an 'Inum' to an 'Iter', producing a
+new 'Iter'.
 
 The fusing operators bind more tightly than the infix concatenation
 functions, which in turn bind more tightly than '|$'.  (Concatenation
@@ -300,22 +301,17 @@ alternatively have been implemented as:
                  '|$' lengthI
 @
 
-The difference lies in the error handling.  The library distinguishes
-between /enumerator failures/ and /iteratee failures/, as applications
-need to handle input errors differently from output errors.  Often
-output errors are more serious than input errors.  For instance, in
-the above example, if 'enumFile' fails because one of the files does
-not exist, you might want to continue processing lines from the next
-file.  In fact, 'Onum' failures preserve the 'Iter' state so as to
-allow it to be passed off to another 'Onum'.  Conversely, if the
-iteratee @lengthI@ fails, there is not much point in continuing the
-program.
-
-As a rule of thumb, you should fuse an 'Inum' to an 'Onum' when you
-want to be able to recover from the `Inum`'s failure.  In the
-@grepCount@ example, if, for instance, a regular expression fails to
-compile, this is catastrophic for the program, which is why the first
-version fused @inumGrep@ to the @Iter@.
+In this case, the two are essentially equivalent.  However, for error
+handling purposes, one should fuse together pipeline stages in which
+errors have similar consequences.  Often an 'Inum' failure is less
+serious than an 'Iter' failure.  For example, in the above example, if
+'enumFile' fails because one of the files does not exist, we might
+want to continue processing lines from the next file.  Conversely, if
+@lengthI@ fails or one of the @inumGrep@ stages fails (possibly
+because the regular expression is illegal), there is not much point in
+continuing the program.  This is why the first example fused
+@inumGrep@ to @lengthI@, though this won't matter until we actually
+handle errors (see below).
 
 Another alternative would have been to swap the order of concatenation
 and fusing:
@@ -347,10 +343,11 @@ string in a bunch of files and prints all matching lines.  If opening
 or reading a file produces an error, the function should print the
 error message and continue on with the next file.
 
-Error handling is provided by the 'catchI', 'enumCatch' and 'throwI'
-functions, which are roughly equivalent to the standard library
-@'catch'@ and @'throwIO'@ functions.  Because @'catch'@ only works in
-the IO monad, 'catchI' and 'enumCatch' work by propagating synchronous
+Error handling is provided by the 'catchI', 'inumCatch' functions,
+which are roughly equivalent to the standard library @'catch'@
+function.  There is also a 'throwI' function analogous to @'throwIO'@
+in the standard library.  Because @'catch'@ only works in the IO
+monad, 'catchI' and 'inumCatch' work by propagating synchronous
 exceptions through the 'Iter' monad.  @'liftIO'@ transforms IO errors
 into such synchronous exceptions.  Unfortunately, there is no way to
 handle asynchronous exceptions such as those that arise in lazily
@@ -366,7 +363,7 @@ Here is the @grep@ code.  We will analyze it below.
         | null files = 'enumHandle' stdin '|..' inumToLines '|$' inumGrep re '..|' linesOutI
         | otherwise  = foldr1 'cat' (map enumLines files) '|$' inumGrep re '..|' linesOutI
         where
-          enumLines file = 'enumCatch' ('enumFile' file '|..' inumToLines) handler
+          enumLines file = 'inumCatch' ('enumFile' file '|..' inumToLines) handler
           handler :: 'IOError' -> 'Iter' [S.ByteString] IO a -> 'Iter' [S.ByteString] IO a
           handler e iter = do
             liftIO (hPutStrLn stderr $ show e)
@@ -382,13 +379,12 @@ Here is the @grep@ code.  We will analyze it below.
 There are two cases.  If the list of files to search is null, @grep@
 simply reads from standard input, in which case there is only one
 input stream and we do not care about resuming.  In the second case,
-we use @'foldr1' cat@ to concatenate a list of 'Onum's, a fairly
-common idiom.  Each 'Onum' is generated by the function @enumLines@,
-which fuses 'enumFile' to our previously defined @inumToLines@, but
-also wraps the exception handler function @handler@ around the
-enumerator using the 'enumCatch' function.
+we use @'foldr1' cat@ to concatenate a list of 'Onum's.  Each 'Onum'
+is generated by the function @enumLines@, which fuses 'enumFile' to
+our previously defined @inumToLines@, but also wraps the exception
+handler function @handler@ around the enumerator using 'inumCatch'.
 
-Note that unlike @catch@, 'enumCatch' expects an exception handler to
+Note that unlike @catch@, 'inumCatch' expects an exception handler to
 have /two/ arguments.  The first argument, @e@ in this example, is the
 exception itself.  As with @catch@, the type of @e@ determines which
 exceptions are caught, which is why we must either specify an explicit
@@ -399,11 +395,11 @@ explicitly, for instance with:
 
 The second argument to @handler@, @iter@, is the failing state, which
 contains more information than just the exception.  In the case of an
-enumerator failure, it contains the state of the iteratee (which has
-not failed).  The function 'resumeI' extracts this state and returns
-it, so that the next enumerator in a concatenated series can continue
-feeding input to the iteratee.  If, instead of resuming, you want to
-re-throw the error, it suffices to re-execute the failing iteratee to
+'Inum' failure, it contains the state of the 'Iter' (which has not
+failed).  The function 'resumeI' extracts this state and returns it,
+so that the next enumerator in a concatenated series can continue
+feeding input to the 'Iter'.  If, instead of resuming, you want to
+re-throw the error, it suffices to re-execute the failing 'Iter' to
 propagate the error.  For instance, suppose we want to continue
 executing @grep@ when a named file does not exist, but if some other
 error happens, we want to re-throw the exception to abort the whole
