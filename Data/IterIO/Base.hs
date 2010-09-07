@@ -517,6 +517,7 @@ feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
       forceEOF (IterC (CtlReq a fr)) = iterC a $ \r -> 
                                        case r of Just _  -> fr r
                                                  Nothing -> forceEOF $ fr r
+      forceEOF (Done a (Chunk t _))  = Done a (Chunk t True)
       forceEOF iter                  = iter
 feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
 feedI (Done a c) c'             = Done a (mappend c c')
