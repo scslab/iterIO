@@ -20,17 +20,18 @@
      for when it has consumed enough input to produce a result.
 
      An enumerator is a data source that feeds data chunks to an
-     iteratee.  In this library, all enumerators are also 'Iter's.
-     Hence we use the type 'Inum' (/iterator-enumerator/) to represent
-     enumerators.  An 'Inum' is an 'Iter' that can sink data of some
-     input type usually designated @tIn@.  However, the 'Inum' also
-     feeds data of some potentially different output type, @tOut@, to
-     an 'Iter'.  Thus, an 'Inum' can be viewed as transcoding data
-     from its input type @tIn@ to its output type @tOut@.
+     iteratee.  In this library, all enumerators are also iteratees.
+     We use the type 'Inum' to represent these /iteratee-enumerators/.
+     As an iteratee, an 'Inum' sinks data of some input type,
+     generally designated @tIn@.  As an enumerator, the 'Inum' feeds
+     data of a potentially different type, @tOut@, to another
+     iteratee.  Thus, the 'Inum' can be viewed as transcoding data
+     from type @tIn@ to type @tOut@ for consumption by another
+     iteratee.
 
      'Inum's are generally constructed using the function 'mkInum',
      which takes a 'Codec' that transcodes from the input to the
-     output type.  'mkInum' handles the details of error handling
+     output type.  'mkInum' deals with the details of error handling
      while the 'Codec' simply transforms data.
 
      An important special kind of 'Inum' is an /outer enumerator/,
@@ -52,9 +53,10 @@
      the '..|' operator fuses an 'Inum' to an 'Iter', yielding a new
      'Iter' with a potentially different input type.
 
-     Enumerators can also be concatenated with the 'cat' function.
-     @enum1 ``cat`` enum2@ produces an enumerator whose effect is to
-     feed first @enum1@'s data then @enum2@'s data to an 'Iter'.
+     Enumerators of the same type can also be concatenated with the
+     'cat' function.  @enum1 ``cat`` enum2@ produces an enumerator
+     whose effect is to feed first @enum1@'s data then @enum2@'s data
+     to an 'Iter'.
 
  -}
 
