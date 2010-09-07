@@ -59,7 +59,7 @@ chunkerToCodec iter = do
 -- monadic actions (and reject any control requests made by the
 -- 'Iter').
 feed :: (Monad m, ChunkData t) => t -> Iter t m a -> m (Iter t m a)
-feed t iter = rerun $ runIter iter (chunk t)
+feed t iter = rerun $ feedI iter (chunk t)
     where
       rerun (IterM m)             = m >>= rerun
       rerun (IterC (CtlReq _ fr)) = rerun $ fr Nothing

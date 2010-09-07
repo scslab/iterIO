@@ -103,7 +103,7 @@ hexInt :: (Monad m) => Iter L m Int
 hexInt = foldM1I digit 0 hex
     where
       maxok = maxBound `shiftR` 4
-      digit n d | n > maxok = throwI (IterParseErr "hex integer too large")
+      digit n d | n > maxok = throwI (IterMiscParseErr "hex integer too large")
                 | otherwise = return $ (n `shiftL` 4) .|. d
 
 -- | 1*\<any CHAR except CTLs or separators\>

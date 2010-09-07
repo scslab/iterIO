@@ -203,10 +203,10 @@ foldrMinMaxI :: (ChunkData t, Monad m) =>
              -> Iter t m a      -- ^ Iteratee generating items to fold
              -> Iter t m b
 foldrMinMaxI nmin nmax f z iter
-    | nmin > nmax = throwI $ IterParseErr "foldrMinMaxI: min > max"
+    | nmin > nmax = throwI $ IterMiscParseErr "foldrMinMaxI: min > max"
     | nmin > 0    = f <$> iter <*> foldrMinMaxI (nmin - 1) (nmax - 1) f z iter
     | nmax == 0   = return z
-    | nmax < 0    = throwI $ IterParseErr "foldrMinMaxI: negative max"
+    | nmax < 0    = throwI $ IterMiscParseErr "foldrMinMaxI: negative max"
     | otherwise   = iter \/ return z $ f >$> foldrMinMaxI 0 (nmax - 1) f z iter
 
 -- | Strict left fold over an 'Iter' (until it throws an 'IterNoParse'
@@ -407,8 +407,8 @@ readI :: (ChunkData t, Monad m, LL.StringLike s, Read a) =>
 readI s' = let s = LL.toString s'
            in case [a | (a,"") <- reads s] of
                 [a] -> return a
-                []  -> throwI $ IterParseErr $ "readI can't parse: " ++ s
-                _   -> throwI $ IterParseErr $ "readI ambiguous: " ++ s
+                []  -> throwI $ IterMiscParseErr $ "readI can't parse: " ++ s
+                _   -> throwI $ IterMiscParseErr $ "readI ambiguous: " ++ s
 
 -- | Ensures the input is at the end-of-file marker, or else throws an
 -- exception.

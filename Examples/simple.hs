@@ -113,27 +113,29 @@ lengthI = count 0
           Just _  -> count (n+1)
           Nothing -> return n
 
+inumBad :: (ChunkData t, Monad m) => Inum t t m a
+inumBad = mkInum $ fail "inumBad"
+
 catchTest1 :: IO ()
 catchTest1 = myEnum |$ fail "bad Iter"
     where
       myEnum :: Onum String IO ()
-      myEnum iter = catchI (enumPure "test" iter) handler
+      myEnum iter = catchI (enumPure "test" ..| iter) handler
+                    >>= return . return
+      handler (SomeException _) _ = do
+        liftIO $ hPutStrLn stderr "ignoring exception"
+        return ()
+
+-- Doesn't work, because the failure is not iter but inside iter
+catchTest2 :: IO ()
+catchTest2 = myEnum |.. inumNop |$ fail "bad Iter"
+    where
+      myEnum :: Onum String IO (Iter String IO ())
+      myEnum iter = catchI (enumPure "test" ..| iter) handler
+                    >>= return . return
       handler (SomeException _) _ = do
         liftIO $ hPutStrLn stderr "ignoring exception"
         return $ return ()
-
-
-inumBad :: (ChunkData t, Monad m) => Inum t t m a
-inumBad = mkInum $ fail "inumBad"
-
-catchTest2 :: IO ()
-catchTest2 = myEnum |.. inumBad |$ nullI
-    where
-      myEnum :: Onum String IO (Iter String IO ())
-      myEnum iter = catchI (enumPure "test" iter) handler
-      handler (SomeException _) _ = do
-        liftIO $ hPutStrLn stderr "ignoring exception"
-        return $ return $ return ()
 
 skipError :: (ChunkData tOut, MonadIO m) =>
              SomeException -> InumR tOut tIn m a -> InumR tOut tIn m a
@@ -141,8 +143,16 @@ skipError e iter = do
   liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
   resumeI iter
 
--- Throws an exception, because inumBad was fused outside the scope of
--- inumCatch.
+resumeTest :: IO ()
+resumeTest = doFile "file1" `cat` doFile "file2" |$ handleI stdout
+    where
+      doFile path = inumCatch (enumFile' path) $ \err iter ->
+                    if isDoesNotExistError err
+                    then verboseResumeI iter
+                    else iter
+
+-- Throws an exception, because inumBad was fused outside the argument
+-- to inumCatch.
 test1 :: IO ()
 test1 = inumCatch (enumPure "test") skipError |.. inumBad |$ nullI
 

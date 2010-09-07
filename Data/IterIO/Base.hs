@@ -72,7 +72,7 @@ module Data.IterIO.Base
     , mkInumC, mkInum, mkInum'
     , inumCBracket, inumBracket
     -- * Exception and error functions
-    , IterNoParse(..), IterEOF(..), IterExpected(..), IterParseErr(..)
+    , IterNoParse(..), IterEOF(..), IterExpected(..), IterMiscParseErr(..)
     , throwI, throwEOFI
     , tryI, tryBI, catchI, catchBI, handlerI, handlerBI
     , inumCatch, inumHandler
@@ -91,8 +91,8 @@ module Data.IterIO.Base
     , ctlI, safeCtlI
     , noCtls, ctl, ctl', ctlHandler
     -- * Other functions
-    , runIter, run, chunk, chunkEOF
-    , isIterError, isEnumError, isIterActive, apNext
+    , feedI, run, chunk, chunkEOF
+    , isIterError, isInumError, isIterActive, apNext
     , iterShows, iterShow
     ) where
 
@@ -178,7 +178,7 @@ instance (ChunkData t) => Monoid (Chunk t) where
     -- While the above code may seem arcane, something similar happens
     -- with, for instance:
     --
-    -- do iter <- returnI $ runIter (return "") chunkEOF
+    -- do iter <- returnI $ feedI (return "") chunkEOF
     --    iter
     mappend a (Chunk b _) | null b        = a
     mappend _ _                           = error "mappend to EOF"
@@ -275,9 +275,9 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
 
-    m@(IterF _)           >>= k = IterF $ runIter m >=> k
+    m@(IterF _)           >>= k = IterF $ feedI m >=> k
     (IterM m)             >>= k = IterM $ liftM (>>= k) m
-    (Done a c)            >>= k = runIter (k a) c
+    (Done a c)            >>= k = feedI (k a) c
     (IterC (CtlReq a fr)) >>= k = iterC a $ fr >=> k
     err                   >>= _ = IterFail $ getIterError err
 
@@ -377,7 +377,7 @@ fixIterPure f = IterM $ mfix ff
       ff ~(Done a _)  = check $ f a
       -- Warning: IterF case re-runs function, repeating side effects
       check (IterF i) = return $ IterF $ \c ->
-                        fixIterPure $ \a -> runIter (f a) c
+                        fixIterPure $ \a -> feedI (f a) c
       check (IterM m) = m >>= check
       check iter      = return iter
 -}
@@ -399,7 +399,7 @@ getIterError (IterC _)      = error "getIterError: no error (in IterC state)"
 getIterError _              = error "getIterError: no error to extract"
 
 -- | True if an iteratee or an enclosing enumerator has experienced a
--- failure.  (@isIterError@ is always 'True' when 'isEnumError' is
+-- failure.  (@isIterError@ is always 'True' when 'isInumError' is
 -- 'True', but the converse is not true.)
 isIterError :: Iter t m a -> Bool
 isIterError (IterFail _)   = True
@@ -408,9 +408,9 @@ isIterError _              = False
 
 -- | True if an enumerator enclosing an iteratee has experienced a
 -- failure (but not if the iteratee itself failed).
-isEnumError :: Iter t m a -> Bool
-isEnumError (InumFail _ _) = True
-isEnumError _              = False
+isInumError :: Iter t m a -> Bool
+isInumError (InumFail _ _) = True
+isInumError _              = False
 
 -- | True if an 'Iter' is requesting something from an
 -- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
@@ -446,7 +446,7 @@ apRun :: (Monad m, ChunkData t1) =>
          (Iter t1 m a -> Iter t2 m b)
       -> Iter t1 m a
       -> Iter t2 m b
-apRun f iter@(IterF _)           = f $ unEOF $ runIter iter chunkEOF
+apRun f iter@(IterF _)           = f $ unEOF $ feedI iter chunkEOF
 apRun f (IterM iterm)            = IterM $ iterm >>= return . f
 apRun f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
 apRun f iter                     = f iter
@@ -479,48 +479,48 @@ unEOF = wrapI fixeof
 --
 -- It /is/, however, okay for an 'Iter' to return 'Done' without the
 -- EOF bit even if the EOF bit was set on its input chunk, as
--- @runIter@ will just propagate the EOF bit.  For instance, the
+-- @feedI@ will just propagate the EOF bit.  For instance, the
 -- following code is valid:
 --
 -- @
---      runIter (return ()) 'chunkEOF'
+--      feedI (return ()) 'chunkEOF'
 -- @
 --
 -- Even though it is equivalent to:
 --
 -- @
---      runIter ('Done' () ('Chunk' 'mempty' False)) ('Chunk' 'mempty' True)
+--      feedI ('Done' () ('Chunk' 'mempty' False)) ('Chunk' 'mempty' True)
 -- @
 --
--- in which the first argument to @runIter@ appears to be discarding
--- the EOF bit from the input chunk.  @runIter@ will propagate the EOF
+-- in which the first argument to @feedI@ appears to be discarding
+-- the EOF bit from the input chunk.  @feedI@ will propagate the EOF
 -- bit, making the above code equivalent to to @'Done' () 'chunkEOF'@.
 --
 -- On the other hand, the following code is illegal, as it violates
 -- invariant 2 above:
 --
 -- @
---      runIter ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
+--      feedI ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
 -- @
-runIter :: (ChunkData t, Monad m) =>
-           Iter t m a
-        -> Chunk t
-        -> Iter t m a
-runIter iter c | null c           = iter
-runIter (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
+feedI :: (ChunkData t, Monad m) =>
+         Iter t m a
+      -> Chunk t
+      -> Iter t m a
+feedI iter c | null c           = iter
+feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
     where
-      noEOF (Done _ (Chunk _ True)) = error "runIter: IterF returned bad EOF"
+      noEOF (Done _ (Chunk _ True)) = error "feedI: IterF returned bad EOF"
       noEOF iter                    = iter
-      forceEOF (IterF _)             = error "runIter: IterF returned after EOF"
+      forceEOF (IterF _)             = error "feedI: IterF returned after EOF"
       forceEOF (IterM m)             = IterM $ forceEOF `liftM` m
       forceEOF (IterC (CtlReq a fr)) = iterC a $ \r -> 
                                        case r of Just _  -> fr r
                                                  Nothing -> forceEOF $ fr r
       forceEOF iter                  = iter
-runIter (IterM m) c               = IterM $ flip runIter c `liftM` m
-runIter (Done a c) c'             = Done a (mappend c c')
-runIter (IterC (CtlReq a fr)) c   = iterC a $ flip runIter c . fr
-runIter err _                     = err
+feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
+feedI (Done a c) c'             = Done a (mappend c c')
+feedI (IterC (CtlReq a fr)) c   = iterC a $ flip feedI c . fr
+feedI err _                     = err
 
 unIterEOF :: SomeException -> SomeException
 unIterEOF e = case fromException e of
@@ -531,7 +531,7 @@ unIterEOF e = case fromException e of
 -- state, feed it an EOF to extract a result.  Throws an exception if
 -- there has been a failure.
 run :: (ChunkData t, Monad m) => Iter t m a -> m a
-run iter@(IterF _)        = run $ runIter iter chunkEOF
+run iter@(IterF _)        = run $ feedI iter chunkEOF
 run (IterM m)             = m >>= run
 run (Done a _)            = return a
 run (IterC (CtlReq _ fr)) = run $ fr Nothing
@@ -545,7 +545,7 @@ run (InumFail e _)        = throw $ unIterEOF e
 
 -- | Generalized class of errors that occur when an Iteratee does not
 -- receive expected input.  (Catches 'IterEOF', 'IterExpected', and
--- the miscellaneous 'IterParseErr'.)
+-- the miscellaneous 'IterMiscParseErr'.)
 data IterNoParse = forall a. (Exception a) => IterNoParse a deriving (Typeable)
 instance Show IterNoParse where
     showsPrec _ (IterNoParse e) rest = show e ++ rest
@@ -587,11 +587,11 @@ instance Exception IterExpected where
     fromException = noParseFromException
 
 -- | Miscellaneous Iteratee parse error.
-data IterParseErr = IterParseErr String deriving (Typeable)
-instance Show IterParseErr where
-    showsPrec _ (IterParseErr err) rest =
+data IterMiscParseErr = IterMiscParseErr String deriving (Typeable)
+instance Show IterMiscParseErr where
+    showsPrec _ (IterMiscParseErr err) rest =
         "Iteratee parse error: " ++ err ++ rest
-instance Exception IterParseErr where
+instance Exception IterMiscParseErr where
     toException = noParseToException
     fromException = noParseFromException
 
@@ -706,10 +706,10 @@ multiParse :: (ChunkData t, Monad m) =>
 multiParse a@(IterF _) b
     | useIfParse b = ifParse a return b
     | otherwise    = do c <- chunkI
-                        multiParse (runIter a c) (runIter b c)
+                        multiParse (feedI a c) (feedI b c)
     where
       -- If b is IterM, IterC, or Done, we will just accumulate all
-      -- the input anyway inside 'runIter', so we might as well do it
+      -- the input anyway inside 'feedI', so we might as well do it
       -- efficiently with 'copyInput' (which is what 'ifParse' uses,
       -- indirectly, via 'tryBI').
       useIfParse (Done _ _) = True
@@ -765,15 +765,15 @@ throwI :: (Exception e) => e -> Iter t m a
 throwI e = IterFail $ toException e
 
 -- | Throw an exception of type 'IterEOF'.  This will be interpreted
--- by 'mkOnum' and 'mkInum' as an end of file chunk when thrown by the
--- generator/codec.  It will also be interpreted by 'ifParse' and
--- 'multiParse' as an exception of type 'IterNoParse'.  If not caught
--- within the 'Iter' monad, the exception will be rethrown by 'run'
--- (and hence '|$') as an 'IOError' of type EOF.
+-- by 'mkInum' as an end of file chunk when thrown by the codec.  It
+-- will also be interpreted by 'ifParse' and 'multiParse' as an
+-- exception of type 'IterNoParse'.  If not caught within the 'Iter'
+-- monad, the exception will be rethrown by 'run' (and hence '|$') as
+-- an 'IOError' of type EOF.
 throwEOFI :: String -> Iter t m a
 throwEOFI loc = throwI $ IterEOF $ mkIOError eofErrorType loc Nothing Nothing
 
--- | Internal function used by 'tryI' and 'backtrackI' when re-propagating
+-- | Internal function used by 'tryI' and 'tryBI' when re-propagating
 -- exceptions that don't match the requested exception type.  (To make
 -- the overall types of those two funcitons work out, a 'Right'
 -- constructor needs to be wrapped around the returned failing
@@ -803,7 +803,7 @@ tryI = wrapI errToEither
 copyInput :: (ChunkData t, Monad m) =>
           Iter t m a
        -> Iter t m (Iter t m a, Chunk t)
-copyInput iter1 = doit id iter1
+copyInput iter0 = doit id iter0
     where
       -- It is usually faster to use mappend in a right associative
       -- way (i.e, mappend a1 (mappend a2 (mappand a3 a4)) will be
@@ -812,7 +812,7 @@ copyInput iter1 = doit id iter1
       -- simple prefix of ithe input.  This is the same technique used
       -- by 'ShowS' to optimize the use of (++) on srings.
       doit acc iter@(IterF _) =
-          IterF $ \c -> doit (acc . mappend c) (runIter iter c)
+          IterF $ \c -> doit (acc . mappend c) (feedI iter c)
       doit acc iter | isIterActive iter = apNext (doit acc) iter
       doit acc iter                     = return (iter, acc mempty)
 
@@ -838,84 +838,25 @@ tryBI iter1 = copyInput iter1 >>= errToEither
                                    Just e  -> Done (Left e) c
                                    Nothing -> fixError iter
 
--- | Catch an exception thrown by an 'Iter'.  Returns the failed
--- 'Iter' state, which may contain more information than just the
--- exception.  For instance, if the exception occured in an
--- enumerator, the returned 'Iter' will also contain an inner 'Iter'
--- that has not failed.  To avoid discarding this extra information,
--- you should not re-throw exceptions with 'throwI'.  Rather, you
--- should re-throw an exception by re-executing the failed 'Iter'.
--- For example, you could define an @onExceptionI@ function analogous
--- to the standard library @'onException'@ as follows:
+-- | Catch an exception thrown by an 'Iter' or an enclosing 'Inum'
+-- (for instance one applied with '.|$').  If you wish to catch just
+-- errors thrown within 'Inum's, see the function 'inumCatch'.
+--
+-- On exceptions, @catchI@ invokes a handler passing it both the
+-- exception thrown and the state of the failing 'Iter', which may
+-- contain more information than just the exception.  In particular,
+-- if the exception occured in an 'Inum', the returned 'Iter' will
+-- also contain the 'Iter' being fed by that 'Inum', which likely will
+-- not have failed.  To avoid discarding this extra information, you
+-- should not re-throw exceptions with 'throwI'.  Rather, you should
+-- re-throw an exception by re-executing the failed 'Iter'.  For
+-- example, you could define an @onExceptionI@ function analogous to
+-- the standard library @'onException'@ as follows:
 --
 -- @
 --  onExceptionI iter cleanup =
 --      iter \`catchI\` \\('SomeException' _) iter' -> cleanup >> iter'
 -- @
---
--- If you wish to continue processing the iteratee after a failure in
--- an enumerator, use the 'resumeI' function.  For example:
---
--- @
---  action \`catchI\` \\('SomeException' e) iter ->
---      if 'isEnumError' iter
---        then do liftIO $ putStrLn $ \"ignoring enumerator failure: \" ++ show e
---                'resumeI' iter
---        else iter
--- @
---
--- @catchI@ catches both iteratee and enumerator failures.  However,
--- because enumerators are functions on iteratees, you must apply
--- @catchI@ to the /result/ of executing an enumerator.  For example,
--- the following code modifies 'enumPure' to catch and ignore an
--- exception thrown by a failing 'Iter':
---
--- > catchTest1 :: IO ()
--- > catchTest1 = myEnum |$ fail "bad Iter"
--- >     where
--- >       myEnum :: Onum String IO ()
--- >       myEnum iter = catchI (enumPure "test" iter) handler
--- >       handler (SomeException _) iter = do
--- >         liftIO $ hPutStrLn stderr "ignoring exception"
--- >         return ()
---
--- Note that @myEnum@ is an 'Onum', but it takes an argument, @iter@,
--- reflecting the usually hidden fact that 'Onum's are actually
--- functions.  Thus, @catchI@ is wrapped around the result of applying
--- @'enumPure' \"test\"@ to an 'Iter'.
---
--- Another subtlety to keep in mind is that, when fusing enumerators,
--- the type of the outer enumerator must reflect the fact that it is
--- wrapped around an inner enumerator.  Consider the following test,
--- in which an exception thrown by an inner enumerator is caught:
---
--- > inumBad :: (ChunkData t, Monad m) => Inum t t m a
--- > inumBad = mkInum' $ fail "inumBad"
--- > 
--- > catchTest2 :: IO ()
--- > catchTest2 = myEnum |.. inumBad |$ nullI
--- >     where
--- >       myEnum :: Onum String IO (Iter String IO ())
--- >       myEnum iter = catchI (enumPure "test" iter) handler
--- >       handler (SomeException _) iter = do
--- >         liftIO $ hPutStrLn stderr "ignoring exception"
--- >         return $ return ()
---
--- Note the type of @myEnum :: Onum String IO (Iter String IO ())@
--- reflects that it has been fused to an inner enumerator.  Usually
--- these enumerator result types are computed automatically and you
--- don't have to worry about them as long as your enumreators are
--- polymorphic in the result type.  However, to return a result that
--- suppresses the exception here, we must run @return $ return ()@,
--- invoking @return@ twice, once to create an @Iter String IO ()@, and
--- a second time to create an @Iter String IO (Iter String IO ())@.
--- (To avoid such nesting proliferation in 'Onum' types, it is
--- sometimes easier to fuse multiple 'Inum's together with '..|..',
--- before fusing them to an 'Onum'.)
---
--- If you are only interested in catching enumerator failures, see the
--- functions 'enumCatch' and `inumCatch`, which catch enumerator but
--- not iteratee failures.
 --
 -- Note that @catchI@ only works for /synchronous/ exceptions, such as
 -- IO errors (thrown within 'liftIO' blocks), the monadic 'fail'
@@ -930,12 +871,12 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
        -- ^ Exception handler, which gets as arguments both the
        -- exception and the failing 'Iter' state.
        -> Iter t m a
-catchI iter handler = wrapI check iter
+catchI iter0 handler = wrapI check iter0
     where
-      check iter'@(Done _ _) = iter'
-      check err              = case fromException $ getIterError err of
-                                 Just e  -> handler e err
-                                 Nothing -> err
+      check iter@(Done _ _) = iter
+      check err             = case fromException $ getIterError err of
+                                Just e  -> handler e err
+                                Nothing -> err
 
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception
@@ -949,12 +890,12 @@ catchBI :: (Exception e, ChunkData t, Monad m) =>
            Iter t m a
         -> (e -> Iter t m a)
         -> Iter t m a
-catchBI iter handler = copyInput iter >>= uncurry check
+catchBI iter0 handler = copyInput iter0 >>= uncurry check
     where
-      check iter'@(Done _ _) _ = iter'
-      check err input          = case fromException $ getIterError err of
-                                   Just e  -> runIter (handler e) input
-                                   Nothing -> err
+      check iter@(Done _ _) _ = iter
+      check err input         = case fromException $ getIterError err of
+                                  Just e  -> feedI (handler e) input
+                                  Nothing -> err
 
 -- | A version of 'catchI' with the arguments reversed, analogous to
 -- @'handle'@ in the standard library.  (A more logical name for this
@@ -977,33 +918,50 @@ handlerBI :: (Exception e, ChunkData t, Monad m) =>
           -> Iter t m a
 handlerBI = flip catchBI
 
--- | Like 'catchI', but applied to 'Onum's and 'Inum's instead of
--- 'Iter's, and does not catch errors thrown by 'Iter's.
+-- | Catches errors thrown by an 'Inum', or a set of fused 'Inum's.
+-- Note that only errors in 'Inum's that are lexically within the
+-- scope of the argument to 'inumCatch' will be caught.  For example:
 --
--- There are three 'catch'-like functions in the iterIO library,
--- catching varying numbers of types of failures.  @inumCatch@ is the
--- middle option.  By comparison:
+-- > inumBad :: (ChunkData t, Monad m) => Inum t t m a
+-- > inumBad = mkInum $ fail "inumBad"
+-- >
+-- > -- Throws an exception, because inumBad was fused outside the argument
+-- > -- to inumCatch.
+-- > test1 :: IO ()
+-- > test1 = inumCatch (enumPure "test") skipError |.. inumBad |$ nullI
+-- > 
+-- > -- Does not throw an exception, because inumBad fused within the
+-- > -- argument to enumCatch.
+-- > test2 :: IO ()
+-- > test2 = inumCatch (enumPure "test" |.. inumBad) skipError |$ nullI
+-- > 
+-- > -- Again no exception, because inumCatch is wrapped around inumBad.
+-- > test3 :: IO ()
+-- > test3 = enumPure "test" |.. (inumCatch inumBad skipError) |$ nullI
 --
--- * 'catchI' catches the most errors, including those thrown by
---   'Iter's.  'catchI' can be applied to 'Iter's, 'Inum's, or
---   'mkOnum's, and is useful both to the left and to the right of
---   '|$'.
+-- Note that @\`inumCatch\`@ has the default infix precedence (@infixl
+-- 9 `inumcatch`@), which binds more tightly than any concatenation or
+-- fusing operators.
 --
--- * @inumCatch@ catches 'Inum' or 'Onum' failures, but not 'Iter'
---   failures.  It can be applied to 'Inum's or 'Onum's, to the left
---   or to the right of '|$'.  When applied to the left of '|$', will
---   not catch any errors thrown by 'Inum's to the right of '|$'.
+-- As noted for 'catchI', exception handlers receive both the
+-- exception thrown, and the failing 'Iter'.  Particularly in the case
+-- of 'inumCatch', it is important to re-throw exceptions by
+-- re-executing the failed 'Iter', not passing the exception itself to
+-- 'throwI'.  That way, if the exception is re-caught, 'resumeI' will
+-- continue to work properly.  For example, to copy two files to
+-- standard output and ignore file not found errors but re-throw any
+-- other kind of error, you could use the following:
 --
--- * 'enumCatch' only catches 'Onum' failures, and should only be
---   applied to the left of '|$'.  (You /can/ apply 'enumCatch' to
---   'Inum's or to the right of '|$', but this is not useful because
---   it ignores 'Iter' and 'Inum' failures so won't catch anything.)
+-- @
+--  resumeTest :: IO ()
+--  resumeTest = doFile \"file1\" ``cat`` doFile \"file2\" |$ 'handleI' stdout
+--      where
+--        doFile path = inumCatch (`enumFile'` path) $ \err iter ->
+--                      if 'isDoesNotExistError' err
+--                      then 'verboseResumeI' iter
+--                      else iter
+-- @
 --
--- One potentially unintuitive apsect of @inumCatch@ is that, when
--- applied to an enumerator, it catches any enumerator failure to the
--- right that is on the same side of '|$'--even enumerators not
--- lexically scoped within the argument of @inumCatch@.  See
--- 'enumCatch' for some examples of this behavior.
 inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
               Inum tIn tOut m a
            -- ^ 'Inum' that might throw an exception
@@ -1027,47 +985,9 @@ inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
 inumHandler = flip inumCatch
 
 
---   Like 'catchI', but for 'Onum's instead of 'Iter's.  Catches
--- errors thrown by an 'Onum', but /not/ those thrown by 'Inum's
--- fused to the 'Onum' after @enumCatch@ has been applied, and not
--- exceptions thrown from an 'Iter'.  If you want to catch all
--- enumerator errors, including those from subsequently fused
--- 'Inum's, see the `inumCatch` function.  For example, compare
--- @test1@ (which throws an exception) to @test2@ and @test3@ (which
--- do not):
---
--- >    inumBad :: (ChunkData t, Monad m) => Inum t t m a
--- >    inumBad = mkInum' $ fail "inumBad"
--- >    
--- >    skipError :: (ChunkData t, MonadIO m) =>
--- >                 SomeException -> Iter t m a -> Iter t m a
--- >    skipError e iter = do
--- >      liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
--- >      resumeI iter
--- >    
--- >    -- Throws an exception
--- >    test1 :: IO ()
--- >    test1 = enumCatch (enumPure "test") skipError |.. inumBad |$ nullI
--- >    
--- >    -- Does not throw an exception, because inumCatch catches all
--- >    -- enumerator errors on the same side of '|$', including from
--- >    -- subsequently fused inumBad.
--- >    test2 :: IO ()
--- >    test2 = inumCatch (enumPure "test") skipError |.. inumBad |$ nullI
--- >    
--- >    -- Does not throw an exception, because enumCatch was applied
--- >    -- after inumBad was fused to enumPure.
--- >    test3 :: IO ()
--- >    test3 = enumCatch (enumPure "test" |.. inumBad) skipError |$ nullI
---
--- Note that both @\`enumCatch\`@ and ``inumCatch`` have the default
--- infix precedence (@infixl 9@), which binds more tightly than any
--- concatenation or fusing operators.
-
-
--- | Used in an exception handler, after an enumerator fails, to
--- resume processing of the 'Iter' by the next enumerator in a
--- concatenated series.  See 'catchI' for an example.
+-- | Used in an exception handler, after an 'Inum' failure, to resume
+-- processing of the 'Iter' by the next enumerator in a 'cat'ed
+-- series.  See 'inumCatch' for an example.
 resumeI :: (ChunkData tIn, Monad m) =>
            InumR tIn tOut m a -> InumR tIn tOut m a
 resumeI (InumFail _ iter) = return iter
@@ -1078,10 +998,10 @@ resumeI iter              = iter
 -- before invoking 'resumeI'.
 verboseResumeI :: (ChunkData tIn, MonadIO m) =>
                   InumR tIn tOut m a -> InumR tIn tOut m a
-verboseResumeI iter | isEnumError iter = do
+verboseResumeI (InumFail err iter) = do
   prog <- liftIO $ getProgName
-  liftIO $ hPutStrLn stderr $ prog ++ ": " ++ show (getIterError iter)
-  resumeI iter
+  liftIO $ hPutStrLn stderr $ prog ++ ": " ++ show err
+  return iter
 verboseResumeI iter = iter
 
 -- | Similar to the standard @'mapException'@ function in
@@ -1171,7 +1091,7 @@ bindFail iter0 next = do
 -- EOF if it is in the 'IterF' state) so as to extract a return value.
 -- The return value is lifted into the invoking 'Iter' monad.  If the
 -- 'Iter' being run fails, then @runI@ will propagate the failure by
--- also failing in the enclosing monad..
+-- also failing in the enclosing monad.
 runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
@@ -1516,15 +1436,14 @@ mkInumC cf codec0 iter0 = fixEOF $ process codec0 iter0
                                   iter@(IterC _) -> apRun (process codec) iter
                                   iter           -> process codec iter
       process codec iter@(IterM _) = apRun (process codec) iter
-      process codec@(IterF _) iter = tryCodec (runIter codec chunkEOF) iter $ 
-                                     \_ _ -> return iter
-      process _ iter               = return iter
+      process codec iter = tryCodec (feedI codec chunkEOF) iter $ 
+                           \_ _ -> return iter
 
       tryCodec codec iter next = do
         ecodecr <- tryI codec
         case ecodecr of
-          Right (CodecF c d) -> next c (runIter iter $ chunk d)
-          Right (CodecE d) -> next (throwEOFI "CodecE") (runIter iter $ chunk d)
+          Right (CodecF c d) -> next c (feedI iter $ chunk d)
+          Right (CodecE d) -> next (throwEOFI "CodecE") (feedI iter $ chunk d)
           Left (e, _) | isIterEOF e -> return iter
           Left (e, _)               -> InumFail e iter
 
@@ -1715,7 +1634,7 @@ inumSplit iter1 = do
     where
       iterf mv (Chunk t eof) = do
         rold <- liftIO $ takeMVar mv
-        rnew <- returnI $ runIter rold $ chunk t
+        rnew <- returnI $ feedI rold $ chunk t
         liftIO $ putMVar mv rnew
         case rnew of
           IterF _ | not eof -> IterF $ iterf mv
