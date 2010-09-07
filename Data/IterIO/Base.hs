@@ -83,7 +83,7 @@ module Data.IterIO.Base
     -- * Some basic Iters
     , nullI, dataI, chunkI, peekI, atEOFI
     -- * Low-level Iter-manipulation functions
-    , wrapI, runI, joinI, returnI, resultI
+    , wrapI, runI, joinI, returnCI, resultI
     -- * Some basic Enums
     , enumPure
     , iterLoop
@@ -91,7 +91,7 @@ module Data.IterIO.Base
     -- * Control functions
     , CtlCmd, CtlReq(..), CtlHandler
     , ctlI, safeCtlI
-    , noCtls, ctl, ctl', ctlHandler
+    , noCtl, passCtl -- , ctl, ctl', ctlHandler
     -- * Other functions
     , feedI, run, chunk, chunkEOF
     , isIterError, isInumError, isIterActive, apNext
@@ -443,17 +443,21 @@ apNext f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
 apNext f iter                     = f iter
 
 -- | Like 'apNext', but feed an EOF to the 'Iter' if it is in the
--- 'IterF' state.  Thus it can be used within 'Iter's that have a
--- different input type from the 'Iter' the function is being applied
--- to.
-apRun :: (Monad m, ChunkData t1) =>
-         (Iter t1 m a -> Iter t2 m b)
-      -> Iter t1 m a
+-- 'IterF' state, and possibly handle control requests differently.
+-- Thus it can be used within 'Iter's that have a different input type
+-- from the 'Iter' the function is being applied to.
+apRun :: (Monad m, ChunkData t1, ChunkData t2) =>
+         CtlHandler t2 t1 m a         -- ^ what to do with 'IterC's
+      -> (Iter t1 m a -> Iter t2 m b) -- ^ Funciton to apply
+      -> Iter t1 m a                  -- ^ 'Iter' to apply it to
       -> Iter t2 m b
-apRun f iter@(IterF _)           = f $ unEOF $ feedI iter chunkEOF
-apRun f (IterM iterm)            = IterM $ iterm >>= return . f
-apRun f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
-apRun f iter                     = f iter
+apRun _ f iter@(IterF _) = f $ feedI iter chunkEOF
+apRun _ f (IterM iterm)  = IterM $ iterm >>= return . f
+apRun cf f (IterC req)   = cf req >>= f
+apRun _ f iter           = f iter
+
+{-
+-- apRun f iter@(IterF _) = f $ unEOF $ feedI iter chunkEOF
 
 -- | Remove EOF bit from an Iter in the 'Done' state.
 unEOF :: (Monad m, ChunkData t) => Iter t m a -> Iter t m a
@@ -461,6 +465,7 @@ unEOF = wrapI fixeof
     where
       fixeof (Done a (Chunk t _)) = Done a (Chunk t False)
       fixeof iter                 = iter
+-}
 
 --
 -- Core functions
@@ -1105,8 +1110,7 @@ runI (Done a _)            = return a
 runI (IterFail e)          = IterFail e
 runI (InumFail e i)        = InumFail e i
 -- When running, don't propagate control requests back
-runI (IterC (CtlReq _ fr)) = runI $ fr Nothing
-runI iter                  = apRun runI iter
+runI iter                  = apRun noCtl runI iter
 
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The
 -- behavior of @joinI@ is similar to what one would obtain by defining
@@ -1126,7 +1130,7 @@ joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
 joinI (Done i c)     = runI i `bindFail` flip Done c
 joinI (IterFail e)   = IterFail e
 joinI (InumFail e i) = runI i `bindFail` InumFail e
-joinI iter           = apRun joinI iter
+joinI iter           = apRun passCtl joinI iter
 
 -- | Allows you to look at the state of an 'Iter' by returning it into
 -- an 'Iter' monad.  This is just like the monadic 'return' method,
@@ -1138,12 +1142,23 @@ joinI iter           = apRun joinI iter
 -- 'Iter' produced with @iter <- returnI someOtherIter@ does not need
 -- to worry about the 'IterM' or 'IterC' cases, since the returned
 -- 'Iter' is guaranteed not to be in one of those states.
-returnI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-           Iter tOut m a
-        -> Iter tIn m (Iter tOut m a)
-returnI iter@(IterM _) = apRun returnI iter
-returnI iter@(IterC _) = apRun returnI iter
-returnI iter           = return iter
+{-
+returnI :: (ChunkData t, Monad m) =>
+           Iter t m a
+        -> InumR t t m a
+returnI = returnCI passCtl
+-}
+
+-- | A variant of 'returnI' that allows you to specify what to do with
+-- control requests (instead of just passing them straight through to
+-- the enclosing 'Iter' monad).
+returnCI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+            CtlHandler tIn tOut m a
+         -> Iter tOut m a
+         -> InumR tIn tOut m a
+returnCI cf (IterM m)   = IterM $ returnCI cf `liftM` m
+returnCI cf (IterC req) = cf req >>= returnCI cf
+returnCI _ iter         = return iter
 
 -- | @resultI@ is like a version of 'returnI' that additionally
 -- ensures the returned 'Iter' is not in the 'IterF' state.  Moreover,
@@ -1152,7 +1167,7 @@ returnI iter           = return iter
 -- returned 'Iter' always has 'mempty' data.  (The EOF flag in the
 -- left-over 'Chunk' is preserved, however.)
 resultI :: (ChunkData t, Monad m) =>
-           Iter t m a -> Iter t m (Iter t m a)
+           Iter t m a -> InumR t t m a
 resultI = wrapI fixdone
     where
       fixdone (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
@@ -1358,7 +1373,7 @@ inumCBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
              -- ^ Before action
              -> (b -> Iter tIn m c)
              -- ^ After action, as a function of before action result
-             -> (b -> CtlHandler tOut m a)
+             -> (b -> CtlHandler tIn tOut m a)
              -- ^ Control request handler, as funciton of before action result
              -> (b -> (Codec tIn m tOut))
              -- ^ Input 'Codec', as a funciton of before aciton result
@@ -1401,7 +1416,7 @@ inumBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             -- ^ Input 'Codec', as a funciton of before aciton result
             -> Inum tIn tOut m a
 inumBracket before after codec iter0 =
-    inumCBracket before after (const noCtls) codec iter0
+    inumCBracket before after (const noCtl) codec iter0
 
 {-
 -- | If an 'Iter' receives EOF, allow it to return 'IterF' and keep
@@ -1429,39 +1444,39 @@ fixEOF iter0 = fok iter0
 -- 'Inum' fails, code handling that failure will have to send an EOF
 -- or the codec will not be able to clean up.
 mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
-           CtlHandler tOut m a
+           CtlHandler tIn tOut m a
         -- ^ Control request handler
         -> Codec tIn m tOut
         -- ^ Codec to be invoked to produce transcoded chunks.
         -> Inum tIn tOut m a
 mkInumC cf codec0 iter0 = process codec0 iter0
     where
-      process codec iter@(IterF _) = tryCodec codec iter process
-      process codec (IterC c) = case cf c of
-                                  iter@(IterC _) -> apRun (process codec) iter
-                                  iter           -> process codec iter
-      process codec iter@(IterM _) = apRun (process codec) iter
-      process codec@(IterF _) iter = tryCodec (feedI codec chunkEOF) iter $ 
-                                     \_ _ -> return iter
+      process codec iter@(IterF _) =
+          iBind iter codec $ \codecr ->
+              case codecr of
+                CodecF c d -> process c (feedI iter $ chunk d)
+                CodecE d   -> returnCI cf (feedI iter $ chunk d)
+      process codec iter@(IterC req) = iBind iter (cf req) $ process codec
+      process codec iter@(IterM _) = apRun cf (process codec) iter
+      process codec@(IterF _) iter =
+          iBind iter (feedI codec chunkEOF) $ \_ -> return iter
       process _ iter               = return iter
 
-      tryCodec codec iter next = do
-        ecodecr <- tryI codec
-        case ecodecr of
-          Right (CodecF c d) -> next c (feedI iter $ chunk d)
-          Right (CodecE d) -> next (throwEOFI "CodecE") (feedI iter $ chunk d)
-          Left (e, _) | isIterEOF e -> return iter
-          Left (e, _)               -> InumFail e iter
+      iBind i m k = do er <- tryI m
+                       case er of
+                         Right r                   -> k r
+                         Left (e, _) | isIterEOF e -> return i
+                         Left (e, _)               -> InumFail e i
 
 -- | A variant of 'mkInumC' that passes all control requests from the
 -- innner 'Iter' through to enclosing enumerators.  (If you want to
--- reject all control requests, use @'mkInumC' 'noCtls'@ instead of
+-- reject all control requests, use @'mkInumC' 'noCtl'@ instead of
 -- @mkInum@.)
 mkInum :: (Monad m, ChunkData tIn, ChunkData tOut) =>
           Codec tIn m tOut
        -- ^ Codec to be invoked to produce transcoded chunks.
        -> Inum tIn tOut m a
-mkInum = mkInumC IterC
+mkInum = mkInumC passCtl
 
 -- | A variant of 'mkInum' that transcodes data using a stateless
 -- translation 'Iter' instead of a 'Codec'
@@ -1477,7 +1492,7 @@ mkInum' fn iter = mkInum (iterToCodec fn) iter
 --
 
 -- | A control request handler maps control requests to 'Iter's.
-type CtlHandler t m a = CtlReq t m a -> Iter t m a
+type CtlHandler tIn tOut m a = CtlReq tOut m a -> InumR tIn tOut m a
 
 -- | A version of 'ctlI' that uses 'Maybe' instead of throwing an
 -- exception to indicate failure.
@@ -1505,15 +1520,19 @@ ctlI carg = safeCtlI carg >>= returnit
 -- defined as:
 --
 -- > inumGunzip :: (Monad m) => Inum ByteString ByteString m a
--- > inumGunzip = enumCI noCtls gunzipCodec
+-- > inumGunzip = enumCI noCtl gunzipCodec
 --
 -- The alternate definition @inumGunzip = mkInum gunzipCodec@ would
 -- likely wreak havoc in the event of any seek requests, as the outer
 -- enumerator might seek around in the file, confusing the
 -- decompression codec.
-noCtls :: CtlHandler t m a
-noCtls (CtlReq _ fr) = fr Nothing
+noCtl :: (ChunkData tIn, Monad m) => CtlHandler tIn tOut m a
+noCtl (CtlReq _ fr) = return $ fr Nothing
 
+passCtl :: (ChunkData tIn, Monad m) => CtlHandler tIn tOut m a
+passCtl (CtlReq carg fr) = iterC carg $ return . fr
+
+{-
 -- | Wrap a control command for requests of type @carg@ into a
 -- function of type @'CtlReq' t m a -> Maybe 'Iter' t m a@, which is
 -- not parameterized by @carg@ and therefore can be grouped in a list
@@ -1573,6 +1592,7 @@ ctlHandler ctls req = case res of
       ff a b = case a req of
                  Nothing  -> b
                  a'       -> a'
+-}
 
 --
 -- Basic outer enumerators

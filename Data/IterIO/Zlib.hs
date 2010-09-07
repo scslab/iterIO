@@ -231,7 +231,7 @@ zCodec zs0 = do
 inumZState :: (MonadIO m) =>
               ZState
            -> Inum L.ByteString L.ByteString m a
-inumZState zs = mkInumC noCtls (zCodec zs)
+inumZState zs = mkInumC noCtl (zCodec zs)
 
 -- | An 'Inum' that compresses in zlib format.  To uncompress, use
 -- 'inumGunzip'.

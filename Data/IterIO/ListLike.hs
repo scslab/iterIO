@@ -13,9 +13,11 @@ module Data.IterIO.ListLike
     , stringExactI, stringMaxI
     , handleI, sockDgramI
     -- * Control requests
+{-
     , SeekMode(..)
     , SizeC(..), SeekC(..), TellC(..)
     , fileCtl
+-}
     -- * Outer enumerators
     , enumDgram, enumDgramFrom
     , enumHandle, enumHandle', enumNonBinHandle
@@ -33,8 +35,7 @@ import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.Monoid
 import Data.Char
-import Data.Typeable
--- import Data.Word
+-- import Data.Typeable
 import Network.Socket
 import System.IO
 
@@ -206,6 +207,7 @@ sockDgramI s mdest = do
 -- Control functions
 --
 
+{-
 -- | A control command requesting the size of the current file being
 -- enumerated.
 data SizeC = SizeC deriving (Typeable)
@@ -228,6 +230,11 @@ fileCtl h = ctlHandler
             , ctl' $ \TellC -> liftIO (hTell h)
             , ctl' $ \SizeC -> liftIO (hFileSize h)
             ]
+-}
+
+-- XXX just for now
+fileCtl :: (ChunkData t, MonadIO m) => Handle -> CtlHandler () t m a
+fileCtl _ = noCtl
 
 --
 -- EnumOs
