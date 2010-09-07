@@ -81,7 +81,7 @@ module Data.IterIO.Base
     -- * Some basic Iters
     , nullI, dataI, chunkI, peekI, atEOFI
     -- * Low-level Iter-manipulation functions
-    , wrapI, runI, joinI, returnI, resultI
+    , wrapI, runI, runCI, joinI, returnI, resultI
     -- * Some basic Enums
     , enumPure
     , iterLoop
@@ -117,6 +117,7 @@ import System.Environment
 import System.IO
 import System.IO.Error (mkIOError, eofErrorType, isEOFError)
 import System.IO.Unsafe
+
 
 --
 -- Iteratee types and instances
@@ -1103,6 +1104,16 @@ runI (InumFail e i)        = InumFail e i
 runI (IterC (CtlReq _ fr)) = runI $ fr Nothing
 runI iter                  = apRun runI iter
 
+-- | Like 'runI', but allows the 'Iter' to continue issuing control
+-- requests.
+runCI :: (ChunkData t1, ChunkData t2, Monad m) =>
+         Iter t1 m a
+      -> Iter t2 m a
+runCI (Done a _)            = return a
+runCI (IterFail e)          = IterFail e
+runCI (InumFail e i)        = InumFail e i
+runCI iter                  = apRun runCI iter
+
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The
 -- behavior of @joinI@ is similar to what one would obtain by defining
 -- @joinI iter = iter >>= 'runI'@, but with more precise error
@@ -1436,8 +1447,9 @@ mkInumC cf codec0 iter0 = fixEOF $ process codec0 iter0
                                   iter@(IterC _) -> apRun (process codec) iter
                                   iter           -> process codec iter
       process codec iter@(IterM _) = apRun (process codec) iter
-      process codec iter = tryCodec (feedI codec chunkEOF) iter $ 
-                           \_ _ -> return iter
+      process codec@(IterF _) iter = tryCodec (feedI codec chunkEOF) iter $ 
+                                     \_ _ -> return iter
+      process _ iter               = return iter
 
       tryCodec codec iter next = do
         ecodecr <- tryI codec
