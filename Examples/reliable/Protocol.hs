@@ -151,7 +151,7 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
           Nothing | otherwise ->
             do _ <- sendack next
                -- feedI (getPkts next q) pkts iter
-               result <- returnCI noCtl $ feedI iter $ chunk (reverse pkts)
+               result <- inumMC noCtl $ feedI iter $ chunk (reverse pkts)
                case result of
                  IterF _   -> getPkts next q result
                  Done a _  -> closewait next a
@@ -194,7 +194,7 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
                         else return (lar, lar)
       sendack seqno = do
         liftIO $ modifyMVar_ (epLFR ep) $ \_ -> return seqno
-        returnCI noCtl $ feedI sender $ chunk [pktgen $ AckP seqno]
+        inumMC noCtl $ feedI sender $ chunk [pktgen $ AckP seqno]
       inMyWindow = inWindow $ epWin ep
       enqPacket next q pkt@(DataP _ seqno _) =
           if inMyWindow next seqno then Map.insert seqno pkt q else q

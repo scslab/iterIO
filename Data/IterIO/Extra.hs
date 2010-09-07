@@ -68,7 +68,7 @@ inumSplit iter1 = do
     where
       iterf mv (Chunk t eof) = do
         rold <- liftIO $ takeMVar mv
-        rnew <- returnCI passCtl $ feedI rold $ chunk t
+        rnew <- inumMC passCtl $ feedI rold $ chunk t
         liftIO $ putMVar mv rnew
         case rnew of
           IterF _ | not eof -> IterF $ iterf mv

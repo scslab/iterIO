@@ -83,11 +83,10 @@ module Data.IterIO.Base
     -- * Some basic Iters
     , nullI, dataI, chunkI, peekI, atEOFI
     -- * Low-level Iter-manipulation functions
-    , wrapI, runI, joinI, returnCI, resultI
-    -- * Some basic Enums
-    , enumPure
-    , iterLoop
-    , inumNop, inumRepeat
+    , wrapI, runI, joinI
+    -- * Some basic Inums
+    , inumNop, inumMC
+    , enumPure, iterLoop, inumRepeat
     -- * Control functions
     , CtlCmd, CtlReq(..), CtlHandler
     , ctlI, safeCtlI
@@ -1092,7 +1091,7 @@ wrapI f = next
 bindFail :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
 bindFail iter0 next = do
-  iter <- resultI $ runI iter0
+  iter <- inumNop $ runI iter0
   case iter of
     InumFail e i -> InumFail e i
     _            -> iter >>= next
@@ -1146,32 +1145,8 @@ joinI iter           = apRun passCtl joinI iter
 returnI :: (ChunkData t, Monad m) =>
            Iter t m a
         -> InumR t t m a
-returnI = returnCI passCtl
+returnI = inumMC passCtl
 -}
-
--- | A variant of 'returnI' that allows you to specify what to do with
--- control requests (instead of just passing them straight through to
--- the enclosing 'Iter' monad).
-returnCI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-            CtlHandler tIn tOut m a
-         -> Iter tOut m a
-         -> InumR tIn tOut m a
-returnCI cf (IterM m)   = IterM $ returnCI cf `liftM` m
-returnCI cf (IterC req) = cf req >>= returnCI cf
-returnCI _ iter         = return iter
-
--- | @resultI@ is like a version of 'returnI' that additionally
--- ensures the returned 'Iter' is not in the 'IterF' state.  Moreover,
--- if the returned 'Iter' is in the 'Done' state, then the left-over
--- data will be pulled up to the enclosing 'Iter', so that the
--- returned 'Iter' always has 'mempty' data.  (The EOF flag in the
--- left-over 'Chunk' is preserved, however.)
-resultI :: (ChunkData t, Monad m) =>
-           Iter t m a -> InumR t t m a
-resultI = wrapI fixdone
-    where
-      fixdone (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
-      fixdone iter                     = return iter
 
 --
 -- Enumerator types
@@ -1381,7 +1356,7 @@ inumCBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
 inumCBracket before after cf codec iter0 = tryI before >>= checkBefore
     where
       checkBefore (Left (e, _)) = InumFail e iter0
-      checkBefore (Right b)     = resultI (mkInumC (cf b) (codec b) iter0)
+      checkBefore (Right b)     = inumNop (mkInumC (cf b) (codec b) iter0)
                                   >>= checkMain b
       checkMain b iter = tryI (after b) >>= checkAfter iter
       checkAfter iter (Left (e,_)) = iter `bindFail` InumFail e
@@ -1455,7 +1430,7 @@ mkInumC cf codec0 iter0 = process codec0 iter0
           iBind iter codec $ \codecr ->
               case codecr of
                 CodecF c d -> process c (feedI iter $ chunk d)
-                CodecE d   -> returnCI cf (feedI iter $ chunk d)
+                CodecE d   -> inumMC cf (feedI iter $ chunk d)
       process codec iter@(IterC req) = iBind iter (cf req) $ process codec
       process codec iter@(IterM _) = apRun cf (process codec) iter
       process codec@(IterF _) iter =
@@ -1634,10 +1609,29 @@ iterLoop = do
 -- Basic inner enumerators
 --
 
--- | The null 'Inum', which passes data through to another iteratee
--- unmodified.
+-- | The dummy 'Inum', which passes data through to another iteratee
+-- unmodified.  Surprisingly useful, because it allows one to execute
+-- an 'Iter' then looks at its state (instead of having bind throw an
+-- exception).
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop = mkInum' dataI
+inumNop (IterF f)   = IterF dochunk
+    where dochunk (Chunk t True) = return $ f (chunk t)
+          dochunk c              = inumNop $ f c
+inumNop (IterM m)   = IterM $ inumNop `liftM` m
+inumNop (IterC req) = passCtl req >>= inumNop
+inumNop (Done a c)  = Done (return a) c
+inumNop iter        = return iter
+
+-- | An 'Inum' that only processes 'IterM' and 'IterC' requests and
+-- returns the 'Iter' as soon as it requests input (via 'IterF') or
+-- experiences an error.  The first argument specifies what to do with
+-- 'IterC' requests, and can be 'noCtl' to reject requests, 'passCtl'
+-- to pass them up to the @'Iter' tIn m@ monad, or a custom function.
+inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+          CtlHandler tIn tOut m a -> Inum tIn tOut m a
+inumMC cf (IterM m)   = IterM $ inumMC cf `liftM` m
+inumMC cf (IterC req) = cf req >>= inumMC cf
+inumMC _ iter         = return iter
 
 -- | Repeat an 'Inum' until an end of file is received or a failure
 -- occurs.
@@ -1645,7 +1639,7 @@ inumRepeat :: (ChunkData tIn, MonadIO m, Show tOut) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
 inumRepeat inum iter0 = do
   eof <- atEOFI
-  if eof then return iter0 else resultI (inum iter0) >>= check
+  if eof then return iter0 else inumNop (inum iter0) >>= check
     where
       check (Done iter (Chunk _ False)) = inumRepeat inum iter
       check res                         = res
