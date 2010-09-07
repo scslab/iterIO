@@ -1065,10 +1065,9 @@ peekI iter0 = copyInput iter0 >>= check
 -- is no more input data to be had.
 atEOFI :: (Monad m, ChunkData t) => Iter t m Bool
 atEOFI = IterF check
-    where
-      check c@(Chunk t eof) | not (null t) = Done False c
-                            | eof          = Done True c
-                            | otherwise    = atEOFI
+    where check c@(Chunk t eof) | not (null t) = Done False c
+                                | eof          = Done True c
+                                | otherwise    = atEOFI
 
 -- | Wrap a function around an 'Iter' to transform its result.  The
 -- 'Iter' will be fed 'Chunk's as usual for as long as it remains in
@@ -1412,6 +1411,24 @@ fixEOF iter0 = fok iter0
                   | otherwise         = iter
 -}
 
+-- | @inumBind iter m k@ is similar to @m '>>=' k@, but for use within
+-- 'Inum' implementations.  If @m@ throws an 'IterEOF' error, then
+-- @inumBind@ just returns @iter@ and does not execute @k@.  If @m@
+-- throws any other kind of exception, then the error gets translated
+-- from an 'IterFail' to an 'InumFail' and @iter@ is embedded in the
+-- exception for use by 'resumeI'.
+inumBind :: (ChunkData tIn, Monad m) =>
+            Iter tOut m a
+         -> Iter tIn m b
+         -> (b -> InumR tIn tOut m a)
+         -> InumR tIn tOut m a
+inumBind iter m k = do
+  er <- tryI m
+  case er of
+    Right r                   -> k r
+    Left (e, _) | isIterEOF e -> return iter
+    Left (e, _)               -> InumFail e iter
+
 -- | Build an 'Inum' given a 'Codec' that returns chunks of the
 -- appropriate type and a 'CtlHandler' to handle control requests.
 -- Makes an effort to send an EOF to the codec if the inner 'Iter'
@@ -1424,25 +1441,18 @@ mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
         -> Codec tIn m tOut
         -- ^ Codec to be invoked to produce transcoded chunks.
         -> Inum tIn tOut m a
-mkInumC cf codec0 iter0 = process codec0 iter0
+mkInumC cf codec = inumMC cf `cat` process
     where
-      process codec iter@(IterF _) =
-          iBind iter codec $ \codecr ->
+      process iter@(IterF _) =
+          inumBind iter codec $ \codecr ->
               case codecr of
-                CodecF c d -> process c (feedI iter $ chunk d)
+                CodecF c d -> mkInumC cf c (feedI iter $ chunk d)
                 CodecE d   -> inumMC cf (feedI iter $ chunk d)
-      process codec iter@(IterC req) = iBind iter (cf req) $ process codec
-      process codec iter@(IterM _) = apRun cf (process codec) iter
-      process codec@(IterF _) iter =
-          iBind iter (feedI codec chunkEOF) $ \_ -> return iter
-      process _ iter               = return iter
-
-      iBind i m k = do er <- tryI m
-                       case er of
-                         Right r                   -> k r
-                         Left (e, _) | isIterEOF e -> return i
-                         Left (e, _)               -> InumFail e i
-
+      process iter =
+          case codec of
+            IterF _ -> inumBind iter (feedI codec chunkEOF) $ \_ -> return iter
+            _       -> return iter
+                
 -- | A variant of 'mkInumC' that passes all control requests from the
 -- innner 'Iter' through to enclosing enumerators.  (If you want to
 -- reject all control requests, use @'mkInumC' 'noCtl'@ instead of
@@ -1504,6 +1514,9 @@ ctlI carg = safeCtlI carg >>= returnit
 noCtl :: (ChunkData tIn, Monad m) => CtlHandler tIn tOut m a
 noCtl (CtlReq _ fr) = return $ fr Nothing
 
+-- | A control request hander that simply passes control requests
+-- straight through from the @'Iter' tOut m@ monad to the enclosing
+-- @'Iter' tIn m@ monad.
 passCtl :: (ChunkData tIn, Monad m) => CtlHandler tIn tOut m a
 passCtl (CtlReq carg fr) = iterC carg $ return . fr
 
@@ -1611,8 +1624,8 @@ iterLoop = do
 
 -- | The dummy 'Inum', which passes data through to another iteratee
 -- unmodified.  Surprisingly useful, because it allows one to execute
--- an 'Iter' then looks at its state (instead of having bind throw an
--- exception).
+-- an 'Iter' then looks at its state without worrying about it
+-- throwing exceptions.  exception).
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop (IterF f)   = IterF dochunk
     where dochunk (Chunk t True) = return $ f (chunk t)
@@ -1626,20 +1639,18 @@ inumNop iter        = return iter
 -- returns the 'Iter' as soon as it requests input (via 'IterF') or
 -- experiences an error.  The first argument specifies what to do with
 -- 'IterC' requests, and can be 'noCtl' to reject requests, 'passCtl'
--- to pass them up to the @'Iter' tIn m@ monad, or a custom function.
+-- to pass them up to the @'Iter' tIn m@ monad, or a custom
+-- 'CtlHandler' function.
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           CtlHandler tIn tOut m a -> Inum tIn tOut m a
-inumMC cf (IterM m)   = IterM $ inumMC cf `liftM` m
-inumMC cf (IterC req) = cf req >>= inumMC cf
-inumMC _ iter         = return iter
+inumMC cf (IterM m)        = IterM $ inumMC cf `liftM` m
+inumMC cf iter@(IterC req) = inumBind iter (cf req) $ inumMC cf
+inumMC _ iter              = return iter
 
 -- | Repeat an 'Inum' until an end of file is received or a failure
 -- occurs.
 inumRepeat :: (ChunkData tIn, MonadIO m, Show tOut) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
-inumRepeat inum iter0 = do
+inumRepeat inum iter = do
   eof <- atEOFI
-  if eof then return iter0 else inumNop (inum iter0) >>= check
-    where
-      check (Done iter (Chunk _ False)) = inumRepeat inum iter
-      check res                         = res
+  if eof then return iter else inum iter >>= inumRepeat inum
