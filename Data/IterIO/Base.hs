@@ -238,8 +238,9 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- ^ The 'Iter' failed.
                 | InumFail !SomeException a
                 -- ^ An 'Inum' failed; this result includes status of
-                -- the Iteratee.  (The type @a@ will always be @'Iter'
-                -- t m a\'@ for some @a'@ in the result of an 'Inum'.)
+                -- the Iteratee.  (In this case, the type @a@ will
+                -- generally be @'Iter' t' m a\'@ for some @t'@ and
+                -- @a'@.)
 
 -- | Show the current state of an 'Iter', prepending it to some
 -- remaining input (the standard 'ShowS' optimization), when 'a' is in
@@ -1161,7 +1162,7 @@ resultI = wrapI fixdone
 -- Enumerator types
 --
 
--- | Equivalent to:
+-- | Expanding the type alias 'InumR', this is equivalent to:
 --
 -- @
 --type Inum tIn tOut m a = 'Iter' tOut m a -> 'Iter' tIn m ('Iter' tOut m a)
@@ -1209,10 +1210,10 @@ type InumR tIn tOut m a = Iter tIn m (Iter tOut m a)
 
 -- | An @Onum t m a@ is just an 'Inum' in which the input is
 -- @()@--i.e., @'Inum' () t m a@--so that there is no meaningful input
--- data to transcode.  Such an enumerator is called an
--- /outer enumerator/, because it must produce the data it feeds to
--- 'Iter's by either executing actions in monad @m@, for from its own
--- internal pure state (as for 'enumPure').
+-- data to transcode.  Such an enumerator is called an /outer
+-- enumerator/, because it must produce the data it feeds to 'Iter's
+-- by either executing actions in monad @m@, or from its own internal
+-- pure state (as for 'enumPure').
 --
 -- Under no circumstances should an @Onum@ ever feed a chunk with the
 -- EOF bit set to its 'Iter' argument.  When the @Onum@ runs out of
@@ -1270,8 +1271,8 @@ infixr 2 |$
 -- >       handler (SomeException _) _ = return "caught error"
 -- > 
 -- > -- Catches the exception, because liftIO uses the IO catch function to
--- > -- turn language-level exceptions into Monadic Iter failures.  (By
--- > -- contrast, lift works for any Monad so cannot do this in apply2.)
+-- > -- turn language-level exceptions into monadic Iter failures.  (By
+-- > -- contrast, lift works in any Monad, so cannot do this in apply2.)
 -- > apply3 :: IO String
 -- > apply3 = enumPure "test1" |$ iter `catchI` handler
 -- >     where
