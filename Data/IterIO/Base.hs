@@ -93,7 +93,7 @@ module Data.IterIO.Base
     , noCtl, passCtl -- , ctl, ctl', ctlHandler
     -- * Other functions
     , feedI, run, chunk, chunkEOF
-    , isIterError, isInumError, isIterActive, apNext
+    , isIterError, isInumError, isIterActive
     , iterShows, iterShow
     ) where
 
@@ -440,31 +440,6 @@ apNext f (IterF iterf)            = IterF $ f . iterf
 apNext f (IterM iterm)            = IterM $ iterm >>= return . f
 apNext f (IterC (CtlReq carg fr)) = iterC carg $ f . fr
 apNext f iter                     = f iter
-
--- | Like 'apNext', but feed an EOF to the 'Iter' if it is in the
--- 'IterF' state, and possibly handle control requests differently.
--- Thus it can be used within 'Iter's that have a different input type
--- from the 'Iter' the function is being applied to.
-apRun :: (Monad m, ChunkData t1, ChunkData t2) =>
-         CtlHandler t2 t1 m a         -- ^ what to do with 'IterC's
-      -> (Iter t1 m a -> Iter t2 m b) -- ^ Funciton to apply
-      -> Iter t1 m a                  -- ^ 'Iter' to apply it to
-      -> Iter t2 m b
-apRun _ f iter@(IterF _) = f $ feedI iter chunkEOF
-apRun _ f (IterM iterm)  = IterM $ iterm >>= return . f
-apRun cf f (IterC req)   = cf req >>= f
-apRun _ f iter           = f iter
-
-{-
--- apRun f iter@(IterF _) = f $ unEOF $ feedI iter chunkEOF
-
--- | Remove EOF bit from an Iter in the 'Done' state.
-unEOF :: (Monad m, ChunkData t) => Iter t m a -> Iter t m a
-unEOF = wrapI fixeof
-    where
-      fixeof (Done a (Chunk t _)) = Done a (Chunk t False)
-      fixeof iter                 = iter
--}
 
 --
 -- Core functions
@@ -1078,18 +1053,16 @@ wrapI :: (ChunkData t, Monad m) =>
          (Iter t m a -> Iter t m b) -- ^ Transformation function
       -> Iter t m a                 -- ^ Original 'Iter'
       -> Iter t m b                 -- ^ Returns an 'Iter' whose
-                                    -- result will be transformed by
+                                    -- result has been transformed by
                                     -- the transformation function
-wrapI f = next
-    where next iter | isIterActive iter = apNext next iter
-                    | otherwise         = f iter
+wrapI f = inumNop >=> f
 
--- | A function that sort of acts like ('>>='), except that it
--- preserves 'InumFail' failures.  (Ordinary '>>=' will translate an
--- 'InumFail' into an 'IterFail'.)
-bindFail :: (ChunkData t, Monad m) =>
+-- | A function that mostly acts like '>>=', but preserves 'InumFail'
+-- failures.  (@m '>>=' k@ will translate an 'InumFail' in @m@ into an
+-- 'IterFail'.)
+failBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
-bindFail iter0 next = do
+failBind iter0 next = do
   iter <- inumNop $ runI iter0
   case iter of
     InumFail e i -> InumFail e i
@@ -1104,11 +1077,11 @@ bindFail iter0 next = do
 runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
-runI (Done a _)            = return a
-runI (IterFail e)          = IterFail e
-runI (InumFail e i)        = InumFail e i
--- When running, don't propagate control requests back
-runI iter                  = apRun noCtl runI iter
+runI (Done a _)     = return a
+runI (IterFail e)   = IterFail e
+runI (InumFail e i) = InumFail e i
+runI iter@(IterF _) = runI $ feedI iter chunkEOF
+runI iter           = inumMC noCtl iter >>= runI
 
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The
 -- behavior of @joinI@ is similar to what one would obtain by defining
@@ -1125,27 +1098,10 @@ runI iter                  = apRun noCtl runI iter
 joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
          InumR tIn tOut m a
       -> Iter tIn m a
-joinI (Done i c)     = runI i `bindFail` flip Done c
+joinI (Done i c)     = runI i `failBind` flip Done c
 joinI (IterFail e)   = IterFail e
-joinI (InumFail e i) = runI i `bindFail` InumFail e
-joinI iter           = apRun passCtl joinI iter
-
--- | Allows you to look at the state of an 'Iter' by returning it into
--- an 'Iter' monad.  This is just like the monadic 'return' method,
--- except that so long as the 'Iter' is in the 'IterM' or 'IterC'
--- state, then the monadic action or control request is executed.
--- Thus, 'Iter's that do not require input, such as
--- @returnI $ liftIO $ ...@, can execute and return a result (possibly
--- reflecting exceptions) immediately.  Moreover, code looking at an
--- 'Iter' produced with @iter <- returnI someOtherIter@ does not need
--- to worry about the 'IterM' or 'IterC' cases, since the returned
--- 'Iter' is guaranteed not to be in one of those states.
-{-
-returnI :: (ChunkData t, Monad m) =>
-           Iter t m a
-        -> InumR t t m a
-returnI = inumMC passCtl
--}
+joinI (InumFail e i) = runI i `failBind` InumFail e
+joinI iter           = inumNop iter >>= joinI
 
 --
 -- Enumerator types
@@ -1279,7 +1235,7 @@ cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-cat a b iter = a iter `bindFail` b
+cat a b iter = a iter `failBind` b
 infixr 3 `cat`
 
 -- | Fuse two 'Inum's when the inner type of the first 'Inum' is the
@@ -1293,7 +1249,7 @@ infixr 3 `cat`
          Inum tIn tMid m (Iter tOut m a) -- ^
       -> Inum tMid tOut m a
       -> Inum tIn tOut m a
-(|..) outer inner iter = wrapI joinI (outer $ inner iter)
+(|..) outer inner iter = joinI $ outer $ inner iter
 infixl 4 |..
 
 -- | Fuse an 'Inum' that transcodes @tIn@ to @tOut@ with an 'Iter'
@@ -1305,7 +1261,7 @@ infixl 4 |..
          Inum tIn tOut m a     -- ^
       -> Iter tOut m a
       -> Iter tIn m a
-(..|) inner iter = wrapI joinI (inner iter)
+(..|) inner iter = joinI $ inner iter
 infixr 4 ..|
 
 -- | A @Codec@ is an 'Iter' that tranlates data from some input type
@@ -1358,7 +1314,7 @@ inumCBracket before after cf codec iter0 = tryI before >>= checkBefore
       checkBefore (Right b)     = inumNop (mkInumC (cf b) (codec b) iter0)
                                   >>= checkMain b
       checkMain b iter = tryI (after b) >>= checkAfter iter
-      checkAfter iter (Left (e,_)) = iter `bindFail` InumFail e
+      checkAfter iter (Left (e,_)) = iter `failBind` InumFail e
       checkAfter iter _            = iter
 
 -- | Build an 'Inum' from a @before@ action, an @after@ function, and
@@ -1624,8 +1580,14 @@ iterLoop = do
 
 -- | The dummy 'Inum', which passes data through to another iteratee
 -- unmodified.  Surprisingly useful, because it allows one to execute
--- an 'Iter' then looks at its state without worrying about it
--- throwing exceptions.  exception).
+-- an 'Iter' and look at its state without worrying about the 'Iter'
+-- throwing exceptions.  For example:
+--
+-- >  do iter' <- inumNop iter
+-- >     case iter' of
+-- >       IterFail e@(SomeException _)   -> ... handle error ...
+-- >       InumFail e@(SomeException _) i -> ... handle error ...
+-- >       _                              -> iter' -- okay to execute
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop (IterF f)   = IterF dochunk
     where dochunk (Chunk t True) = return $ f (chunk t)

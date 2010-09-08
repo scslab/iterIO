@@ -158,21 +158,12 @@ infixr 3 `orEmpty`
   flip mapExceptionI iter $
     \(IterNoParse _) -> IterExpected (take 50 (show saw) ++ "...") [expected]
 (<?>) iter expected
-      | isIterActive iter = apNext (<?> expected) iter
+      | isIterActive iter = inumMC passCtl iter >>= (<?> expected)
       | isIterError iter  = flip mapExceptionI iter $ \(IterNoParse _) ->
                             IterExpected "no input" [expected]
       | otherwise         = iter
 infix 0 <?>
   
-{-
-iter <?> expected = mapExceptionI domap iter
-    where
-      domap (IterNoParse e) =
-          case cast e of
-            Just (IterExpected saw _) -> IterExpected saw [expected]
-            Nothing                   -> IterExpected "" [expected]
--}
-
 -- | Throw an 'Iter' exception that describes expected input not
 -- found.
 expectedI :: String             -- ^ Input actually received
