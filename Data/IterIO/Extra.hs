@@ -2,12 +2,14 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -cpp #-}
 
--- | This module contains deprecated functions plus a few pieces of
+-- | This module contains miscellaneous functions plus a few pieces of
 -- functionality that are missing from the standard Haskell libraries.
 module Data.IterIO.Extra
-    ( -- * Deprecated functions
+    ( -- * Miscellaneous
       chunkerToCodec
+    , iterLoop
     , inumSplit
+    , fixIterPure
       -- * Functionality missing from system libraries
     , SendRecvString(..)
     , hShutdown
@@ -15,7 +17,9 @@ module Data.IterIO.Extra
 
 import Control.Concurrent.MVar
 import Control.Monad
+import Control.Monad.Fix
 import Control.Monad.Trans
+import Data.Monoid
 import Foreign.C
 import Foreign.Ptr
 import qualified Data.ByteString as S
@@ -57,10 +61,38 @@ chunkerToCodec iter = do
    then return $ CodecE d
    else return $ CodecF (chunkerToCodec iter) d
 
+-- | Create a loopback @('Iter', 'Onum')@ pair.  The iteratee and
+-- enumerator can be used in different threads.  Any data fed into the
+-- 'Iter' will in turn be fed by the 'Onum' into whatever 'Iter' it
+-- is given.  This is useful for testing a protocol implementation
+-- against itself.
+iterLoop :: (MonadIO m, ChunkData t, Show t) =>
+            m (Iter t m (), Onum t m a)
+iterLoop = do
+  -- The loopback is implemented with an MVar (MVar Chunk).  The
+  -- enumerator waits on the inner MVar, while the iteratee uses the outer 
+  -- MVar to avoid races when appending to the stored chunk.
+  pipe <- liftIO $ newEmptyMVar >>= newMVar
+  return (IterF $ iterf pipe, enum pipe)
+    where
+      iterf pipe c@(Chunk _ eof) = do
+             liftIO $ withMVar pipe $ \p ->
+                 do mp <- tryTakeMVar p
+                    putMVar p $ case mp of
+                                  Nothing -> c
+                                  Just c' -> mappend c' c
+             if eof then Done () chunkEOF else IterF $ iterf pipe
+
+      enum pipe = let codec = do
+                        p <- liftIO $ readMVar pipe
+                        Chunk c eof <- liftIO $ takeMVar p
+                        return $ if eof then CodecE c else CodecF codec c
+                  in mkInum codec
+
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
--- 'Iter' that can safely be fed (e.g., with @'returnI' $ 'feedI' iter
--- $ 'chunk' input@) from multiple threads.
+-- 'Iter' that can safely be fed (e.g., with 'inumPure') from multiple
+-- threads.
 inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
 inumSplit iter1 = do
   mv <- liftIO $ newMVar $ iter1
@@ -68,11 +100,70 @@ inumSplit iter1 = do
     where
       iterf mv (Chunk t eof) = do
         rold <- liftIO $ takeMVar mv
-        rnew <- returnI $ feedI rold $ chunk t
+        rnew <- inumMC passCtl $ feedI rold $ chunk t
         liftIO $ putMVar mv rnew
         case rnew of
           IterF _ | not eof -> IterF $ iterf mv
           _                 -> return rnew
+
+{- fixIterPure allows MonadFix instances, which support
+   out-of-order name bindings in a "rec" block, provided your file
+   has {-# LANGUAGE RecursiveDo #-} at the top.  A contrived example
+   would be:
+
+fixtest :: IO Int
+fixtest = inumPure [10] `cat` inumPure [1] |$ fixee
+    where
+      fixee :: Iter [Int] IO Int
+      fixee = rec
+        liftIO $ putStrLn "test #1"
+        c <- return $ a + b
+        liftIO $ putStrLn "test #2"
+        a <- headI
+        liftIO $ putStrLn "test #3"
+        b <- headI
+        liftIO $ putStrLn "test #4"
+        return c
+
+-- A very convoluted way of computing factorial
+fixtest2 :: Int -> IO Int
+fixtest2 i = do
+  f <- inumPure [2] `cat` inumPure [1] |$ mfix fact
+  run $ f i
+    where
+      fact :: (Int -> Iter [Int] IO Int)
+           -> Iter [Int] IO (Int -> Iter [Int] IO Int)
+      fact f = do
+               ignore <- headI
+               liftIO $ putStrLn $ "ignoring " ++ show ignore
+               base <- headI
+               liftIO $ putStrLn $ "base is " ++ show base
+               return $ \n -> if n <=  0
+                              then return base
+                              else liftM (n *) (f $ n - 1)
+-}
+
+-- | This is a fixed point combinator for iteratees over monads that
+-- have no side effects.  If you wish to use @rec@ with such a monad,
+-- you can define an instance of 'MonadFix' in which
+-- @'mfix' = fixIterPure@.  However, be warned that this /only/ works
+-- when computations in the monad have no side effects, as
+-- @fixIterPure@ will repeatedly re-invoke the function passsed in
+-- when more input is required (thereby also repeating side-effects).
+-- For cases in which the monad may have side effects, if the monad is
+-- in the 'MonadIO' class then there is already an 'mfix' instance
+-- defined using 'fixMonadIO'.
+fixIterPure :: (ChunkData t, MonadFix m) =>
+               (a -> Iter t m a) -> Iter t m a
+fixIterPure f = IterM $ mfix ff
+    where
+      ff ~(Done a _)  = check $ f a
+      -- Warning: IterF case re-runs function, repeating side effects
+      check (IterF _) = return $ IterF $ \c ->
+                        fixIterPure $ \a -> feedI (f a) c
+      check (IterM m) = m >>= check
+      check iter      = return iter
+
 
 --
 -- Some utility functions for things that are made hard by the Haskell

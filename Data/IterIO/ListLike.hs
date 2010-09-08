@@ -31,10 +31,9 @@ import Control.Monad.Trans
 -- import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
-import Data.Monoid
 import Data.Char
+import Data.Monoid
 import Data.Typeable
--- import Data.Word
 import Network.Socket
 import System.IO
 
@@ -222,12 +221,14 @@ instance CtlCmd SeekC ()
 data TellC = TellC deriving (Typeable)
 instance CtlCmd TellC Integer
 
-fileCtl :: (ChunkData t, MonadIO m) => Handle -> CtlHandler t m a
-fileCtl h = ctlHandler
+fileCtl :: (ChunkData tIn, ChunkData tOut, MonadIO m) =>
+           Handle -> CtlHandler tIn tOut m a
+fileCtl h = ctlHandler passCtl
             [ ctl' $ \(SeekC mode pos) -> liftIO (hSeek h mode pos)
             , ctl' $ \TellC -> liftIO (hTell h)
             , ctl' $ \SizeC -> liftIO (hFileSize h)
             ]
+
 
 --
 -- EnumOs

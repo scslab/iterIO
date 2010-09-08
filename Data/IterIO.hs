@@ -266,11 +266,11 @@ the 'cat' function, producing a new data source that enumerates all of
 the data in the first 'Inum' followed by all of the data in the
 second.
 
-There are two /fusing/ operators.  The '|..' operator fuses two
+There are two /fusing/ operators.  The '|.' operator fuses two
 'Inum's, provided the output type of the first is the input type of
 the second.  (Mnemonic: it produces a pipeline that is open on the
 right hand side, as it still needs to be applied to an iteratee with
-'|$'.)  The '..|' operator fuses an 'Inum' to an 'Iter', producing a
+'|$'.)  The '.|' operator fuses an 'Inum' to an 'Iter', producing a
 new 'Iter'.
 
 The fusing operators bind more tightly than the infix concatenation
@@ -281,11 +281,11 @@ following Haskell equivalent to the above Unix pipeline:
 
 @
     grepCount :: IO Int
-    grepCount = 'enumFile' \"\/usr\/share\/dict\/words\" '|..' inumToLines
-                    ``cat`` 'enumFile' \"\/usr\/share\/dict\/extra.words\" '|..' inumToLines
+    grepCount = 'enumFile' \"\/usr\/share\/dict\/words\" '|.' inumToLines
+                    ``cat`` 'enumFile' \"\/usr\/share\/dict\/extra.words\" '|.' inumToLines
                 '|$' inumGrep \"kk\"
-                        '..|' inumGrep \"^[a-z]\"
-                        '..|' lengthI
+                        '.|' inumGrep \"^[a-z]\"
+                        '.|' lengthI
 @
 
 One often has a choice as to whether to fuse an 'Inum' to the
@@ -294,10 +294,10 @@ alternatively have been implemented as:
 
 @
     grepCount' :: IO Int
-    grepCount' = 'cat' ('enumFile' \"\/usr\/share\/dict\/words\" '|..' inumToLines)
-                         ('enumFile' \"\/usr\/share\/dict\/extra.words\" '|..' inumToLines)
-                    '|..' inumGrep \"kk\"
-                    '|..' inumGrep \"^[a-z]\"
+    grepCount' = 'cat' ('enumFile' \"\/usr\/share\/dict\/words\" '|.' inumToLines)
+                         ('enumFile' \"\/usr\/share\/dict\/extra.words\" '|.' inumToLines)
+                    '|.' inumGrep \"kk\"
+                    '|.' inumGrep \"^[a-z]\"
                  '|$' lengthI
 @
 
@@ -320,10 +320,10 @@ and fusing:
     grepCount'' :: IO Int
     grepCount'' = 'cat' ('enumFile' \"\/usr\/share\/dict\/words\")
                            ('enumFile' \"\/usr\/share\/dict\/extra.words\")
-                      '|..' inumToLines
+                      '|.' inumToLines
                   '|$' inumGrep \"kk\"
-                      '..|' inumGrep \"^[a-z]\"
-                      '..|' lengthI
+                      '.|' inumGrep \"^[a-z]\"
+                      '.|' lengthI
 @
 
 This last version changes the semantics of the counting slightly.
@@ -360,11 +360,12 @@ Here is the @grep@ code.  We will analyze it below.
 @
     grep :: String -> [FilePath] -> IO ()
     grep re files
-        | null files = 'enumHandle' stdin '|..' inumToLines '|$' inumGrep re '..|' linesOutI
-        | otherwise  = foldr1 'cat' (map enumLines files) '|$' inumGrep re '..|' linesOutI
+        | null files = 'enumHandle' stdin '|.' inumToLines '|$' inumGrep re '.|' linesOutI
+        | otherwise  = foldr1 'cat' (map enumLines files) '|$' inumGrep re '.|' linesOutI
         where
-          enumLines file = 'inumCatch' ('enumFile' file '|..' inumToLines) handler
-          handler :: 'IOError' -> 'Iter' [S.ByteString] IO a -> 'Iter' [S.ByteString] IO a
+          enumLines file = 'inumCatch' ('enumFile' file '|.' inumToLines) handler
+          handler :: 'IOError' -> 'OnumR' ['S.ByteString'] IO a
+                  -> 'OnumR' ['S.ByteString'] IO a
           handler e iter = do
             liftIO (hPutStrLn stderr $ show e)
             'resumeI' iter
@@ -391,15 +392,17 @@ exceptions are caught, which is why we must either specify an explicit
 type signature for @handler@ or somewhere specify @e@'s type
 explicitly, for instance with:
 
->            liftIO (hPutStrLn stderr $ show (e :: IOError))
+>          handler e@(SomeException _) iter = do ...
 
 The second argument to @handler@, @iter@, is the failing state, which
 contains more information than just the exception.  In the case of an
-'Inum' failure, it contains the state of the 'Iter' (which has not
-failed).  The function 'resumeI' extracts this state and returns it,
-so that the next enumerator in a concatenated series can continue
-feeding input to the 'Iter'.  If, instead of resuming, you want to
-re-throw the error, it suffices to re-execute the failing 'Iter' to
+'Inum' failure, it contains the state of the 'Iter' that the 'Inum'
+was feeding when it failed.  The type of the 'iter' is 'OnumR', which
+is an alias for the result type of an 'Onum'.  The function 'resumeI'
+extracts and returns an @'Iter' [S.ByteString] IO a@ from this failed
+'OnumR'.  Thus, the next enumerator in a concatenated series can
+continue feeding it input.  If, instead of resuming, you want to
+re-throw the error, it suffices to re-execute the failing 'OnumR' to
 propagate the error.  For instance, suppose we want to continue
 executing @grep@ when a named file does not exist, but if some other
 error happens, we want to re-throw the exception to abort the whole
@@ -413,16 +416,16 @@ program.  This could be achieved as follows:
 
 Because printing an exception is so common, there is a function
 'verboseResumeI' that prints exceptions before resuming (also
-prefixing the program name).  So we can simplify the above function
+prefixing the program name).  Thus, we can simplify the above function
 to:
 
 >          handler e iter = if isDoesNotExistError e
 >                             then verboseResumeI iter
 >                             else iter
 
-This final version also gets rid of the need for an explicit type
-signature, because the function @isDoesNotExistError@ has argument
-type 'IOError', constraining the type of @e@ to the type of exceptions
-we want to catch.
+These last two @handler@ functions also do away with the need for an
+explicit type signature, because the function @isDoesNotExistError@
+has argument type 'IOError', constraining the type of @e@ to the type
+of exceptions we want to catch.
 
 -}

@@ -367,7 +367,7 @@ any_hdr req = do
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
   case Map.lookup field request_headers of
     Nothing -> return req'
-    Just f  -> enumPure (L.fromChunks [val]) .|$
+    Just f  -> inumPure (L.fromChunks [val]) .|$
                (f req' <* (optional spaces >> eofI)
                       <?> (S8.unpack field ++ " header"))
 
@@ -484,7 +484,7 @@ put :: L8.ByteString -> IO ()
 put = Prelude.putStrLn . show . L8.unpack
 
 enumHdr :: (Monad m) => Onum L8.ByteString m a
-enumHdr = enumPure $ L.append header
+enumHdr = inumPure $ L.append header
           $ L.cycle $ L8.pack "And some extra crap\r\n"
     where
       header = L8.pack $ "\
@@ -508,8 +508,8 @@ main :: IO ()
 -- main = enumHdr |$ hdr >>= mapM_ L8.putStrLn
 main = enumHandle stdin |$
        inumToChunks
-        ..| inumLog "chunks.log" True 
-        ..| inumFromChunks
-        ..| handleI stdout
+        .| inumLog "chunks.log" True 
+        .| inumFromChunks
+        .| handleI stdout
            
 -}

@@ -35,4 +35,4 @@ main = Net.withSocketsDo $ do
          print addr
          h <- Net.socketToHandle s IO.ReadWriteMode
          Net.sClose sock
-         enumHandle h |.. inumLog "http.log" True |$ testreq
+         enumHandle h |. inumLog "http.log" True |$ testreq

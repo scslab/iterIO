@@ -52,5 +52,5 @@ main = do
       enum = if length av == 1
              then enumHandle stdin
              else foldr1 cat $ map enumFileCatchError $ tail av
-  enum |.. filterLines pat |$ printLines
+  enum |. filterLines pat |$ printLines
   exitSuccess
