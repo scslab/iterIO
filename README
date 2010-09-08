@@ -1,4 +1,4 @@
 To install required packages:
 
 	cabal update
-	cabal install ListLike zlib HSOpenSSL
+	cabal install ListLike zlib HSOpenSSL stringsearch

@@ -77,7 +77,7 @@ sendI sendfn = do
     Just pkt -> sendfn pkt >> sendI sendfn
     Nothing  -> return ()
 
--- | Return the the first element when the Iteratee data type is a list.
+-- | Return the first element when the Iteratee data type is a list.
 headLI :: (Monad m) => Iter [a] m a
 headLI = IterF $ dohead
     where
@@ -85,7 +85,7 @@ headLI = IterF $ dohead
       dohead (Chunk [] _)       = headLI
       dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
 
--- | Return 'Just' the the first element when the Iteratee data type
+-- | Return 'Just' the first element when the Iteratee data type
 -- is a list, or 'Nothing' on EOF.
 safeHeadLI :: (Monad m) => Iter [a] m (Maybe a)
 safeHeadLI = IterF $ dohead
