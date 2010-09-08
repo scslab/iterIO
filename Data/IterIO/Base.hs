@@ -543,6 +543,41 @@ infixr 4 .|
 -- Enumerator construction functions
 --
 
+{-
+newtype IterState s iter a = IterState {
+      unIterState :: s -> iter (s, a)
+    }
+
+class IterStateClass iter where
+    isc_return :: b -> IterState s iter b
+    isc_bind   :: IterState s iter b -> (b -> IterState s iter c)
+               -> IterState s iter c
+    isc_fail   :: String -> IterState s iter b
+
+instance (Monad m, ChunkData t) => IterStateClass (Iter t m) where
+    isc_return b = IterState $ \s -> return (s, b)
+
+    isc_bind m k =
+        IterState $ \s -> finishI (unIterState m s) >>= fixfail s bind
+        where
+          fixfail _ next (InumFail e (s, _)) = InumFail e (s, error "isc_bind")
+          fixfail s next (IterFail e)        = InumFail e (s, error "isc_bind")
+          fixfail _ next (Done a _)          = next a
+          bind (s, a) = finishI (unIterState (k a) s) >>= fixfail s return
+
+    isc_fail msg = IterState $ \s -> InumFail (toException $ ErrorCall msg)
+                                              (s, error "isc_fail")
+
+instance (IterStateClass iter) => Monad (IterState s iter) where
+    return = isc_return
+    (>>=)  = isc_bind
+    fail   = isc_fail
+
+instance MonadTrans (IterState s) where
+    lift m = IterState $ \s -> m >>= return . (,) s
+-}
+
+
 -- | A @Codec@ is an 'Iter' that tranlates data from some input type
 -- @tIn@ to an output type @tOut@ and returns the result in a
 -- 'CodecR'.  If the @Codec@ is capable of repeatedly being invoked to
@@ -1287,7 +1322,9 @@ feedI err _                     = err
 --
 -- The purpose of this function is to allow one to execute an 'Iter'
 -- and look at its state without worrying about the 'Iter' throwing an
--- exception.  For example, to execute an 'Iter' but handle errors
+-- exception, and without worrying about the 'IterF', 'IterM', and
+-- 'IterC' states (which are guaranteed not to be returned by
+-- @finishI@).  For example, to execute an 'Iter' but handle errors
 -- specially, you can run:
 --
 -- >  do iter' <- finishI iter
