@@ -26,7 +26,7 @@ import Text.Printf
 -- import Debug.Trace
 
 import Data.IterIO
--- import Data.IterIO.Extra
+import Data.IterIO.Extra (iterLoop)
 import Data.IterIO.Base (run)
 
 import Arc4

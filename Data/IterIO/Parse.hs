@@ -155,13 +155,12 @@ infixr 3 `orEmpty`
 (<?>) :: (ChunkData t, Monad m) => Iter t m a -> String -> Iter t m a
 (<?>) iter@(IterF _) expected = do
   saw <- IterF $ \c -> Done c c
-  flip mapExceptionI iter $
-    \(IterNoParse _) -> IterExpected (take 50 (show saw) ++ "...") [expected]
+  flip mapExceptionI iter $ \(IterNoParse _) ->
+      IterExpected (take 50 (show saw) ++ "...") [expected]
 (<?>) iter expected
       | isIterActive iter = inumMC passCtl iter >>= (<?> expected)
-      | isIterError iter  = flip mapExceptionI iter $ \(IterNoParse _) ->
+      | otherwise         = flip mapExceptionI iter $ \(IterNoParse _) ->
                             IterExpected "no input" [expected]
-      | otherwise         = iter
 infix 0 <?>
   
 -- | Throw an 'Iter' exception that describes expected input not

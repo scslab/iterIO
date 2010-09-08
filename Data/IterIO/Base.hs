@@ -83,24 +83,23 @@ module Data.IterIO.Base
     -- * Some basic Iters
     , nullI, dataI, chunkI, peekI, atEOFI
     -- * Low-level Iter-manipulation functions
-    , finishI, runI, joinI
+    , feedI, finishI, runI, joinI
     -- * Some basic Inums
     , inumNop, inumMC, inumRepeat
-    , enumPure, iterLoop
+    , enumPure
     -- * Control functions
     , CtlCmd, CtlReq(..), CtlHandler
     , ctlI, safeCtlI
     , noCtl, passCtl -- , ctl, ctl', ctlHandler
     -- * Other functions
-    , feedI, run, chunk, chunkEOF
-    , isIterError, isInumError, isIterActive
+    , run, chunk, chunkEOF
+    , isIterActive
     , iterShows, iterShow
     ) where
 
 import Prelude hiding (null)
 import qualified Prelude
 import Control.Applicative (Applicative(..))
-import Control.Concurrent.MVar
 import Control.Exception (SomeException(..), ErrorCall(..), Exception(..)
                          , try, throw)
 import Control.Monad
@@ -325,66 +324,6 @@ fixMonadIO f = do
 instance (ChunkData t, MonadIO m) => MonadFix (Iter t m) where
     mfix f = fixMonadIO f
 
-{- fixIterPure and fixIterIO allow MonadFix instances, which support
-   out-of-order name bindings in an "mdo" block, provided your file
-   has {-# LANGUAGE RecursiveDo #-} at the top.  A contrived example
-   would be:
-
-fixtest :: IO Int
-fixtest = enumPure [10] `cat` enumPure [1] |$ fixee
-    where
-      fixee :: Iter [Int] IO Int
-      fixee = mdo
-        liftIO $ putStrLn "test #1"
-        c <- return $ a + b
-        liftIO $ putStrLn "test #2"
-        a <- headI
-        liftIO $ putStrLn "test #3"
-        b <- headI
-        liftIO $ putStrLn "test #4"
-        return c
-
--- A very convoluted way of computing factorial
-fixtest2 :: Int -> IO Int
-fixtest2 i = do
-  f <- enumPure [2] `cat` enumPure [1] |$ mfix fact
-  run $ f i
-    where
-      fact :: (Int -> Iter [Int] IO Int)
-           -> Iter [Int] IO (Int -> Iter [Int] IO Int)
-      fact f = do
-               ignore <- headI
-               liftIO $ putStrLn $ "ignoring " ++ show ignore
-               base <- headI
-               liftIO $ putStrLn $ "base is " ++ show base
-               return $ \n -> if n <=  0
-                              then return base
-                              else liftM (n *) (f $ n - 1)
--}
-
-{-
--- | This is a fixed point combinator for iteratees over monads that
--- have no side effects.  If you wish to use @mdo@ with such a monad,
--- you can define an instance of 'MonadFix' in which
--- @'mfix' = fixIterPure@.  However, be warned that this /only/ works
--- when computations in the monad have no side effects, as
--- @fixIterPure@ will repeatedly re-invoke the function passsed in
--- when more input is required (thereby also repeating side-effects).
--- For cases in which the monad may have side effects, if the monad is
--- in the 'MonadIO' class then there is already an 'mfix' instance
--- defined using 'fixMonadIO'.
-fixIterPure :: (ChunkData t, MonadFix m) =>
-               (a -> Iter t m a) -> Iter t m a
-fixIterPure f = IterM $ mfix ff
-    where
-      ff ~(Done a _)  = check $ f a
-      -- Warning: IterF case re-runs function, repeating side effects
-      check (IterF i) = return $ IterF $ \c ->
-                        fixIterPure $ \a -> feedI (f a) c
-      check (IterM m) = m >>= check
-      check iter      = return iter
--}
-
 
 --
 -- Internal utility functions
@@ -401,20 +340,6 @@ getIterError (IterM _)      = error "getIterError: no error (in IterM state)"
 getIterError (IterC _)      = error "getIterError: no error (in IterC state)"
 getIterError _              = error "getIterError: no error to extract"
 
--- | True if an iteratee or an enclosing enumerator has experienced a
--- failure.  (@isIterError@ is always 'True' when 'isInumError' is
--- 'True', but the converse is not true.)
-isIterError :: Iter t m a -> Bool
-isIterError (IterFail _)   = True
-isIterError (InumFail _ _) = True
-isIterError _              = False
-
--- | True if an enumerator enclosing an iteratee has experienced a
--- failure (but not if the iteratee itself failed).
-isInumError :: Iter t m a -> Bool
-isInumError (InumFail _ _) = True
-isInumError _              = False
-
 -- | True if an 'Iter' is requesting something from an
 -- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
 -- error states.
@@ -427,67 +352,6 @@ isIterActive _         = False
 --
 -- Core functions
 --
-
--- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
--- 'Done', or in some error condition, simulates the behavior
--- appropriately.
---
--- Note that this function asserts the following invariants on the
--- behavior of an 'Iter':
---
---     1. An 'Iter' may not return an 'IterF' (asking for more input)
---        if it received a 'Chunk' with the EOF bit 'True'.  (It is
---        okay to return IterF after issuing a successful 'IterC'
---        request.)
---
---     2. An 'Iter' returning 'Done' must not set the EOF bit if it
---        did not receive the EOF bit.
---
--- It /is/, however, okay for an 'Iter' to return 'Done' without the
--- EOF bit even if the EOF bit was set on its input chunk, as
--- @feedI@ will just propagate the EOF bit.  For instance, the
--- following code is valid:
---
--- @
---      feedI (return ()) 'chunkEOF'
--- @
---
--- Even though it is equivalent to:
---
--- @
---      feedI ('Done' () ('Chunk' 'mempty' False)) ('Chunk' 'mempty' True)
--- @
---
--- in which the first argument to @feedI@ appears to be discarding
--- the EOF bit from the input chunk.  @feedI@ will propagate the EOF
--- bit, making the above code equivalent to to @'Done' () 'chunkEOF'@.
---
--- On the other hand, the following code is illegal, as it violates
--- invariant 2 above:
---
--- @
---      feedI ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
--- @
-feedI :: (ChunkData t, Monad m) =>
-         Iter t m a
-      -> Chunk t
-      -> Iter t m a
-feedI iter c | null c           = iter
-feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
-    where
-      noEOF (Done _ (Chunk _ True)) = error "feedI: IterF returned bad EOF"
-      noEOF iter                    = iter
-      forceEOF (IterF _)             = error "feedI: IterF returned after EOF"
-      forceEOF (IterM m)             = IterM $ forceEOF `liftM` m
-      forceEOF (IterC (CtlReq a fr)) = iterC a $ \r -> 
-                                       case r of Just _  -> fr r
-                                                 Nothing -> forceEOF $ fr r
-      forceEOF (Done a (Chunk t _))  = Done a (Chunk t True)
-      forceEOF iter                  = iter
-feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
-feedI (Done a c) c'             = Done a (mappend c c')
-feedI (IterC (CtlReq a fr)) c   = iterC a $ flip feedI c . fr
-feedI err _                     = err
 
 unIterEOF :: SomeException -> SomeException
 unIterEOF e = case fromException e of
@@ -839,11 +703,10 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
        -- exception and the failing 'Iter' state.
        -> Iter t m a
 catchI iter0 handler = finishI iter0 >>= check
-    where
-      check iter@(Done _ _) = iter
-      check err             = case fromException $ getIterError err of
-                                Just e  -> handler e err
-                                Nothing -> err
+    where check iter@(Done _ _) = iter
+          check iter            = case fromException $ getIterError iter of
+                                    Just e  -> handler e iter
+                                    Nothing -> iter
 
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception
@@ -855,14 +718,15 @@ catchI iter0 handler = finishI iter0 >>= check
 -- 'resumeI' on an Iteratee after re-winding the input.
 catchBI :: (Exception e, ChunkData t, Monad m) =>
            Iter t m a
+        -- ^ 'Iter' that might throw an exception
         -> (e -> Iter t m a)
+        -- ^ Exception handler
         -> Iter t m a
 catchBI iter0 handler = copyInput iter0 >>= uncurry check
-    where
-      check iter@(Done _ _) _ = iter
-      check err input         = case fromException $ getIterError err of
-                                  Just e  -> feedI (handler e) input
-                                  Nothing -> err
+    where check iter@(Done _ _) _ = iter
+          check iter input        = case fromException $ getIterError iter of
+                                      Just e  -> feedI (handler e) input
+                                      Nothing -> iter
 
 -- | A version of 'catchI' with the arguments reversed, analogous to
 -- @'handle'@ in the standard library.  (A more logical name for this
@@ -935,12 +799,11 @@ inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
            -> (e -> InumR tIn tOut m a -> InumR tIn tOut m a)
            -- ^ Exception handler
            -> Inum tIn tOut m a
-inumCatch enum handler iter = finishI (enum iter) >>= check
-    where
-      check i@(InumFail e _) = case fromException e of
-                                 Just e' -> handler e' i
-                                 Nothing -> i
-      check i                = i
+inumCatch enum handler = finishI . enum >=> check
+    where check iter@(InumFail e _) = case fromException e of
+                                        Just e' -> handler e' iter
+                                        Nothing -> iter
+          check iter                = iter
 
 -- | 'inumCatch' with the argument order switched.
 inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
@@ -951,7 +814,6 @@ inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
             -> Inum tIn tOut m a
 inumHandler = flip inumCatch
 
-
 -- | Used in an exception handler, after an 'Inum' failure, to resume
 -- processing of the 'Iter' by the next enumerator in a 'cat'ed
 -- series.  See 'inumCatch' for an example.
@@ -960,9 +822,8 @@ resumeI :: (ChunkData tIn, Monad m) =>
 resumeI (InumFail _ iter) = return iter
 resumeI iter              = iter
 
--- | Like 'resumeI', but if the failure was in an enumerator and the
--- iteratee is resumable, prints an error message to standard error
--- before invoking 'resumeI'.
+-- | Like 'resumeI', but if the 'Iter' is resumable, also prints an
+-- error message to standard error before running it.
 verboseResumeI :: (ChunkData tIn, MonadIO m) =>
                   InumR tIn tOut m a -> InumR tIn tOut m a
 verboseResumeI (InumFail err iter) = do
@@ -1257,8 +1118,7 @@ data CodecR tIn m tOut = CodecF { unCodecF :: !(Codec tIn m tOut)
 
 -- | Transform an ordinary 'Iter' into a stateless 'Codec'.
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
-iterToCodec iter = codec
-    where codec = CodecF codec `liftM` iter
+iterToCodec iter = let codec = CodecF codec `liftM` iter in codec
 
 -- | A variant of 'inumBracket' that also takes a 'CtlHandler' (as a
 -- function of the input).
@@ -1311,25 +1171,6 @@ inumBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             -> Inum tIn tOut m a
 inumBracket before after codec iter0 =
     inumCBracket before after (const noCtl) codec iter0
-
-{-
--- | If an 'Iter' receives EOF, allow it to return 'IterF' and keep
--- feeding it 'chunkEOF'.  If, however, the 'Iter' issues a successful
--- control request, then alow it to ask for more data.
-fixEOF :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a
-fixEOF iter0 = fok iter0
-    where
-      fok (IterF f)                = IterF $ \c@(Chunk _ eof) ->
-                                     if eof then fNOTok (f c) else fok (f c)
-      fok iter | isIterActive iter = apNext fok iter
-               | otherwise         = iter
-      fNOTok (IterF f)                = fNOTok $ f chunkEOF
-      fNOTok (IterC (CtlReq carg fr)) = iterC carg $ \res -> case res of
-                                          Nothing -> fNOTok $ fr res
-                                          Just _  -> fok $ fr res
-      fNOTok iter | isIterActive iter = apNext fNOTok iter
-                  | otherwise         = iter
--}
 
 -- | @inumBind iter m k@ is similar to @m '>>=' k@, but for use within
 -- 'Inum' implementations.  If @m@ throws an 'IterEOF' error, then
@@ -1510,37 +1351,71 @@ ctlHandler ctls req = case res of
 enumPure :: (Monad m, ChunkData t) => t -> Onum t m a
 enumPure t = mkInum $ return $ CodecE t
 
--- | Create a loopback @('Iter', 'Onum')@ pair.  The iteratee and
--- enumerator can be used in different threads.  Any data fed into the
--- 'Iter' will in turn be fed by the 'Onum' into whatever 'Iter' it
--- is given.  This is useful for testing a protocol implementation
--- against itself.
-iterLoop :: (MonadIO m, ChunkData t, Show t) =>
-            m (Iter t m (), Onum t m a)
-iterLoop = do
-  -- The loopback is implemented with an MVar (MVar Chunk).  The
-  -- enumerator waits on the inner MVar, while the iteratee uses the outer 
-  -- MVar to avoid races when appending to the stored chunk.
-  pipe <- liftIO $ newEmptyMVar >>= newMVar
-  return (IterF $ iterf pipe, enum pipe)
+--
+-- Iter manipulation functions
+--
+
+-- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
+-- 'Done', or in some error condition, simulates the behavior
+-- appropriately.
+--
+-- Note that this function asserts the following invariants on the
+-- behavior of an 'Iter':
+--
+--     1. An 'Iter' may not return an 'IterF' (asking for more input)
+--        if it received a 'Chunk' with the EOF bit 'True'.  (It is
+--        okay to return IterF after issuing a successful 'IterC'
+--        request.)
+--
+--     2. An 'Iter' returning 'Done' must not set the EOF bit if it
+--        did not receive the EOF bit.
+--
+-- It /is/, however, okay for an 'Iter' to return 'Done' without the
+-- EOF bit even if the EOF bit was set on its input chunk, as
+-- @feedI@ will just propagate the EOF bit.  For instance, the
+-- following code is valid:
+--
+-- @
+--      feedI (return ()) 'chunkEOF'
+-- @
+--
+-- Even though it is equivalent to:
+--
+-- @
+--      feedI ('Done' () ('Chunk' 'mempty' False)) ('Chunk' 'mempty' True)
+-- @
+--
+-- in which the first argument to @feedI@ appears to be discarding
+-- the EOF bit from the input chunk.  @feedI@ will propagate the EOF
+-- bit, making the above code equivalent to to @'Done' () 'chunkEOF'@.
+--
+-- On the other hand, the following code is illegal, as it violates
+-- invariant 2 above:
+--
+-- @
+--      feedI ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
+-- @
+feedI :: (ChunkData t, Monad m) =>
+         Iter t m a
+      -> Chunk t
+      -> Iter t m a
+feedI iter c | null c           = iter
+feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
     where
-      iterf pipe c@(Chunk _ eof) = do
-             liftIO $ withMVar pipe $ \p ->
-                 do mp <- tryTakeMVar p
-                    putMVar p $ case mp of
-                                  Nothing -> c
-                                  Just c' -> mappend c' c
-             if eof then Done () chunkEOF else IterF $ iterf pipe
+      noEOF (Done _ (Chunk _ True)) = error "feedI: IterF returned bad EOF"
+      noEOF iter                    = iter
+      forceEOF (IterF _)             = error "feedI: IterF returned after EOF"
+      forceEOF (IterM m)             = IterM $ forceEOF `liftM` m
+      forceEOF (IterC (CtlReq a fr)) = iterC a $ \r -> 
+                                       case r of Just _  -> fr r
+                                                 Nothing -> forceEOF $ fr r
+      forceEOF (Done a (Chunk t _))  = Done a (Chunk t True)
+      forceEOF iter                  = iter
+feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
+feedI (Done a c) c'             = Done a (mappend c c')
+feedI (IterC (CtlReq a fr)) c   = iterC a $ flip feedI c . fr
+feedI err _                     = err
 
-      enum pipe = let codec = do
-                        p <- liftIO $ readMVar pipe
-                        Chunk c eof <- liftIO $ takeMVar p
-                        return $ if eof then CodecE c else CodecF codec c
-                  in mkInum codec
-
---
--- Basic inner enumerators
---
 
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
 -- 'IterF', 'IterM', or 'IterC' states), then 'return's the 'Iter'
