@@ -43,7 +43,7 @@ inumStopString pat0 = mkInum $ nextChunk L8.empty
 {-
 main :: IO ()
 main = enumHandle stdin |$ do
-         inumStopString "TheEnd" ..| handleI stdout
+         inumStopString "TheEnd" .| handleI stdout
          liftIO $ putStrLn "\n\n*** We have reached THE END #1 ***\n\n"
-         inumStopString "TheEnd" ..| handleI stdout
+         inumStopString "TheEnd" .| handleI stdout
 -}

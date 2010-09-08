@@ -91,17 +91,17 @@ test d t w l r = do
   connect_fix sock r
   ep <- newEndpoint w t
   let sender' = sendI $ liftIO . sendStr sock
-      sender = if d then rawPktPrint "send " ..| sender' else sender'
+      sender = if d then rawPktPrint "send " .| sender' else sender'
       receiver' = enumDgram sock
-      receiver = if d then receiver' |.. rawPktPrint "recv " else receiver'
+      receiver = if d then receiver' |. rawPktPrint "recv " else receiver'
 
   reader <- newEmptyMVar
 
-  let recvpipe = receiver |$ relReceive ep sender ..| pktPut
+  let recvpipe = receiver |$ relReceive ep sender .| pktPut
   -- forkIO $ (recvpipe `finally` putMVar reader () >> forever recvpipe)
   _ <- forkIO $ (recvpipe `finally` putMVar reader ())
 
-  enumHandle stdin |$ relSend ep forkIO ..| sender
+  enumHandle stdin |$ relSend ep forkIO .| sender
   takeMVar reader
 
 parseDest :: String -> (Maybe String, String)

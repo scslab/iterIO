@@ -104,14 +104,14 @@ internalTarget = do
   ep <- liftIO $ newEndpoint (tcWin tc) (tcTimeout tc)
   (dgramI, dgramE) <- if tcDebug tc
                       then do (dgramI', dgramE') <- iterLoop
-                              return (pktDebug "send " ..| dgramI',
-                                      dgramE' |.. pktDebug "recv ")
+                              return (pktDebug "send " .| dgramI',
+                                      dgramE' |. pktDebug "recv ")
                       else iterLoop
   (streamI, streamE) <- iterLoop
   return $ Target dgramE
-             (relReceive ep dgramI ..| pktPut ..| streamI)
+             (relReceive ep dgramI .| pktPut .| streamI)
              streamE
-             (relSend ep forkTM ..| dgramI)
+             (relSend ep forkTM .| dgramI)
              (liftIO $ killEndpoint ep)
 
 phPid :: ProcessHandle -> IO CPid
@@ -296,7 +296,7 @@ packE = mkInum' $ do
   return packet
 
 cE :: (Monad m) => Char -> Int -> Onum L.ByteString m a
-cE c len = enumPure $ L8.replicate (fromIntegral len) c
+cE c len = inumPure $ L8.replicate (fromIntegral len) c
 nI :: (Monad m) => Int -> Iter L.ByteString m Bool
 nI n = do
   s <- stringMaxI $ fromIntegral n
@@ -393,7 +393,7 @@ twoWay ut a b = do
 pingPong :: [ThreadId] -> Targ -> Targ -> TM Bool
 pingPong ut a b = do
   runStreamTest ut [a, b] 30
-               [enumPure (L8.pack "1000\n") `cat` tSource a
+               [inumPure (L8.pack "1000\n") `cat` tSource a
                     |$ minusOne 1000 (tDrain a)
                , tSource b |$ minusOne 999 (tDrain b)]
                []
@@ -433,13 +433,13 @@ eofTest ut a b = do
               [tSource a |$ a4I key strTestLen]
               [tSource b |$ (nullI >> lift (sendit str) >> return True)
                    >> return ()
-              , enumPure (L8.pack "request\n") |$ tDrain a]
+              , inumPure (L8.pack "request\n") |$ tDrain a]
     where
-      sendit str = enumPure str |$ (tDrain b >> return True)
+      sendit str = inumPure str |$ (tDrain b >> return True)
 {-
               [tSource a |$ a4I key strTestLen]
               [tSource b |$ (nullI >> lift (a4E key strTestLen |$ packE
-                                            ..| (tDrain b >> return True)))
+                                            .| (tDrain b >> return True)))
                        >> return ()
-              , enumPure (L8.pack "request\n") |$ tDrain a]
+              , inumPure (L8.pack "request\n") |$ tDrain a]
 -}

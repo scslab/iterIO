@@ -266,11 +266,11 @@ the 'cat' function, producing a new data source that enumerates all of
 the data in the first 'Inum' followed by all of the data in the
 second.
 
-There are two /fusing/ operators.  The '|..' operator fuses two
+There are two /fusing/ operators.  The '|.' operator fuses two
 'Inum's, provided the output type of the first is the input type of
 the second.  (Mnemonic: it produces a pipeline that is open on the
 right hand side, as it still needs to be applied to an iteratee with
-'|$'.)  The '..|' operator fuses an 'Inum' to an 'Iter', producing a
+'|$'.)  The '.|' operator fuses an 'Inum' to an 'Iter', producing a
 new 'Iter'.
 
 The fusing operators bind more tightly than the infix concatenation
@@ -281,11 +281,11 @@ following Haskell equivalent to the above Unix pipeline:
 
 @
     grepCount :: IO Int
-    grepCount = 'enumFile' \"\/usr\/share\/dict\/words\" '|..' inumToLines
-                    ``cat`` 'enumFile' \"\/usr\/share\/dict\/extra.words\" '|..' inumToLines
+    grepCount = 'enumFile' \"\/usr\/share\/dict\/words\" '|.' inumToLines
+                    ``cat`` 'enumFile' \"\/usr\/share\/dict\/extra.words\" '|.' inumToLines
                 '|$' inumGrep \"kk\"
-                        '..|' inumGrep \"^[a-z]\"
-                        '..|' lengthI
+                        '.|' inumGrep \"^[a-z]\"
+                        '.|' lengthI
 @
 
 One often has a choice as to whether to fuse an 'Inum' to the
@@ -294,10 +294,10 @@ alternatively have been implemented as:
 
 @
     grepCount' :: IO Int
-    grepCount' = 'cat' ('enumFile' \"\/usr\/share\/dict\/words\" '|..' inumToLines)
-                         ('enumFile' \"\/usr\/share\/dict\/extra.words\" '|..' inumToLines)
-                    '|..' inumGrep \"kk\"
-                    '|..' inumGrep \"^[a-z]\"
+    grepCount' = 'cat' ('enumFile' \"\/usr\/share\/dict\/words\" '|.' inumToLines)
+                         ('enumFile' \"\/usr\/share\/dict\/extra.words\" '|.' inumToLines)
+                    '|.' inumGrep \"kk\"
+                    '|.' inumGrep \"^[a-z]\"
                  '|$' lengthI
 @
 
@@ -320,10 +320,10 @@ and fusing:
     grepCount'' :: IO Int
     grepCount'' = 'cat' ('enumFile' \"\/usr\/share\/dict\/words\")
                            ('enumFile' \"\/usr\/share\/dict\/extra.words\")
-                      '|..' inumToLines
+                      '|.' inumToLines
                   '|$' inumGrep \"kk\"
-                      '..|' inumGrep \"^[a-z]\"
-                      '..|' lengthI
+                      '.|' inumGrep \"^[a-z]\"
+                      '.|' lengthI
 @
 
 This last version changes the semantics of the counting slightly.
@@ -360,10 +360,10 @@ Here is the @grep@ code.  We will analyze it below.
 @
     grep :: String -> [FilePath] -> IO ()
     grep re files
-        | null files = 'enumHandle' stdin '|..' inumToLines '|$' inumGrep re '..|' linesOutI
-        | otherwise  = foldr1 'cat' (map enumLines files) '|$' inumGrep re '..|' linesOutI
+        | null files = 'enumHandle' stdin '|.' inumToLines '|$' inumGrep re '.|' linesOutI
+        | otherwise  = foldr1 'cat' (map enumLines files) '|$' inumGrep re '.|' linesOutI
         where
-          enumLines file = 'inumCatch' ('enumFile' file '|..' inumToLines) handler
+          enumLines file = 'inumCatch' ('enumFile' file '|.' inumToLines) handler
           handler :: 'IOError' -> 'Iter' [S.ByteString] IO a -> 'Iter' [S.ByteString] IO a
           handler e iter = do
             liftIO (hPutStrLn stderr $ show e)

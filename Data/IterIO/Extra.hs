@@ -91,7 +91,7 @@ iterLoop = do
 
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
--- 'Iter' that can safely be fed (e.g., with 'enumPure') from multiple
+-- 'Iter' that can safely be fed (e.g., with 'inumPure') from multiple
 -- threads.
 inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
 inumSplit iter1 = do
@@ -112,7 +112,7 @@ inumSplit iter1 = do
    would be:
 
 fixtest :: IO Int
-fixtest = enumPure [10] `cat` enumPure [1] |$ fixee
+fixtest = inumPure [10] `cat` inumPure [1] |$ fixee
     where
       fixee :: Iter [Int] IO Int
       fixee = rec
@@ -128,7 +128,7 @@ fixtest = enumPure [10] `cat` enumPure [1] |$ fixee
 -- A very convoluted way of computing factorial
 fixtest2 :: Int -> IO Int
 fixtest2 i = do
-  f <- enumPure [2] `cat` enumPure [1] |$ mfix fact
+  f <- inumPure [2] `cat` inumPure [1] |$ mfix fact
   run $ f i
     where
       fact :: (Int -> Iter [Int] IO Int)

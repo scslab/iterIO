@@ -68,8 +68,8 @@ runTest n test = do
   a <- testTargA test
   b <- testTargB test
   threads <- mapM forkTM [
-                tUSource a |$ testAtoB test ..| tUDrain b
-               , tUSource b |$ testBtoA test ..| tUDrain a ]
+                tUSource a |$ testAtoB test .| tUDrain b
+               , tUSource b |$ testBtoA test .| tUDrain a ]
   result <- testStream test threads a b
   liftIO $ putStrLn $ if result then "passed" else "FAILED"
   return result
