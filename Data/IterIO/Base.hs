@@ -90,7 +90,7 @@ module Data.IterIO.Base
     -- * Control functions
     ,  CtlHandler
     , ctlI, safeCtlI
-    , noCtl, passCtl -- , ctl, ctl', ctlHandler
+    , noCtl, passCtl, ctl, ctl', ctlHandler
     ) where
 
 import Prelude hiding (null)
@@ -540,7 +540,7 @@ infixr 4 .|
 
 
 --
--- Enumerator construction fuctnios
+-- Enumerator construction functions
 --
 
 -- | A @Codec@ is an 'Iter' that tranlates data from some input type
@@ -1282,9 +1282,9 @@ feedI err _                     = err
 --
 -- >  do iter' <- finishI iter
 -- >     case iter' of
--- >       IterFail e@(SomeException _)   -> ... handle error ...
--- >       InumFail e@(SomeException _) i -> ... handle error ...
--- >       _                              -> iter' -- okay to execute
+-- >       IterFail e   -> ... handle error ...
+-- >       InumFail e i -> ... handle error ...
+-- >       _            -> iter' -- okay to execute
 finishI :: (ChunkData t, Monad m) => Inum t t m a
 finishI (IterF f)                = IterF $ finishI . f
 finishI (IterM m)                = IterM $ finishI `liftM` m
@@ -1392,7 +1392,7 @@ ctlI carg = safeCtlI carg >>= returnit
 -- up further to other enclosing enumerators).
 --
 -- One use of this is for 'Inum's that change the data in such a way
--- that control requests would not makes sense to outer enumerators.
+-- that control requests would not make sense to outer enumerators.
 -- Suppose @gunzipCodec@ is a codec that uncompresses a file in gzip
 -- format.  The corresponding inner enumerator should probably be
 -- defined as:
@@ -1413,7 +1413,6 @@ noCtl (CtlReq _ fr) = return $ fr Nothing
 passCtl :: (ChunkData tIn, Monad m) => CtlHandler tIn tOut m a
 passCtl (CtlReq carg fr) = iterC carg $ return . fr
 
-{-
 -- | Wrap a control command for requests of type @carg@ into a
 -- function of type @'CtlReq' t m a -> Maybe 'Iter' t m a@, which is
 -- not parameterized by @carg@ and therefore can be grouped in a list
@@ -1433,45 +1432,36 @@ passCtl (CtlReq carg fr) = iterC carg $ return . fr
 --              , ctl $ \\'SizeC' -> 'liftIO' ('hFileSize' h)
 --              ]
 -- @
-ctl :: (CtlCmd carg cres, ChunkData t, Monad m) =>
-       (carg -> Iter t m cres)
-    -> CtlReq t m a
-    -> Maybe (Iter t m a)
+ctl :: (CtlCmd carg cres, ChunkData tIn, ChunkData tOut, Monad m) =>
+       (carg -> Iter tIn m cres)
+    -> CtlReq tOut m a
+    -> Maybe (InumR tIn tOut m a)
 ctl f (CtlReq carg fr) = case cast carg of
                            Nothing    -> Nothing
-                           Just carg' -> Just $ f carg' >>= fr . cast
+                           Just carg' -> Just $ f carg' >>= return . fr . cast
 
 -- | A variant of 'ctl' that, makes the control operation fail if it
 -- throws any kind of exception (as opposed to re-propagating the
 -- exception as an 'EnumOFail', which is what would end up happening
 -- with 'ctl').
-ctl' :: (CtlCmd carg cres, ChunkData t, Monad m) =>
-        (carg -> Iter t m cres)
-     -> CtlReq t m a
-     -> Maybe (Iter t m a)
+ctl' :: (CtlCmd carg cres, ChunkData tIn, ChunkData tOut, Monad m) =>
+        (carg -> Iter tIn m cres)
+     -> CtlReq tOut m a -> Maybe (InumR tIn tOut m a)
 ctl' f (CtlReq carg fr) = case cast carg of
-                           Nothing    -> Nothing
-                           Just carg' -> Just $ doit carg'
-    where
-      doit carg' = do
-        er <- tryI $ f carg'
-        case er of
-          Right r                   -> fr $ cast r
-          Left (SomeException _, _) -> fr Nothing
+                            Nothing    -> Nothing
+                            Just carg' -> Just $ tryf carg'
+    where tryf carg' = tryI (f carg') >>=
+                       return . either (\(SomeException _, _) -> fr Nothing)
+                                       (fr . cast)
 
 -- | Create a 'CtlHandler' from a list of functions created with 'ctl'
--- that try each tries one argument type.  See the example given for
--- 'ctl'.
-ctlHandler :: (ChunkData t, Monad m) =>
-              [CtlReq t m a -> Maybe (Iter t m a)]
-           -> CtlHandler t m a
+-- or `ctl'`.  Tries each argument type in turn until one succeeds.
+-- See the example given for 'ctl'.
+ctlHandler :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+              [CtlReq tOut m a -> Maybe (InumR tIn tOut m a)]
+           -> CtlHandler tIn tOut m a
 ctlHandler ctls req = case res of
-                     Nothing           -> IterC req
-                     Just iter         -> iter
+                        Nothing   -> passCtl req
+                        Just iter -> iter
     where
-      res = foldr ff Nothing ctls
-      ff a b = case a req of
-                 Nothing  -> b
-                 a'       -> a'
--}
-
+      res = foldr (\a b -> maybe b Just $ a req) Nothing ctls
