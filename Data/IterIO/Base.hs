@@ -855,6 +855,10 @@ tryBI iter1 = copyInput iter1 >>= errToEither
 -- to catch /asynchronous/ exceptions, such as lazily evaluated
 -- divide-by-zero errors, the 'throw' function, or exceptions raised
 -- by other threads using @'throwTo'@.
+--
+-- @\`catchI\`@ has the default infix precedence (@infixl 9
+-- \`catchI\`@), which binds more tightly than any concatenation or
+-- fusing operators.
 catchI :: (Exception e, ChunkData t, Monad m) =>
           Iter t m a
        -- ^ 'Iter' that might throw an exception
@@ -914,7 +918,13 @@ handlerBI = flip catchBI
 -- scope of the argument to 'inumCatch' will be caught.  For example:
 --
 -- > inumBad :: (ChunkData t, Monad m) => Inum t t m a
--- > inumBad = mkInum $ fail "inumBad"
+-- > inumBad = mkInum' $ fail "inumBad"
+-- > 
+-- > skipError :: (ChunkData tOut, MonadIO m) =>
+-- >              SomeException -> InumR tOut tIn m a -> InumR tOut tIn m a
+-- > skipError e iter = do
+-- >   liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
+-- >   resumeI iter
 -- >
 -- > -- Throws an exception, because inumBad was fused outside the argument
 -- > -- to inumCatch.
@@ -931,12 +941,12 @@ handlerBI = flip catchBI
 -- > test3 = inumPure "test" |. (inumCatch inumBad skipError) |$ nullI
 --
 -- Note that @\`inumCatch\`@ has the default infix precedence (@infixl
--- 9 `inumcatch`@), which binds more tightly than any concatenation or
--- fusing operators.
+-- 9 \`inumcatch\`@), which binds more tightly than any concatenation
+-- or fusing operators.
 --
 -- As noted for 'catchI', exception handlers receive both the
--- exception thrown, and the failing 'Iter'.  Particularly in the case
--- of 'inumCatch', it is important to re-throw exceptions by
+-- exception thrown and the failing 'Iter'.  Particularly in the case
+-- of @inumCatch@, it is important to re-throw exceptions by
 -- re-executing the failed 'Iter', not passing the exception itself to
 -- 'throwI'.  That way, if the exception is re-caught, 'resumeI' will
 -- continue to work properly.  For example, to copy two files to
@@ -947,10 +957,10 @@ handlerBI = flip catchBI
 --  resumeTest :: IO ()
 --  resumeTest = doFile \"file1\" ``cat`` doFile \"file2\" |$ 'handleI' stdout
 --      where
---        doFile path = inumCatch (`enumFile'` path) $ \err iter ->
---                      if 'isDoesNotExistError' err
---                      then 'verboseResumeI' iter
---                      else iter
+--        doFile path = inumCatch (`enumFile'` path) $ \\err iter ->
+--                        if 'isDoesNotExistError' err
+--                          then 'verboseResumeI' iter
+--                          else iter
 -- @
 --
 inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
