@@ -1055,7 +1055,10 @@ wrapI :: (ChunkData t, Monad m) =>
       -> Iter t m b                 -- ^ Returns an 'Iter' whose
                                     -- result has been transformed by
                                     -- the transformation function
-wrapI f = inumNop >=> f
+-- wrapI f = inumNop >=> f
+wrapI f = next
+    where next iter | isIterActive iter = apNext next iter
+                    | otherwise         = f iter
 
 -- | A function that mostly acts like '>>=', but preserves 'InumFail'
 -- failures.  (@m '>>=' k@ will translate an 'InumFail' in @m@ into an
@@ -1249,7 +1252,7 @@ infixr 3 `cat`
          Inum tIn tMid m (Iter tOut m a) -- ^
       -> Inum tMid tOut m a
       -> Inum tIn tOut m a
-(|..) outer inner iter = joinI $ outer $ inner iter
+(|..) outer inner iter = wrapI joinI $ outer $ inner iter
 infixl 4 |..
 
 -- | Fuse an 'Inum' that transcodes @tIn@ to @tOut@ with an 'Iter'
@@ -1261,7 +1264,7 @@ infixl 4 |..
          Inum tIn tOut m a     -- ^
       -> Iter tOut m a
       -> Iter tIn m a
-(..|) inner iter = joinI $ inner iter
+(..|) inner iter = wrapI joinI $ inner iter
 infixr 4 ..|
 
 -- | A @Codec@ is an 'Iter' that tranlates data from some input type
