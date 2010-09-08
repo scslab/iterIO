@@ -91,8 +91,8 @@ iterLoop = do
 
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
--- 'Iter' that can safely be fed (e.g., with @'returnI' $ 'feedI' iter
--- $ 'chunk' input@) from multiple threads.
+-- 'Iter' that can safely be fed (e.g., with 'enumPure') from multiple
+-- threads.
 inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
 inumSplit iter1 = do
   mv <- liftIO $ newMVar $ iter1
