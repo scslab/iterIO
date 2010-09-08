@@ -1055,10 +1055,12 @@ wrapI :: (ChunkData t, Monad m) =>
       -> Iter t m b                 -- ^ Returns an 'Iter' whose
                                     -- result has been transformed by
                                     -- the transformation function
--- wrapI f = inumNop >=> f
+wrapI f = inumNop >=> f
+{-
 wrapI f = next
     where next iter | isIterActive iter = apNext next iter
                     | otherwise         = f iter
+-}
 
 -- | A function that mostly acts like '>>=', but preserves 'InumFail'
 -- failures.  (@m '>>=' k@ will translate an 'InumFail' in @m@ into an
@@ -1252,7 +1254,7 @@ infixr 3 `cat`
          Inum tIn tMid m (Iter tOut m a) -- ^
       -> Inum tMid tOut m a
       -> Inum tIn tOut m a
-(|..) outer inner iter = wrapI joinI $ outer $ inner iter
+(|..) outer inner iter = joinI $ outer $ inner iter
 infixl 4 |..
 
 -- | Fuse an 'Inum' that transcodes @tIn@ to @tOut@ with an 'Iter'
@@ -1264,7 +1266,7 @@ infixl 4 |..
          Inum tIn tOut m a     -- ^
       -> Iter tOut m a
       -> Iter tIn m a
-(..|) inner iter = wrapI joinI $ inner iter
+(..|) inner iter = joinI $ inner iter
 infixr 4 ..|
 
 -- | A @Codec@ is an 'Iter' that tranlates data from some input type
@@ -1593,7 +1595,8 @@ iterLoop = do
 -- >       _                              -> iter' -- okay to execute
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop (IterF f)   = IterF dochunk
-    where dochunk (Chunk t True) = return $ f (chunk t)
+    -- XXX this is illegal.  An Inum should not feed EOF to Iter
+    where dochunk (Chunk t True) = return $ f (Chunk t True)
           dochunk c              = inumNop $ f c
 inumNop (IterM m)   = IterM $ inumNop `liftM` m
 inumNop (IterC req) = passCtl req >>= inumNop
