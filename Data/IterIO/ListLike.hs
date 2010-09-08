@@ -223,7 +223,7 @@ instance CtlCmd TellC Integer
 
 fileCtl :: (ChunkData tIn, ChunkData tOut, MonadIO m) =>
            Handle -> CtlHandler tIn tOut m a
-fileCtl h = ctlHandler
+fileCtl h = ctlHandler passCtl
             [ ctl' $ \(SeekC mode pos) -> liftIO (hSeek h mode pos)
             , ctl' $ \TellC -> liftIO (hTell h)
             , ctl' $ \SizeC -> liftIO (hFileSize h)

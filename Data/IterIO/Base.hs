@@ -360,14 +360,14 @@ isIterActive _         = False
 --
 -- >type Inum' tIn tOut m a = Iter tOut m a -> Iter tIn m a
 --
--- In fact, given an @Inum@ object @inum@, it is possible to construct
+-- In fact, given an 'Inum' object @inum@, it is possible to construct
 -- a function of type @Inum'@ with @(inum '.|')@.  But sometimes one
--- might like to concatenate @Inum@s.  For instance, consider a
+-- might like to concatenate 'Inum's.  For instance, consider a
 -- network protocol that changes encryption or compression modes
--- midstream.  Transcoding is done by @Inum@s.  To change transcoding
+-- midstream.  Transcoding is done by 'Inum's.  To change transcoding
 -- methods after applying an @Inum@ to an iteratee requires the
--- ability to \"pop\" the iteratee back out of the @Inum@ so as to be
--- able to hand it to another @Inum@.  `Inum`'s return type allows the
+-- ability to \"pop\" the iteratee back out of the 'Inum' so as to be
+-- able to hand it to another 'Inum'.  `Inum`'s return type allows the
 -- monadic bind operator '>>=' to accomplish this popping.
 --
 -- An @Inum@ must never feed an EOF chunk to its iteratee.  Instead,
@@ -1421,15 +1421,16 @@ passCtl (CtlReq carg fr) = iterC carg $ return . fr
 -- 'tryCtls'.
 --
 -- As an example, the following funciton produces a 'CtlHandler'
--- (suitable to be passed to 'enumCO' or 'enumCObracket') that
+-- (suitable to be passed to 'mkInum' or 'inumCBracket') that
 -- implements control operations for three types:
 --
 -- @
---  fileCtl :: ('ChunkData' t, 'MonadIO' m) => 'Handle' -> 'CtlHandler' t m a
---  fileCtl h = 'ctlHandler'
---              [ ctl $ \\('SeekC' mode pos) -> 'liftIO' ('hSeek' h mode pos)
---              , ctl $ \\'TellC' -> 'liftIO' ('hTell' h)
---              , ctl $ \\'SizeC' -> 'liftIO' ('hFileSize' h)
+--  fileCtl :: (ChunkData tIn, ChunkData tOut, MonadIO m) =>
+--             Handle -> CtlHandler tIn tOut m a
+--  fileCtl h = 'ctlHandler' 'passCtl'
+--              [ `ctl'` $ \\('SeekC' mode pos) -> 'liftIO' ('hSeek' h mode pos)
+--              , `ctl'` $ \\'TellC' -> 'liftIO' ('hTell' h)
+--              , `ctl'` $ \\'SizeC' -> 'liftIO' ('hFileSize' h)
 --              ]
 -- @
 ctl :: (CtlCmd carg cres, ChunkData tIn, ChunkData tOut, Monad m) =>
@@ -1442,7 +1443,7 @@ ctl f (CtlReq carg fr) = case cast carg of
 
 -- | A variant of 'ctl' that, makes the control operation fail if it
 -- throws any kind of exception (as opposed to re-propagating the
--- exception as an 'EnumOFail', which is what would end up happening
+-- exception as an 'InumFail', which is what would end up happening
 -- with 'ctl').
 ctl' :: (CtlCmd carg cres, ChunkData tIn, ChunkData tOut, Monad m) =>
         (carg -> Iter tIn m cres)
@@ -1456,12 +1457,18 @@ ctl' f (CtlReq carg fr) = case cast carg of
 
 -- | Create a 'CtlHandler' from a list of functions created with 'ctl'
 -- or `ctl'`.  Tries each argument type in turn until one succeeds.
--- See the example given for 'ctl'.
+-- If none succeeds, runs a fallback handler, which can be 'noCtl',
+-- 'passCtl', or another custom 'CtlHandler'.  See the use example
+-- given for 'ctl'.
 ctlHandler :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-              [CtlReq tOut m a -> Maybe (InumR tIn tOut m a)]
+              CtlHandler tIn tOut m a
+           -- ^ Fallback 'CtlHandler'
+           -> [CtlReq tOut m a -> Maybe (InumR tIn tOut m a)]
+           -- ^ List of individual request handlers to try (each
+           -- created with 'ctl' or `ctl'`).
            -> CtlHandler tIn tOut m a
-ctlHandler ctls req = case res of
-                        Nothing   -> passCtl req
-                        Just iter -> iter
+ctlHandler fallback ctls req = case res of
+                                 Nothing   -> fallback req
+                                 Just iter -> iter
     where
       res = foldr (\a b -> maybe b Just $ a req) Nothing ctls
