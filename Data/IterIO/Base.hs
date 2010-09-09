@@ -1166,7 +1166,7 @@ feedI err _                     = err
 -- This makes it safe to ignore the left-over data of the inner
 -- 'Done'.
 finishI :: (ChunkData t, Monad m) => Inum t t m a
-finishI (IterF f)                = IterF $ finishI . f
+finishI iter@(IterF _)           = IterF $ finishI . feedI iter
 finishI (IterM m)                = IterM $ finishI `liftM` m
 finishI (IterC req)              = passCtl req >>= finishI
 finishI (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
