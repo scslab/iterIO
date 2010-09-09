@@ -178,14 +178,21 @@ stringExactI len | len <= 0  = return mempty
             in if LL.length t == len then return acc' else accumulate acc'
 
 -- | Puts strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
--- writes an EOF to the handle.  Note that this does not put the
--- handle into binary mode.  To do this, you may need to call
--- @'hSetBinaryMode' h 'True'@ on the handle before using it with
--- @handleI@.  Otherwise, Haskell by default will treat the data as
--- UTF-8.  (On the other hand, if the 'Handle' corresponds to a socket
--- and the socket is being read in another thread, calling
--- 'hSetBinaryMode' can cause deadlock, so in this case it is better
--- to have the thread handling reads call 'hSetBinaryMode'.)
+-- writes an EOF to the handle.
+--
+-- Note that this does not put the handle into binary mode.  To do
+-- this, you may need to call @'hSetBinaryMode' h 'True'@ on the
+-- handle before using it with @handleI@.  Otherwise, Haskell by
+-- default will treat the data as UTF-8.  (On the other hand, if the
+-- 'Handle' corresponds to a socket and the socket is being read in
+-- another thread, calling 'hSetBinaryMode' can cause deadlock, so in
+-- this case it is better to have the thread handling reads call
+-- 'hSetBinaryMode'.)
+--
+-- Also note that Haskell be default buffers data written to handle.
+-- For may network protocols this is a problem.  Don't forget to call
+-- @'hSetBuffering' h 'NoBuffering'@ before passing a handle to
+-- 'handleI'.
 handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            Handle
         -> Iter t m ()
