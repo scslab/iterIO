@@ -10,6 +10,7 @@ module Data.IterIO.Inum
     -- * Control handler construction functions
     , ctl, ctl', ctlHandler
     -- * Enumerator construction monad
+    , IterState(..), runIterState
     ) where
 
 import Control.Exception (ErrorCall(..), Exception(..), SomeException(..))
@@ -218,32 +219,56 @@ ctlHandler fallback ctls req = case res of
 -- Monad
 --
 
-newtype IterState s iter a = IterState {
-      unIterState :: s -> iter (s, a)
-    }
+-- | @IterState@ is a lot like the @'StateT'@ monad transformer, but
+-- specific to transforming the 'Iter' monad (i.e., type argument @m@
+-- should be @'Iter' t m@ for some 'ChunkData' t and 'Monad' m).  What
+-- @IterState@ does unlike @'StateT'@ is to convert all 'IterFail'
+-- failures into 'InumFail' failures, and use the 'InumFail' to
+-- propagate the state.  Thus, it is possible to extrace the state
+-- from an 'IterState' even after a failure of the underlying 'Iter'
+-- monad.
+newtype IterState s m a = IterState (s -> m (s, a))
 
-class IterStateClass iter where
-    isc_return :: b -> IterState s iter b
-    isc_bind   :: IterState s iter b -> (b -> IterState s iter c)
-               -> IterState s iter c
-    isc_fail   :: String -> IterState s iter b
+-- | Runs an 'IterState' monad on some input state.  Because of its
+-- special error handling feature, the 'IterState' 'Monad' can only be
+-- run when the transformed monad is an @'Iter' t m@.
+--
+-- This function could equally well have returned an @'Iter' t m (s,
+-- a)@.  However, it returns @'InumR' t t m a@ (equivalent to @'Iter'
+-- t m ('Iter' t m a)@) to make it more convenient to inspect the
+-- result and in check for errors.  This is the same trick used by
+-- 'finishI', which @runIterState@ uses internally, so returning the
+-- 'InumR' saves other code from needing to invoke 'finishI' a second
+-- time.
+runIterState :: (Monad m, ChunkData t) =>
+                IterState s (Iter t m) a -> s -> InumR t t m (s, a)
+runIterState (IterState isf) s = finishI (isf s) >>= return . check
+    where check (IterFail e)         = InumFail e (s, error "runIterState")
+          check iter                 = iter
 
+-- | This class is kind of silly and wouldn't be required with
+-- -XFlexibleInstances, but is used so that the order and nature of
+-- the type arguments to IterState is appropriate for a 'MonadTrans'.
+class IterStateClass m where
+    isc_return :: a -> IterState s m a
+    isc_bind   :: IterState s m a -> (a -> IterState s m b) -> IterState s m b
+    isc_fail   :: String -> IterState s m a
+
+-- | Ignore the @IterStateClass@ class, which has only one instance
+-- and is just used for a technicality to get the type parameter order
+-- to work out.
 instance (Monad m, ChunkData t) => IterStateClass (Iter t m) where
-    isc_return b = IterState $ \s -> return (s, b)
+    isc_return a = IterState $ \s -> return (s, a)
 
-    isc_bind m k =
-        IterState $ \s -> finishI (unIterState m s) >>= fixfail s bind
-        where
-          fixfail _ _ (InumFail e (s, _)) = InumFail e (s, error "isc_bind")
-          fixfail s _ (IterFail e)        = InumFail e (s, error "isc_bind")
-          fixfail _ next (Done a _)       = next a
-          fixfail _ _ _                   = error "isc_bind: impossible"
-          bind (s, a) = finishI (unIterState (k a) s) >>= fixfail s return
+    isc_bind m k = IterState $ \s -> (runIterState m s) >>= \r ->
+                   case r of
+                     InumFail e (s', _)  -> InumFail e (s', error "isc_bind")
+                     _ -> r >>= \(s', a) -> runIterState (k a) s' >>= id
 
     isc_fail msg = IterState $ \s -> InumFail (toException $ ErrorCall msg)
                                               (s, error "isc_fail")
 
-instance (IterStateClass iter) => Monad (IterState s iter) where
+instance (IterStateClass m) => Monad (IterState s m) where
     return = isc_return
     (>>=)  = isc_bind
     fail   = isc_fail
@@ -251,3 +276,5 @@ instance (IterStateClass iter) => Monad (IterState s iter) where
 instance MonadTrans (IterState s) where
     lift m = IterState $ \s -> m >>= return . (,) s
 
+instance (MonadIO m, IterStateClass m) => MonadIO (IterState s m) where
+    liftIO = lift . liftIO
