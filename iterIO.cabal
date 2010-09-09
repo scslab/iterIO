@@ -55,9 +55,9 @@ Library
                  ListLike >= 1.0 && < 2,
                  directory >= 1.0 && < 2
   Exposed-modules:
-    Data.IterIO, Data.IterIO.Base, Data.IterIO.ListLike,
-    Data.IterIO.Extra, Data.IterIO.Parse, Data.IterIO.Search,
-    Data.IterIO.Zlib
+    Data.IterIO, Data.IterIO.Base, Data.IterIO.Inum,
+    Data.IterIO.ListLike, Data.IterIO.Parse, Data.IterIO.Extra,
+    Data.IterIO.Search, Data.IterIO.Zlib
   Other-modules:
     Data.IterIO.ZlibInt
   Extensions:

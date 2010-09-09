@@ -30,6 +30,7 @@ import Network.Socket
 import System.IO
 
 import Data.IterIO.Base
+import Data.IterIO.Inum
 
 #if __GLASGOW_HASKELL__ <= 611
 import Control.Concurrent.MVar
