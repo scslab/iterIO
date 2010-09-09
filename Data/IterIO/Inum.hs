@@ -12,6 +12,7 @@ module Data.IterIO.Inum
     , ctl, ctl', ctlHandler
     -- * Enumerator construction monad
     , IterStateT(..), runIterStateT
+    , InumM, feed
     ) where
 
 import Control.Exception (ErrorCall(..), Exception(..), SomeException(..))
