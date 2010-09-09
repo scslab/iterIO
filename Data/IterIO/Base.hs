@@ -77,7 +77,7 @@ module Data.IterIO.Base
     -- * Exception and error functions
     , IterNoParse(..), IterEOF(..), IterExpected(..), IterMiscParseErr(..)
     , throwI, throwEOFI
-    , tryI, tryBI, catchI, catchBI, handlerI, handlerBI
+    , tryI, tryBI, catchI, catchOrI, catchBI, handlerI, handlerBI
     , inumCatch, inumHandler
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
@@ -609,24 +609,6 @@ data CodecR tIn m tOut = CodecF { unCodecF :: !(Codec tIn m tOut)
 iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
 iterToCodec iter = let codec = CodecF codec `liftM` iter in codec
 
--- | @inumBind iter m k@ is similar to @m '>>=' k@, but for use within
--- 'Inum' implementations.  If @m@ throws an 'IterEOF' error, then
--- @inumBind@ just returns @iter@ and does not execute @k@.  If @m@
--- throws any other kind of exception, then the error gets translated
--- from an 'IterFail' to an 'InumFail' and @iter@ is embedded in the
--- exception for use by 'resumeI'.
-inumBind :: (ChunkData tIn, Monad m) =>
-            Iter tOut m a
-         -> Iter tIn m b
-         -> (b -> InumR tIn tOut m a)
-         -> InumR tIn tOut m a
-inumBind iter m k = do
-  er <- tryI m
-  case er of
-    Right r                   -> k r
-    Left (e, _) | isIterEOF e -> return iter
-    Left (e, _)               -> InumFail e iter
-
 -- | Build an 'Inum' given a 'Codec' that returns chunks of the
 -- appropriate type and a 'CtlHandler' to handle control requests.
 -- Makes an effort to send an EOF to the codec if the inner 'Iter'
@@ -642,14 +624,16 @@ mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
 mkInumC cf codec = inumMC cf `cat` process
     where
       process iter@(IterF _) =
-          inumBind iter codec $ \codecr ->
+          catchOrI codec (checkeof iter) $ \codecr ->
               case codecr of
                 CodecF c d -> mkInumC cf c (feedI iter $ chunk d)
                 CodecE d   -> inumMC cf (feedI iter $ chunk d)
       process iter =
           case codec of
-            IterF _ -> inumBind iter (feedI codec chunkEOF) $ \_ -> return iter
+            IterF _ -> catchOrI (feedI codec chunkEOF)
+                       (checkeof iter) (const $ return iter)
             _       -> return iter
+      checkeof iter e = if isIterEOF e then return iter else InumFail e iter
                 
 -- | A variant of 'mkInumC' that passes all control requests from the
 -- innner 'Iter' through to enclosing enumerators.  (If you want to
@@ -821,6 +805,17 @@ tryI = finishI >=> errToEither
       errToEither iter       = case fromException $ getIterError iter of
                                  Just e  -> return $ Left (e, iter)
                                  Nothing -> fixError iter
+
+-- | Run an 'Iter'.  Catch any exception it throws, or feed the result
+-- to a continuation.
+catchOrI :: (ChunkData t, Monad m) =>
+            Iter t m a
+         -> (SomeException -> Iter t m b) 
+         -> (a -> Iter t m b)
+         -> (Iter t m b)
+catchOrI iter handler cont = finishI iter >>= check
+    where check (Done a _) = cont a
+          check err        = handler $ getIterError err
 
 -- | Runs an 'Iter' until it no longer requests input, keeping a copy
 -- of all input that was fed to it (which might be longer than the
@@ -1331,7 +1326,16 @@ feedI err _                     = err
 -- >     case iter' of
 -- >       IterFail e   -> ... handle error ...
 -- >       InumFail e i -> ... handle error ...
--- >       _            -> iter' -- okay to execute
+-- >       (Done a _)   -> ... do something with a ...
+--
+-- Note that @finishI@ pulls any left-over data up to the enclosing
+-- 'Iter' when it returns 'Done'.  In other words, spelled out, a
+-- successful result is always of the form:
+--
+-- >       Done (Done a (Chunk mempty eof) t eof)
+--
+-- This makes it safe to ignore the left-over data of the inner
+-- 'Done'.
 finishI :: (ChunkData t, Monad m) => Inum t t m a
 finishI (IterF f)                = IterF $ finishI . f
 finishI (IterM m)                = IterM $ finishI `liftM` m
@@ -1377,7 +1381,7 @@ joinI iter           = finishI iter >>= joinI
 -- | An 'Onum' that will feed pure data to 'Iter's.
 inumPure :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             tOut -> Inum tIn tOut m a
-inumPure t = mkInum $ return $ CodecE t
+inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
@@ -1399,7 +1403,8 @@ inumNop iter        = return iter
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           CtlHandler tIn tOut m a -> Inum tIn tOut m a
 inumMC cf (IterM m)        = IterM $ inumMC cf `liftM` m
-inumMC cf iter@(IterC req) = inumBind iter (cf req) $ inumMC cf
+inumMC cf iter@(IterC req) = tryI (cf req) >>=
+                             either (\(e, _) -> InumFail e iter) (inumMC cf)
 inumMC _ iter              = return iter
 
 -- | Repeat an 'Inum' until an end of file is received or a failure
