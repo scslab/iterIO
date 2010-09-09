@@ -377,7 +377,7 @@ isIterActive _         = False
 --
 -- @Inum@s are generally constructed with the 'mkInum' function, which
 -- hides most of the error handling details.  Most @Inum@s are
--- polymorphic in the last type, @a@, so as work with iteratees
+-- polymorphic in the last type, @a@, in order to work with iteratees
 -- returning any type.
 type Inum tIn tOut m a = Iter tOut m a -> InumR tIn tOut m a
 
@@ -387,10 +387,10 @@ type InumR tIn tOut m a = Iter tIn m (Iter tOut m a)
 
 -- | An @Onum t m a@ is just an 'Inum' in which the input is
 -- @()@--i.e., @'Inum' () t m a@--so that there is no meaningful input
--- data to transcode.  Such an enumerator is called an /outer
--- enumerator/, because it must produce the data it feeds to 'Iter's
--- by either executing actions in monad @m@, or from its own internal
--- pure state (as for 'inumPure').
+-- data to transcode.  Such an enumerator is called an
+-- /outer enumerator/, because it must produce the data it feeds to
+-- 'Iter's by either executing actions in monad @m@, or from its own
+-- internal pure state (as for 'inumPure').
 --
 -- Under no circumstances should an @Onum@ ever feed a chunk with the
 -- EOF bit set to its 'Iter' argument.  When the @Onum@ runs out of
