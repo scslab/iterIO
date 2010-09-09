@@ -26,11 +26,11 @@ myListen pn = do
   return sock
 
 req2XHtml :: (MonadIO m) => Inum L [Html] m a
-req2XHtml = mkInum' $ do
+req2XHtml = mkInum $ do
   req <- httpreqI
   let reqS = show req
   liftIO $ IO.hPutStrLn IO.stderr reqS
-  return [stringToHtml reqS]
+  return $ CodecE [stringToHtml reqS]
 
 xhtml2L :: (MonadIO m) => Inum [Html] L m a
 xhtml2L = mkInum' $ do
@@ -56,6 +56,7 @@ main = Net.withSocketsDo $ do
          (s, addr) <- Net.accept sock
          print addr
          h <- Net.socketToHandle s IO.ReadWriteMode
+         IO.hSetBuffering h IO.NoBuffering
          Net.sClose sock
          enumHandle' h |. stderrLog
             |$ req2XHtml .| xhtml2L .| stderrLog .| handleI h

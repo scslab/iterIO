@@ -178,14 +178,21 @@ stringExactI len | len <= 0  = return mempty
             in if LL.length t == len then return acc' else accumulate acc'
 
 -- | Puts strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
--- writes an EOF to the handle.  Note that this does not put the
--- handle into binary mode.  To do this, you may need to call
--- @'hSetBinaryMode' h 'True'@ on the handle before using it with
--- @handleI@.  Otherwise, Haskell by default will treat the data as
--- UTF-8.  (On the other hand, if the 'Handle' corresponds to a socket
--- and the socket is being read in another thread, calling
--- 'hSetBinaryMode' can cause deadlock, so in this case it is better
--- to have the thread handling reads call 'hSetBinaryMode'.)
+-- writes an EOF to the handle.
+--
+-- Note that this does not put the handle into binary mode.  To do
+-- this, you may need to call @'hSetBinaryMode' h 'True'@ on the
+-- handle before using it with @handleI@.  Otherwise, Haskell by
+-- default will treat the data as UTF-8.  (On the other hand, if the
+-- 'Handle' corresponds to a socket and the socket is being read in
+-- another thread, calling 'hSetBinaryMode' can cause deadlock, so in
+-- this case it is better to have the thread handling reads call
+-- 'hSetBinaryMode'.)
+--
+-- Also note that Haskell be default buffers data written to handle.
+-- For may network protocols this is a problem.  Don't forget to call
+-- @'hSetBuffering' h 'NoBuffering'@ before passing a handle to
+-- 'handleI'.
 handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            Handle
         -> Iter t m ()
@@ -240,7 +247,7 @@ fileCtl h = ctlHandler passCtl
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> Onum [t] m a
-enumDgram sock = mkInum $ iterToCodec $ do
+enumDgram sock = mkInum' $ do
   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgram" else return [msg]
 
@@ -250,7 +257,7 @@ enumDgram sock = mkInum $ iterToCodec $ do
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> Onum [(t, SockAddr)] m a
-enumDgramFrom sock = mkInum $ iterToCodec $ do
+enumDgramFrom sock = mkInum' $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
   if r < 0 then throwEOFI "enumDgramFrom" else return [(msg, addr)]
 
@@ -276,12 +283,14 @@ enumHandle h iter = do
 enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
                  -> Onum t m a
-enumNonBinHandle h = mkInumC (fileCtl h) $ iterToCodec $ do
-  _ <- liftIO $ hWaitForInput h (-1)
-  buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
-  if null buf then throwEOFI "enumHandle" else return buf
--- Note that hGet can block when there is some (but not enough) data
--- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
+enumNonBinHandle h = mkInumC (fileCtl h) codec
+    where
+      codec = do
+        _ <- liftIO $ hWaitForInput h (-1)
+        buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
+        return $ if null buf then CodecE buf else CodecF codec buf
+      -- Note that hGet can block when there is some (but not enough) data
+      -- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
 
 -- | Enumerate the contents of a file as a series of lazy
 -- 'L.ByteString's.  (This is a type-restricted version of
@@ -327,10 +336,11 @@ inumLog path trunc iter = do
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle
          -> Inum t t m a
-inumhLog h = mkInum $ iterToCodec $ do
-               Chunk buf eof <- chunkI
-               liftIO $ do
-                 unless (null buf) $ LL.hPutStr h buf `onException` hClose h
-               when eof $ liftIO $ hClose h
-               return buf
-
+inumhLog h = mkInum logit
+    where
+      logit = do
+        Chunk buf eof <- chunkI
+        liftIO $ unless (null buf) $ LL.hPutStr h buf `onException` hClose h
+        if eof
+          then (liftIO $ hClose h) >> return (CodecE buf)
+          else return (CodecF logit buf)

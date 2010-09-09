@@ -73,22 +73,22 @@ iterLoop = do
   -- The loopback is implemented with an MVar (MVar Chunk).  The
   -- enumerator waits on the inner MVar, while the iteratee uses the outer 
   -- MVar to avoid races when appending to the stored chunk.
-  pipe <- liftIO $ newEmptyMVar >>= newMVar
-  return (IterF $ iterf pipe, enum pipe)
+  mv <- liftIO $ newEmptyMVar >>= newMVar
+  return (IterF $ iterf mv, enum mv)
     where
-      iterf pipe c@(Chunk _ eof) = do
-             liftIO $ withMVar pipe $ \p ->
+      iterf mv c@(Chunk _ eof) = do
+             liftIO $ withMVar mv $ \p ->
                  do mp <- tryTakeMVar p
                     putMVar p $ case mp of
                                   Nothing -> c
                                   Just c' -> mappend c' c
-             if eof then Done () chunkEOF else IterF $ iterf pipe
+             if eof then Done () chunkEOF else IterF $ iterf mv
 
-      enum pipe = let codec = do
-                        p <- liftIO $ readMVar pipe
-                        Chunk c eof <- liftIO $ takeMVar p
-                        return $ if eof then CodecE c else CodecF codec c
-                  in mkInum codec
+      enum mv = let codec = do
+                      p <- liftIO $ readMVar mv
+                      Chunk c eof <- liftIO $ takeMVar p
+                      return $ if eof then CodecE c else CodecF codec c
+                in mkInum codec
 
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an

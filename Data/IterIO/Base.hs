@@ -1139,7 +1139,7 @@ feedI err _                     = err
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
 -- 'IterF', 'IterM', or 'IterC' states), then 'return's the 'Iter'
 -- much like an 'Inum'.  This function looks a lot line 'inumNop', but
--- is actually not real 'EnumI' because, upon receiving an EOF,
+-- is actually not real 'Inum' because, upon receiving an EOF,
 -- @finishI@ feeds the EOF to the 'Iter'.  'Inum's are supposed to
 -- return 'Iter's upon receiving EOF, but are not supposed to feed the
 -- EOF to the 'Iter', as this breaks functions like 'cat'.
@@ -1166,7 +1166,7 @@ feedI err _                     = err
 -- This makes it safe to ignore the left-over data of the inner
 -- 'Done'.
 finishI :: (ChunkData t, Monad m) => Inum t t m a
-finishI (IterF f)                = IterF $ finishI . f
+finishI iter@(IterF _)           = IterF $ finishI . feedI iter
 finishI (IterM m)                = IterM $ finishI `liftM` m
 finishI (IterC req)              = passCtl req >>= finishI
 finishI (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
@@ -1178,7 +1178,7 @@ finishI iter                     = return iter
 failBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
 failBind iter0 next = do
-  iter <- finishI $ runI iter0
+  iter <- finishI iter0
   case iter of
     InumFail e i -> InumFail e i
     _            -> iter >>= next

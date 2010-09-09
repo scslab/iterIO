@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 
 -- | This module contains various functions used to construct 'Inum's.
 
@@ -10,6 +11,8 @@ module Data.IterIO.Inum
     -- * Control handler construction functions
     , ctl, ctl', ctlHandler
     -- * Enumerator construction monad
+    , IterStateT(..), runIterStateT
+    , InumM, mkInumM, feed, pipe
     ) where
 
 import Control.Exception (ErrorCall(..), Exception(..), SomeException(..))
@@ -69,16 +72,15 @@ mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
 mkInumC cf codec = inumMC cf `cat` process
     where
       process iter@(IterF _) =
-          catchOrI codec (checkeof iter) $ \codecr ->
+          catchOrI codec (chkeof iter) $ \codecr ->
               case codecr of
                 CodecF c d -> mkInumC cf c (feedI iter $ chunk d)
                 CodecE d   -> inumMC cf (feedI iter $ chunk d)
       process iter =
           case codec of
-            IterF _ -> catchOrI (feedI codec chunkEOF)
-                       (checkeof iter) (const $ return iter)
+            IterF _ -> catchOrI (runI codec) (chkeof iter) (\_ -> return iter)
             _       -> return iter
-      checkeof iter e = if isIterEOF e then return iter else InumFail e iter
+      chkeof iter e = if isIterEOF e then return iter else InumFail e iter
                 
 -- | A variant of 'mkInumC' that passes all control requests from the
 -- innner 'Iter' through to enclosing enumerators.  (If you want to
@@ -219,36 +221,120 @@ ctlHandler fallback ctls req = case res of
 -- Monad
 --
 
-newtype IterState s iter a = IterState {
-      unIterState :: s -> iter (s, a)
-    }
+-- | @IterStateT@ is a lot like the @'StateT'@ monad transformer, but
+-- specific to transforming the 'Iter' monad (i.e., type argument @m@
+-- should be @'Iter' t m@ for some 'ChunkData' t and 'Monad' m).  What
+-- @IterStateT@ does unlike @'StateT'@ is to convert all 'IterFail'
+-- failures into 'InumFail' failures, and use the 'InumFail' to
+-- propagate the state.  Thus, it is possible to extrace the state
+-- from an 'IterStateT' even after a failure of the underlying 'Iter'
+-- monad.
+newtype IterStateT s m a = IterStateT (s -> m (s, a))
 
-class IterStateClass iter where
-    isc_return :: b -> IterState s iter b
-    isc_bind   :: IterState s iter b -> (b -> IterState s iter c)
-               -> IterState s iter c
-    isc_fail   :: String -> IterState s iter b
+-- | Runs an 'IterStateT' monad on some input state.  Because of its
+-- special error handling feature, the 'IterStateT' 'Monad' can only be
+-- run when the transformed monad is an @'Iter' t m@.
+--
+-- This function could equally well have returned an @'Iter' t m (s,
+-- a)@.  However, it returns @'InumR' t t m a@ (equivalent to @'Iter'
+-- t m ('Iter' t m a)@) to make it more convenient to inspect the
+-- result and in check for errors.  This is the same trick used by
+-- 'finishI', which @runIterStateT@ uses internally, so returning the
+-- 'InumR' saves other code from needing to invoke 'finishI' a second
+-- time.
+runIterStateT :: (Monad m, ChunkData t) =>
+                IterStateT s (Iter t m) a -> s -> InumR t t m (s, a)
+runIterStateT (IterStateT isf) s = finishI (isf s) >>= return . check
+    where check (IterFail e)         = InumFail e (s, error "runIterStateT")
+          check iter                 = iter
 
-instance (Monad m, ChunkData t) => IterStateClass (Iter t m) where
-    isc_return b = IterState $ \s -> return (s, b)
+-- | This class is kind of silly and wouldn't be required with
+-- -XFlexibleInstances, but is used so that the order and nature of
+-- the type arguments to IterStateT is appropriate for a 'MonadTrans'.
+class IterStateTClass m where
+    isc_return :: a -> IterStateT s m a
+    isc_bind   :: IterStateT s m a -> (a -> IterStateT s m b)
+               -> IterStateT s m b
+    isc_fail   :: String -> IterStateT s m a
 
-    isc_bind m k =
-        IterState $ \s -> finishI (unIterState m s) >>= fixfail s bind
-        where
-          fixfail _ _ (InumFail e (s, _)) = InumFail e (s, error "isc_bind")
-          fixfail s _ (IterFail e)        = InumFail e (s, error "isc_bind")
-          fixfail _ next (Done a _)       = next a
-          fixfail _ _ _                   = error "isc_bind: impossible"
-          bind (s, a) = finishI (unIterState (k a) s) >>= fixfail s return
+-- | Ignore the @IterStateTClass@ class, which has only one instance
+-- and is just used for a technicality to get the type parameter order
+-- to work out.
+instance (Monad m, ChunkData t) => IterStateTClass (Iter t m) where
+    isc_return a = IterStateT $ \s -> return (s, a)
 
-    isc_fail msg = IterState $ \s -> InumFail (toException $ ErrorCall msg)
+    isc_bind m k = IterStateT $ \s -> (runIterStateT m s) >>= \r ->
+                   case r of
+                     InumFail e (s', _)  -> InumFail e (s', error "isc_bind")
+                     _ -> r >>= \(s', a) -> runIterStateT (k a) s' >>= id
+
+    isc_fail msg = IterStateT $ \s -> InumFail (toException $ ErrorCall msg)
                                               (s, error "isc_fail")
 
-instance (IterStateClass iter) => Monad (IterState s iter) where
+instance (IterStateTClass m) => Monad (IterStateT s m) where
     return = isc_return
     (>>=)  = isc_bind
     fail   = isc_fail
 
-instance MonadTrans (IterState s) where
-    lift m = IterState $ \s -> m >>= return . (,) s
+instance MonadTrans (IterStateT s) where
+    lift m = IterStateT $ \s -> m >>= return . (,) s
 
+instance (MonadIO m, IterStateTClass m) => MonadIO (IterStateT s m) where
+    liftIO = lift . liftIO
+
+data InumState tIn tOut m a = InumState {
+      insCtl :: !(CtlHandler tIn tIn m (Iter tOut m a))
+    , insIter :: !(Iter tOut m a)
+    , insStopEOF :: Bool
+    , insStopDone :: Bool
+    }
+
+-- | A monad in which to define the actions of an @'Inum' tIn tOut m a@.
+type InumM tIn tOut m a = IterStateT (InumState tIn tOut m a) (Iter tIn m)
+
+data InumDone = InumDone deriving (Show, Typeable)
+instance Exception InumDone
+
+setIter :: (ChunkData tIn, Monad m) =>
+           InumState tIn tOut m a -> Iter tOut m a
+        -> Iter tIn m (InumState tIn tOut m a, Bool)
+setIter s0 iter = do
+  let s = s0 { insIter = iter }
+      active = isIterActive iter
+  if active || not (insStopDone s)
+    then return (s, active)
+    else InumFail (toException InumDone) (s, False)
+
+-- | Feed data the 'Iter' from within the 'InumM' monad.
+feed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+        tOut -> InumM tIn tOut m a Bool
+feed dat = IterStateT $ \s -> do
+             iter <- inumMC (insCtl s) |. inumMC passCtl $
+                     feedI (insIter s) (chunk dat)
+             setIter s iter
+
+-- | Apply another 'Inum' to the 'Iter' from within the 'InumM' monad.
+pipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+        Inum tIn tOut m a -> InumM tIn tOut m a Bool
+pipe inum = IterStateT $ \s -> do
+              iter <- inumMC (insCtl s) |. inum $ insIter s
+              setIter s iter
+
+-- | Build an 'Inum' in the 'InumM' monad, using 'lift' to consume
+-- input with various 'Iter's, and using 'feed' and 'pipe' to send
+-- output.
+mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+           CtlHandler tIn tIn m (Iter tOut m a)
+        -> InumM tIn tOut m a b -> Inum tIn tOut m a
+mkInumM ch inumm iter0 = do
+   result <- runIterStateT inumm $ InumState ch iter0 True True
+   case result of
+     Done (s, _) _     -> return $ insIter s
+     InumFail e (s, _) ->
+         case fromException e of
+           Just InumDone -> return $ insIter s
+           Nothing       ->
+               case fromException e of
+                 Just (IterEOF _) | insStopEOF s -> return $ insIter s
+                 _                               -> InumFail e $ insIter s
+     _                 -> error "mkInumM" -- Shouldn't happen
