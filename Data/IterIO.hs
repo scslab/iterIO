@@ -7,6 +7,7 @@
 -- detailed documentation of data structures and functions.
 module Data.IterIO
     (module Data.IterIO.Base
+    , module Data.IterIO.Inum
     , module Data.IterIO.ListLike
     -- * Overview
     -- $Overview
@@ -14,7 +15,9 @@ module Data.IterIO
 
 -- import Prelude hiding (catch)
 import Data.IterIO.Base hiding (null, run -- names that might collide
+                               , failBind
                                )
+import Data.IterIO.Inum
 import Data.IterIO.ListLike
 
 {- $Overview

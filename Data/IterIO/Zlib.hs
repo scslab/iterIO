@@ -20,7 +20,7 @@ import qualified Data.ByteString.Lazy.Internal as L
 import Foreign
 import Foreign.C
 
-import Data.IterIO.Base
+import Data.IterIO
 import Data.IterIO.ZlibInt
 
 -- | State used by 'inumZState', the most generic zlib 'Inum'.
