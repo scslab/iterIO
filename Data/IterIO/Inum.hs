@@ -1,4 +1,3 @@
-{-# LANGUAGE ExistentialQuantification #-}
 
 -- | This module contains various functions used to construct 'Inum's.
 
@@ -12,7 +11,7 @@ module Data.IterIO.Inum
     , ctl, ctl', ctlHandler
     -- * Enumerator construction monad
     , IterStateT(..), runIterStateT
-    , InumM, feed
+    , InumM, mkInumM, feed, pipe
     ) where
 
 import Control.Exception (ErrorCall(..), Exception(..), SomeException(..))
@@ -283,16 +282,46 @@ instance (MonadIO m, IterStateTClass m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
 
 data InumState tIn tOut m a = InumState {
-      insCtl  :: !(CtlHandler tIn tOut m a)
+      insCtl  :: !(CtlHandler tIn tIn m (Iter tOut m a))
     , insIter :: !(Iter tOut m a)
     }
 
--- | A monad in which to define the actions of an 'Inum'.
-type InumM tIn tOut m b = IterStateT (InumState tIn tOut m b) (Iter tIn m)
+-- | A monad in which to define the actions of an @'Inum' tIn tOut m a@.
+type InumM tIn tOut m a = IterStateT (InumState tIn tOut m a) (Iter tIn m)
+
+{-
+inumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+         (CtlHandler tIn tIn m (Iter tOut m a) -> Iter tOut m a
+          -> Iter tIn m (Iter tOut m a, r))
+      -> InumM tIn tOut m a r
+inumM f = IterStateT $ \s@InumState{ insCtl = ch, insIter = iter0 } -> do
+            (iter, r) <- f ch iter0
+            return (s { insIter = iter }, r)
+-}
 
 -- | Feed data the 'Iter' from within the 'InumM' monad.
 feed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-        tOut -> InumM tIn tOut m b Bool
+        tOut -> InumM tIn tOut m a Bool
 feed dat = IterStateT $ \s@InumState{ insCtl = ch, insIter = iter0 } -> do
-             iter <- inumMC ch $ feedI iter0 (chunk dat)
+             iter <- inumMC ch |. inumMC passCtl $ feedI iter0 (chunk dat)
              return (s{ insIter = iter }, isIterActive iter)
+
+-- | Apply another 'Inum' to the 'Iter' from within the 'InumM' monad.
+pipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+        Inum tIn tOut m a -> InumM tIn tOut m a Bool
+pipe inum = IterStateT $ \s@InumState{ insCtl = ch, insIter = iter0 } -> do
+              iter <- inumMC ch |. inum $ iter0
+              return (s{ insIter = iter }, isIterActive iter)
+
+-- | Build an 'Inum' in the 'InumM' monad, using 'lift' to consume
+-- input with various 'Iter's, and using 'feed' and 'pipe' to send
+-- output.
+mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+           CtlHandler tIn tIn m (Iter tOut m a)
+        -> InumM tIn tOut m a b -> Inum tIn tOut m a
+mkInumM ch inumm iter0 = do
+   result <- runIterStateT inumm InumState { insCtl = ch, insIter = iter0 }
+   case result of
+     Done (s, _) _     -> return $ insIter s
+     InumFail e (s, _) -> InumFail e $ insIter s
+     _                 -> error "mkInumM" -- Shouldn't happen
