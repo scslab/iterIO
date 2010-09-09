@@ -69,16 +69,15 @@ mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
 mkInumC cf codec = inumMC cf `cat` process
     where
       process iter@(IterF _) =
-          catchOrI codec (checkeof iter) $ \codecr ->
+          catchOrI codec (chkeof iter) $ \codecr ->
               case codecr of
                 CodecF c d -> mkInumC cf c (feedI iter $ chunk d)
                 CodecE d   -> inumMC cf (feedI iter $ chunk d)
       process iter =
           case codec of
-            IterF _ -> catchOrI (feedI codec chunkEOF)
-                       (checkeof iter) (const $ return iter)
+            IterF _ -> catchOrI (runI codec) (chkeof iter) (\_ -> return iter)
             _       -> return iter
-      checkeof iter e = if isIterEOF e then return iter else InumFail e iter
+      chkeof iter e = if isIterEOF e then return iter else InumFail e iter
                 
 -- | A variant of 'mkInumC' that passes all control requests from the
 -- innner 'Iter' through to enclosing enumerators.  (If you want to
