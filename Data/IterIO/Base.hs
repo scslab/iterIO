@@ -1178,7 +1178,7 @@ finishI iter                     = return iter
 failBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
 failBind iter0 next = do
-  iter <- finishI $ runI iter0
+  iter <- finishI iter0
   case iter of
     InumFail e i -> InumFail e i
     _            -> iter >>= next
