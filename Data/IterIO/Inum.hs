@@ -160,7 +160,7 @@ inumBracket before after codec iter0 =
 -- should be @'Iter' t m@ for some 'ChunkData' t and 'Monad' m).  What
 -- @IterStateT@ does unlike @'StateT'@ is to convert all 'IterFail'
 -- failures into 'InumFail' failures, and use the 'InumFail' to
--- propagate the state.  Thus, it is possible to extrace the state
+-- propagate the state.  Thus, it is possible to extract the state
 -- from an 'IterStateT' even after a failure of the underlying 'Iter'
 -- monad.
 newtype IterStateT s m a = IterStateT (s -> m (s, a))
@@ -197,10 +197,9 @@ class IterStateTClass m where
 instance (Monad m, ChunkData t) => IterStateTClass (Iter t m) where
     isc_return a = IterStateT $ \s -> return (s, a)
 
-    isc_bind m k = IterStateT $ \s -> (runIterStateT m s) >>= \r ->
-                   case r of
-                     InumFail e (s', _)  -> InumFail e (s', error "isc_bind")
-                     _ -> r >>= \(s', a) -> runIterStateT (k a) s' >>= id
+    isc_bind m k = IterStateT $ \s -> (runIterStateT m s) >>= check
+        where check (InumFail e (s', _)) = InumFail e (s', error "isc_bind")
+              check msa = msa >>= \(s', a) -> join $ runIterStateT (k a) s'
 
     isc_fail msg = IterStateT $ \s -> InumFail (toException $ ErrorCall msg)
                                               (s, error "isc_fail")
