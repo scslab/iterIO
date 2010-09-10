@@ -63,7 +63,7 @@
 module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), chunk, chunkEOF
-    , CtlCmd, CtlReq(..)
+    , CtlCmd
     , Iter(..)
     , isIterActive, iterShows, iterShow
     , Inum, InumR, Onum, OnumR
@@ -84,9 +84,9 @@ module Data.IterIO.Base
     -- * Some basic Inums
     , inumPure, inumNop, inumMC, inumRepeat
     -- * Control functions
-    , CtlHandler
     , ctlI, safeCtlI
-    , noCtl, passCtl
+    , CtlHandler, CtlArg(..), CtlRes(..)
+    , noCtl, passCtl, consCtl
     ) where
 
 import Prelude hiding (null)
@@ -185,10 +185,6 @@ instance (ChunkData t) => ChunkData (Chunk t) where
 -- binds each control argument type to a unique result type.
 class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
--- | A request for a control operation
-data CtlReq t m a = forall carg cres. (CtlCmd carg cres) =>
-                    CtlReq !carg !(Maybe cres -> Iter t m a)
-
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
 -- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
 -- may execute actions (using the 'MonadTrans' 'lift' method), and @a@
@@ -211,7 +207,8 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- ^ The iteratee requires more input.
                 | IterM !(m (Iter t m a))
                 -- ^ The iteratee must execute monadic bind in monad @m@
-                | IterC !(CtlReq t m a)
+                | forall carg cres. (CtlCmd carg cres) =>
+                  IterC !carg !(Maybe cres -> Iter t m a)
                 -- ^ A control request for enclosing enumerators
                 | Done a (Chunk t)
                 -- ^ Sufficient input was received; the 'Iter' is
@@ -246,7 +243,7 @@ instance (ChunkData t) => Show (Iter t m a) where
     showsPrec _ (IterF _) rest = "IterF _" ++ rest
     showsPrec _ (IterM _) rest = "IterM _" ++ rest
     showsPrec _ (Done _ c) rest = "Done _ " ++ shows c rest
-    showsPrec _ (IterC (CtlReq a _)) rest =
+    showsPrec _ (IterC a _) rest =
         "IterC " ++ show (typeOf a) ++ " _" ++ rest
     showsPrec _ (IterFail e) rest = "IterFail " ++ show e ++ rest
     showsPrec _ (InumFail e _) rest = "InumFail " ++ (shows e $ " _" ++ rest)
@@ -263,11 +260,11 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
 
-    m@(IterF _)           >>= k = IterF $ feedI m >=> k
-    (IterM m)             >>= k = IterM $ liftM (>>= k) m
-    (Done a c)            >>= k = feedI (k a) c
-    (IterC (CtlReq a fr)) >>= k = iterC a $ fr >=> k
-    err                   >>= _ = IterFail $ getIterError err
+    m@(IterF _)  >>= k = IterF $ feedI m >=> k
+    (IterM m)    >>= k = IterM $ liftM (>>= k) m
+    (Done a c)   >>= k = feedI (k a) c
+    (IterC a fr) >>= k = IterC a $ fr >=> k
+    err          >>= _ = IterFail $ getIterError err
 
     fail msg = IterFail $ toException $ ErrorCall msg
 
@@ -314,25 +311,21 @@ instance (ChunkData t, MonadIO m) => MonadFix (Iter t m) where
 -- Internal utility functions
 --
 
--- | @iterC carg fr = 'IterC' ('CtlReq' carg fr)@
-iterC :: (CtlCmd carg cres) => carg -> (Maybe cres -> Iter t m a) -> Iter t m a
-iterC carg fr = IterC (CtlReq carg fr)
-
 getIterError                 :: Iter t m a -> SomeException
 getIterError (IterFail e)   = e
 getIterError (InumFail e _) = e
 getIterError (IterM _)      = error "getIterError: no error (in IterM state)"
-getIterError (IterC _)      = error "getIterError: no error (in IterC state)"
+getIterError (IterC _ _)    = error "getIterError: no error (in IterC state)"
 getIterError _              = error "getIterError: no error to extract"
 
 -- | True if an 'Iter' is requesting something from an
 -- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
 -- error states.
 isIterActive :: Iter t m a -> Bool
-isIterActive (IterF _) = True
-isIterActive (IterM _) = True
-isIterActive (IterC _) = True
-isIterActive _         = False
+isIterActive (IterF _)   = True
+isIterActive (IterM _)   = True
+isIterActive (IterC _ _) = True
+isIterActive _           = False
 
 
 --
@@ -421,12 +414,12 @@ unIterEOF e = case fromException e of
 -- state, feed it an EOF to extract a result.  Throws an exception if
 -- there has been a failure.
 run :: (ChunkData t, Monad m) => Iter t m a -> m a
-run iter@(IterF _)        = run $ feedI iter chunkEOF
-run (IterM m)             = m >>= run
-run (Done a _)            = return a
-run (IterC (CtlReq _ fr)) = run $ fr Nothing
-run (IterFail e)          = throw $ unIterEOF e
-run (InumFail e _)        = throw $ unIterEOF e
+run iter@(IterF _) = run $ feedI iter chunkEOF
+run (IterM m)      = m >>= run
+run (Done a _)     = return a
+run (IterC _ fr)   = run $ fr Nothing
+run (IterFail e)   = throw $ unIterEOF e
+run (InumFail e _) = throw $ unIterEOF e
 
 -- | Runs an 'Iter' from within a different 'Iter' monad.  If
 -- successful, @runI iter@ will produce the same result as @'lift'
@@ -991,10 +984,10 @@ multiParse a@(IterF _) b
       -- the input anyway inside 'feedI', so we might as well do it
       -- efficiently with 'copyInput' (which is what 'ifParse' uses,
       -- indirectly, via 'tryBI').
-      useIfParse (Done _ _) = True
-      useIfParse (IterM _)  = True
-      useIfParse (IterC _)  = True
-      useIfParse _          = False
+      useIfParse (Done _ _)  = True
+      useIfParse (IterM _)   = True
+      useIfParse (IterC _ _) = True
+      useIfParse _           = False
 multiParse a b
     | isIterActive a = inumMC passCtl a >>= flip multiParse b
     | otherwise      = a `catchI` \err _ -> combineExpected err b
@@ -1124,16 +1117,16 @@ feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
     where
       noEOF (Done _ (Chunk _ True)) = error "feedI: IterF returned bad EOF"
       noEOF iter                    = iter
-      forceEOF (IterF _)             = error "feedI: IterF returned after EOF"
-      forceEOF (IterM m)             = IterM $ forceEOF `liftM` m
-      forceEOF (IterC (CtlReq a fr)) = iterC a $ \r -> 
-                                       case r of Just _  -> fr r
-                                                 Nothing -> forceEOF $ fr r
-      forceEOF (Done a (Chunk t _))  = Done a (Chunk t True)
-      forceEOF iter                  = iter
+      forceEOF (IterF _)            = error "feedI: IterF returned after EOF"
+      forceEOF (IterM m)            = IterM $ forceEOF `liftM` m
+      forceEOF (IterC a fr)         = IterC a $ \r -> 
+                                      case r of Just _  -> fr r
+                                                Nothing -> forceEOF $ fr r
+      forceEOF (Done a (Chunk t _)) = Done a (Chunk t True)
+      forceEOF iter                 = iter
 feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
 feedI (Done a c) c'             = Done a (mappend c c')
-feedI (IterC (CtlReq a fr)) c   = iterC a $ flip feedI c . fr
+feedI (IterC a fr) c            = IterC a $ flip feedI c . fr
 feedI err _                     = err
 
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
@@ -1168,7 +1161,7 @@ feedI err _                     = err
 finishI :: (ChunkData t, Monad m) => Inum t t m a
 finishI iter@(IterF _)           = IterF $ finishI . feedI iter
 finishI (IterM m)                = IterM $ finishI `liftM` m
-finishI (IterC req)              = passCtl req >>= finishI
+finishI (IterC a fr)             = IterC a $ finishI . fr
 finishI (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
 finishI iter                     = return iter
 
@@ -1215,13 +1208,13 @@ inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop (IterF f)   = IterF dochunk
+inumNop (IterF f)    = IterF dochunk
     where dochunk (Chunk t True) = inumMC passCtl $ f (chunk t)
           dochunk c              = inumNop $ f c
-inumNop (IterM m)   = IterM $ inumNop `liftM` m
-inumNop (IterC req) = passCtl req >>= inumNop
-inumNop (Done a c)  = Done (return a) c
-inumNop iter        = return iter
+inumNop (IterM m)    = IterM $ inumNop `liftM` m
+inumNop (IterC a fr) = IterC a $ inumNop . fr
+inumNop (Done a c)   = Done (return a) c
+inumNop iter         = return iter
 
 -- | An 'Inum' that only processes 'IterM' and 'IterC' requests and
 -- returns the 'Iter' as soon as it requests input (via 'IterF') or
@@ -1230,11 +1223,11 @@ inumNop iter        = return iter
 -- to pass them up to the @'Iter' tIn m@ monad, or a custom
 -- 'CtlHandler' function.
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-          CtlHandler tIn tOut m a -> Inum tIn tOut m a
-inumMC cf (IterM m)        = IterM $ inumMC cf `liftM` m
-inumMC cf iter@(IterC req) = tryI (cf req) >>=
-                             either (\(e, _) -> InumFail e iter) (inumMC cf)
-inumMC _ iter              = return iter
+          CtlHandler tIn m -> Inum tIn tOut m a
+inumMC ch (IterM m) = IterM $ inumMC ch `liftM` m
+inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
+                              \(CtlRes cres) -> inumMC ch $ fr $ cast cres
+inumMC _ iter = return iter
 
 -- | Repeat an 'Inum' until an end of file is received or a failure
 -- occurs.
@@ -1245,16 +1238,15 @@ inumRepeat inum iter = do
   if eof then return iter else inum iter >>= inumRepeat inum
 
 
-
 --
 -- Support for control operations
 --
 
--- | A version of 'ctlI' that uses 'Maybe' instead of throwing an
--- exception to indicate failure.
+-- | Issue a control request, return 'Just' the result if the request
+-- is supported by enclosing enumerators, otherwise return 'Nothing'.
 safeCtlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
             carg -> Iter t m (Maybe cres)
-safeCtlI carg = iterC carg return
+safeCtlI carg = IterC carg return
 
 -- | Issue a control request, and return the result.  Throws an
 -- exception if the operation did not succeed.
@@ -1265,8 +1257,26 @@ ctlI carg = safeCtlI carg >>= returnit
       returnit (Just res) = return res
       returnit Nothing    = fail $ "Unsupported CtlCmd " ++ show (typeOf carg)
 
+-- | Internal private type which is guaranteed not to be the result of
+-- a 'CtlCmd'.  Thus, it can be used by a 'CtlHandler' that did not
+-- match the argument type to return Nothing (when it is 'cast' to the
+-- actual @cres@ type expected by an 'IterC').
+data CtlBad = CtlBad deriving (Typeable)
+
+-- | A wrapper around an arbitrary 'CtlCmd' argument, used so that the
+-- 'CtlHandler' type can work with all 'CtlCmd' argument types.  It is
+-- best to use 'consCtl' instead of employing the 'CtlArg' and
+-- 'CtlRes' types directly.
+data CtlArg = forall carg cres. (CtlCmd carg cres) => CtlArg !carg
+
+-- | Use to wrap the result of a 'CtlHandler'.  Without Rank2Types,
+-- the CtlHandler result has to be dynamic like this.  It is best to
+-- use 'consCtl' instead of employing the 'CtlArg' and 'CtlRes' types
+-- directly.
+data CtlRes = forall cres. (Typeable cres) => CtlRes cres
+
 -- | A control request handler maps control requests to 'Iter's.
-type CtlHandler tIn tOut m a = CtlReq tOut m a -> InumR tIn tOut m a
+type CtlHandler t m = CtlArg -> (Iter t m CtlRes)
 
 -- | A control request handler that ignores the request argument and
 -- always fails immediately (thereby not passing the control request
@@ -1285,12 +1295,24 @@ type CtlHandler tIn tOut m a = CtlReq tOut m a -> InumR tIn tOut m a
 -- likely wreak havoc in the event of any seek requests, as the outer
 -- enumerator might seek around in the file, confusing the
 -- decompression codec.
-noCtl :: (ChunkData tIn, Monad m) => CtlHandler tIn tOut m a
-noCtl (CtlReq _ fr) = return $ fr Nothing
+noCtl :: (ChunkData t, Monad m) => CtlHandler t m
+noCtl _ = return $ CtlRes CtlBad
 
 -- | A control request hander that simply passes control requests
 -- straight through from the @'Iter' tOut m@ monad to the enclosing
 -- @'Iter' tIn m@ monad.
-passCtl :: (ChunkData tIn, Monad m) => CtlHandler tIn tOut m a
-passCtl (CtlReq carg fr) = iterC carg $ return . fr
+passCtl :: (ChunkData t, Monad m) => CtlHandler t m
+passCtl (CtlArg carg) = safeCtlI carg >>= return . maybe (CtlRes CtlBad) CtlRes
 
+-- | Construct a 'CtlHandler', from a function of a particular
+-- 'CtlCmd' type and a fallback 'CtlHandler' if the type of the
+-- argument doesn't match the function.  The fallback handler should
+-- be 'passCtl', 'noCtl', or the result of a previous 'consCtl' call.
+-- Has fixity:
+--
+-- > infixr 9 `consCtl`
+consCtl :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+           (carg -> Iter t m cres) -> CtlHandler t m -> CtlHandler t m
+consCtl fn fallback arg@(CtlArg carg) =
+    maybe (fallback arg) (fn >=> return . CtlRes) (cast carg)
+infixr 9 `consCtl`

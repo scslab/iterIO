@@ -229,14 +229,11 @@ instance CtlCmd SeekC ()
 data TellC = TellC deriving (Typeable)
 instance CtlCmd TellC Integer
 
-fileCtl :: (ChunkData tIn, ChunkData tOut, MonadIO m) =>
-           Handle -> CtlHandler tIn tOut m a
-fileCtl h = ctlHandler passCtl
-            [ ctl' $ \(SeekC mode pos) -> liftIO (hSeek h mode pos)
-            , ctl' $ \TellC -> liftIO (hTell h)
-            , ctl' $ \SizeC -> liftIO (hFileSize h)
-            ]
-
+fileCtl :: (ChunkData t, MonadIO m) => Handle -> CtlHandler t m
+fileCtl h = (\(SeekC mode pos) -> liftIO (hSeek h mode pos))
+            `consCtl` (\TellC -> liftIO (hTell h))
+            `consCtl` (\SizeC -> liftIO (hFileSize h))
+            `consCtl` passCtl
 
 --
 -- EnumOs

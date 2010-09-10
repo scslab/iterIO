@@ -109,9 +109,9 @@ relSend ep fork iter = doSend 0 1
         return ()
 
       rerun :: Iter t m a -> m (Iter t m a)
-      rerun (IterM m)             = m >>= rerun
-      rerun (IterC (CtlReq _ fr)) = rerun $ fr Nothing
-      rerun i                     = return i
+      rerun (IterM m)    = m >>= rerun
+      rerun (IterC _ fr) = rerun $ fr Nothing
+      rerun i            = return i
 
       rexmit :: SeqNo -> L.ByteString -> m ()
       rexmit seqno payload = do

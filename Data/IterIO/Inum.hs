@@ -8,14 +8,12 @@ module Data.IterIO.Inum
     , iterToCodec
     , mkInumC, mkInum, mkInum'
     , inumCBracket, inumBracket
-    -- * Control handler construction functions
-    , ctl, ctl', ctlHandler
     -- * Enumerator construction monad
     , IterStateT(..), runIterStateT
     , InumM, mkInumM, feed, pipe
     ) where
 
-import Control.Exception (ErrorCall(..), Exception(..), SomeException(..))
+import Control.Exception (ErrorCall(..), Exception(..))
 import Control.Monad
 import Control.Monad.Trans
 import Data.Typeable
@@ -64,7 +62,7 @@ iterToCodec iter = let codec = CodecF codec `liftM` iter in codec
 -- 'Inum' fails, code handling that failure will have to send an EOF
 -- or the codec will not be able to clean up.
 mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
-           CtlHandler tIn tOut m a
+           CtlHandler tIn m
         -- ^ Control request handler
         -> Codec tIn m tOut
         -- ^ Codec to be invoked to produce transcoded chunks.
@@ -108,7 +106,7 @@ inumCBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
              -- ^ Before action
              -> (b -> Iter tIn m c)
              -- ^ After action, as a function of before action result
-             -> (b -> CtlHandler tIn tOut m a)
+             -> (b -> CtlHandler tIn m)
              -- ^ Control request handler, as funciton of before action result
              -> (b -> (Codec tIn m tOut))
              -- ^ Input 'Codec', as a funciton of before aciton result
@@ -152,70 +150,6 @@ inumBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             -> Inum tIn tOut m a
 inumBracket before after codec iter0 =
     inumCBracket before after (const noCtl) codec iter0
-
---
--- Control handler functions
---
-
--- | Wrap a control command for requests of type @carg@ into a
--- function of type @'CtlReq' t m a -> Maybe 'Iter' t m a@, which is
--- not parameterized by @carg@ and therefore can be grouped in a list
--- with control functions for other types.  The intent is then to
--- combine a list of such functions into a 'CtlHandler' with
--- 'tryCtls'.
---
--- As an example, the following funciton produces a 'CtlHandler'
--- (suitable to be passed to 'mkInum' or 'inumCBracket') that
--- implements control operations for three types:
---
--- @
---  fileCtl :: (ChunkData tIn, ChunkData tOut, MonadIO m) =>
---             Handle -> CtlHandler tIn tOut m a
---  fileCtl h = 'ctlHandler' 'passCtl'
---              [ `ctl'` $ \\('SeekC' mode pos) -> 'liftIO' ('hSeek' h mode pos)
---              , `ctl'` $ \\'TellC' -> 'liftIO' ('hTell' h)
---              , `ctl'` $ \\'SizeC' -> 'liftIO' ('hFileSize' h)
---              ]
--- @
-ctl :: (CtlCmd carg cres, ChunkData tIn, ChunkData tOut, Monad m) =>
-       (carg -> Iter tIn m cres)
-    -> CtlReq tOut m a
-    -> Maybe (InumR tIn tOut m a)
-ctl f (CtlReq carg fr) = case cast carg of
-                           Nothing    -> Nothing
-                           Just carg' -> Just $ f carg' >>= return . fr . cast
-
--- | A variant of 'ctl' that, makes the control operation fail if it
--- throws any kind of exception (as opposed to re-propagating the
--- exception as an 'InumFail', which is what would end up happening
--- with 'ctl').
-ctl' :: (CtlCmd carg cres, ChunkData tIn, ChunkData tOut, Monad m) =>
-        (carg -> Iter tIn m cres)
-     -> CtlReq tOut m a -> Maybe (InumR tIn tOut m a)
-ctl' f (CtlReq carg fr) = case cast carg of
-                            Nothing    -> Nothing
-                            Just carg' -> Just $ tryf carg'
-    where tryf carg' = tryI (f carg') >>=
-                       return . either (\(SomeException _, _) -> fr Nothing)
-                                       (fr . cast)
-
--- | Create a 'CtlHandler' from a list of functions created with 'ctl'
--- or `ctl'`.  Tries each argument type in turn until one succeeds.
--- If none succeeds, runs a fallback handler, which can be 'noCtl',
--- 'passCtl', or another custom 'CtlHandler'.  See the use example
--- given for 'ctl'.
-ctlHandler :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-              CtlHandler tIn tOut m a
-           -- ^ Fallback 'CtlHandler'
-           -> [CtlReq tOut m a -> Maybe (InumR tIn tOut m a)]
-           -- ^ List of individual request handlers to try (each
-           -- created with 'ctl' or `ctl'`).
-           -> CtlHandler tIn tOut m a
-ctlHandler fallback ctls req = case res of
-                                 Nothing   -> fallback req
-                                 Just iter -> iter
-    where
-      res = foldr (\a b -> maybe b Just $ a req) Nothing ctls
 
 --
 -- Monad
@@ -283,7 +217,7 @@ instance (MonadIO m, IterStateTClass m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
 
 data InumState tIn tOut m a = InumState {
-      insCtl :: !(CtlHandler tIn tIn m (Iter tOut m a))
+      insCtl :: !(CtlHandler tIn m)
     , insIter :: !(Iter tOut m a)
     , insStopEOF :: Bool
     , insStopDone :: Bool
@@ -309,8 +243,7 @@ setIter s0 iter = do
 feed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         tOut -> InumM tIn tOut m a Bool
 feed dat = IterStateT $ \s -> do
-             iter <- inumMC (insCtl s) |. inumMC passCtl $
-                     feedI (insIter s) (chunk dat)
+             iter <- inumMC (insCtl s) $ feedI (insIter s) (chunk dat)
              setIter s iter
 
 -- | Apply another 'Inum' to the 'Iter' from within the 'InumM' monad.
@@ -324,8 +257,7 @@ pipe inum = IterStateT $ \s -> do
 -- input with various 'Iter's, and using 'feed' and 'pipe' to send
 -- output.
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-           CtlHandler tIn tIn m (Iter tOut m a)
-        -> InumM tIn tOut m a b -> Inum tIn tOut m a
+           CtlHandler tIn m -> InumM tIn tOut m a b -> Inum tIn tOut m a
 mkInumM ch inumm iter0 = do
    result <- runIterStateT inumm $ InumState ch iter0 True True
    case result of
