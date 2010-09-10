@@ -456,7 +456,7 @@ sepBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
       -> Iter t m b             -- ^ Separator between items
       -> Iter t m f             -- ^ Returns 'LL.ListLike' list of items
 sepBy item sep =
-    item `orEmpty` LL.cons >$> foldr1I LL.cons LL.empty (sep *> item)
+    item `orEmpty` (LL.cons >$> foldrI LL.cons LL.empty (sep *> item))
 
 -- | Like 'sepBy', but expects a separator after the final item.  In
 -- other words, parses a sequence of the form
@@ -492,7 +492,7 @@ skipMany1 = foldl1I (\_ _ -> ()) ()
 -- return at least one item.
 sepBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
           Iter t m a -> Iter t m b -> Iter t m f
-sepBy1 item sep = item >>= LL.cons >$> foldr1I LL.cons LL.empty (sep *> item)
+sepBy1 item sep = item >>= LL.cons >$> foldrI LL.cons LL.empty (sep *> item)
 
 -- | A variant of 'endBy' that throws a parse error if it cannot
 -- return at least one item.
