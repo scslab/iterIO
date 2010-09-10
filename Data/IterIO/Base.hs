@@ -80,9 +80,9 @@ module Data.IterIO.Base
     -- * Some basic Iters
     , nullI, dataI, chunkI, peekI, atEOFI
     -- * Low-level Iter-manipulation functions
-    , feedI, finishI, joinI, failBind
+    , feedI, finishI, joinI, inumBind
     -- * Some basic Inums
-    , inumPure, inumNop, inumMC, inumRepeat
+    , inumPure, inumF, inumMC, inumRepeat, inumNop
     -- * Control functions
     , ctlI, safeCtlI
     , CtlHandler, CtlArg(..), CtlRes(..)
@@ -498,7 +498,7 @@ cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-cat a b iter = a iter `failBind` b
+cat a b iter = a iter `inumBind` b
 infixr 3 `cat`
 
 -- | Fuse two 'Inum's when the inner type of the first 'Inum' is the
@@ -1168,13 +1168,11 @@ finishI iter                     = return iter
 -- | A function that mostly acts like '>>=', but preserves 'InumFail'
 -- failures.  (@m '>>=' k@ will translate an 'InumFail' in @m@ into an
 -- 'IterFail'.)
-failBind :: (ChunkData t, Monad m) =>
+inumBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
-failBind iter0 next = do
-  iter <- finishI iter0
-  case iter of
-    InumFail e i -> InumFail e i
-    _            -> iter >>= next
+inumBind iter0 next = finishI iter0 >>= check
+    where check iter@(InumFail _ _) = iter
+          check iter                = iter >>= next
 
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The
 -- behavior of @joinI@ is similar to what one would obtain by defining
@@ -1191,9 +1189,9 @@ failBind iter0 next = do
 joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
          InumR tIn tOut m a
       -> Iter tIn m a
-joinI (Done i c)     = runI i `failBind` flip Done c
+joinI (Done i c)     = runI i `inumBind` flip Done c
 joinI (IterFail e)   = IterFail e
-joinI (InumFail e i) = runI i `failBind` InumFail e
+joinI (InumFail e i) = runI i `inumBind` InumFail e
 joinI iter           = finishI iter >>= joinI
 
 --
@@ -1205,23 +1203,43 @@ inumPure :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             tOut -> Inum tIn tOut m a
 inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 
--- | The dummy 'Inum' which passes all data straight through to the
--- 'Iter'.
-inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop (IterF f)    = IterF dochunk
-    where dochunk (Chunk t True) = inumMC passCtl $ f (chunk t)
-          dochunk c              = inumNop $ f c
-inumNop (IterM m)    = IterM $ inumNop `liftM` m
-inumNop (IterC a fr) = IterC a $ inumNop . fr
-inumNop (Done a c)   = Done (return a) c
-inumNop iter         = return iter
+-- | An 'Inum' that passes data straight through to an 'Iter' in the
+-- 'IterF' state and returns the 'Iter' as soon as it enteres any
+-- state other than 'IterF'.
+--
+-- When the 'Iter' returns 'Done', @inumF@ pulls the residual data up
+-- to the enclosing 'Iter', ensuring the 'Done' returned will always
+-- have 'mempty' residual data (like 'finishI').  This makes it
+-- convenient to 'cat' @inumF@ at the end of other 'Inum's that have
+-- the same input and output types.  For example, one can implement
+-- 'inumNop' as follows:
+--
+-- @
+-- inumNop = 'inumRepeat' ('inumMC' 'passCtl' ``cat`` 'inumF')
+-- @
+--
+-- By contrast, it would be incorrect to implement it as follows:
+--
+-- > inumNop' = inumRepeat (inumF `cat` inumMC passCtl) -- Bad
+--
+-- The reason is that fusing an @inum@ to an iter should have no
+-- effect:  @'inumNop' .| iter@ behaves identially to @iter@.  On the
+-- other hand, @inumNop' .| iter@ discards any residual data.  For
+-- example, @inumNop' .| ('Done' () ('chunk' \"abcde\"))@ becomes
+-- @'Done' () ('chunk' \"\")@
+inumF :: (ChunkData t, Monad m) => Inum t t m a
+inumF (IterF f) = IterF dochunk
+    where dochunk (Chunk t True) = return $ f (chunk t)
+          dochunk c              = inumF $ f c
+inumF (Done a c)                 = Done (return a) c
+inumF iter      = return iter
 
 -- | An 'Inum' that only processes 'IterM' and 'IterC' requests and
--- returns the 'Iter' as soon as it requests input (via 'IterF') or
--- experiences an error.  The first argument specifies what to do with
--- 'IterC' requests, and can be 'noCtl' to reject requests, 'passCtl'
--- to pass them up to the @'Iter' tIn m@ monad, or a custom
--- 'CtlHandler' function.
+-- returns the 'Iter' as soon as it requests input (via 'IterF'),
+-- returns a result, or experiences an error.  The first argument
+-- specifies what to do with 'IterC' requests, and can be 'noCtl' to
+-- reject requests, 'passCtl' to pass them up to the @'Iter' tIn m@
+-- monad, or a custom 'CtlHandler' function.
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           CtlHandler tIn m -> Inum tIn tOut m a
 inumMC ch (IterM m) = IterM $ inumMC ch `liftM` m
@@ -1231,12 +1249,18 @@ inumMC _ iter = return iter
 
 -- | Repeat an 'Inum' until an end of file is received or a failure
 -- occurs.
-inumRepeat :: (ChunkData tIn, MonadIO m, Show tOut) =>
+inumRepeat :: (ChunkData tIn, Monad m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
-inumRepeat inum iter = do
-  eof <- atEOFI
-  if eof then return iter else inum iter >>= inumRepeat inum
+inumRepeat inum iter
+    | not (isIterActive iter) = return iter
+    | otherwise =
+        do eof <- atEOFI
+           if eof then return iter else inum iter `inumBind` inumRepeat inum
 
+-- | The dummy 'Inum' which passes all data straight through to the
+-- 'Iter'.
+inumNop :: (ChunkData t, Monad m) => Inum t t m a
+inumNop = inumRepeat (inumMC passCtl `cat` inumF)
 
 --
 -- Support for control operations

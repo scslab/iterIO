@@ -15,7 +15,6 @@ module Data.IterIO
 
 -- import Prelude hiding (catch)
 import Data.IterIO.Base hiding (null, run -- names that might collide
-                               , failBind
                                )
 import Data.IterIO.Inum
 import Data.IterIO.ListLike

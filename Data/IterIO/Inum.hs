@@ -117,7 +117,7 @@ inumCBracket before after cf codec iter0 = tryI before >>= checkBefore
       checkBefore (Right b)     = finishI (mkInumC (cf b) (codec b) iter0)
                                   >>= checkMain b
       checkMain b iter = tryI (after b) >>= checkAfter iter
-      checkAfter iter (Left (e,_)) = iter `failBind` InumFail e
+      checkAfter iter (Left (e,_)) = iter `inumBind` InumFail e
       checkAfter iter _            = iter
 
 -- | Build an 'Inum' from a @before@ action, an @after@ function, and
