@@ -165,7 +165,7 @@ chunkEOF = Chunk mempty True
 
 instance (ChunkData t) => Monoid (Chunk t) where
     mempty = Chunk mempty False
-    mappend (Chunk a False) (Chunk b eof) = Chunk (mappend a b) eof
+
     -- We mostly want to avoid appending data to a Chunk that has the
     -- EOF bit set, but make an exception for appending a null chunk,
     -- so that code like the following will work:
@@ -175,10 +175,16 @@ instance (ChunkData t) => Monoid (Chunk t) where
     -- While the above code may seem arcane, something similar happens
     -- with, for instance:
     --
-    -- do iter <- returnI $ feedI (return "") chunkEOF
+    -- do iter <- finishI $ feedI (return "") chunkEOF
     --    iter
-    mappend a (Chunk b _) | null b        = a
-    mappend _ _                           = error "mappend to EOF"
+    --
+    -- Also, we expect b to be null a fair fraction of the time, so it
+    -- is important to optimize that case.  (E.g., actually computing
+    -- longList ++ [] via mappend would be expensive.)
+    mappend (Chunk a eofa) (Chunk b eofb)
+            | null b    = Chunk a (eofa || eofb)
+            | not eofa  = Chunk (mappend a b) eofb
+            | otherwise = error "mappend to EOF"
 
 instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
@@ -1080,18 +1086,14 @@ atEOFI = IterF check
 -- behavior of an 'Iter':
 --
 --     1. An 'Iter' may not return an 'IterF' (asking for more input)
---        after receiving a 'Chunk' with the EOF bit 'True'.  (It is
---        okay to return IterF after issuing an 'IterM' or 'IterC'.)
+--        after receiving a 'Chunk' with the EOF bit 'True'.
 --
 --     2. An 'Iter' returning 'Done' must not set the EOF bit if it
 --        did not receive the EOF bit.
 --
 -- It /is/, however, okay for an 'Iter' to return 'Done' without the
--- EOF bit even if the EOF bit was set on its input chunk.  For
--- efficiency, @feedI@ will propagate the EOF bit if there have been
--- no intervening 'IterM' or 'IterC' calls (which might have the
--- effect of unding an 'EOF' anyway, or instance by moving a file
--- pointer).
+-- EOF bit even if the EOF bit was set on the input chunk, as
+-- @feedI@ will adjust the 'Done' response to set the EOF bit.
 --
 -- As an example, the following code is valid:
 --
@@ -1126,7 +1128,7 @@ feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
       noEOF iter                    = iter
       forceEOF (IterF _)            = error "feedI: IterF returned after EOF"
       forceEOF (Done a (Chunk t _)) = Done a (Chunk t True)
-      forceEOF iter                 = iter
+      forceEOF iter                 = feedI iter chunkEOF
 feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
 feedI (Done a c) c'             = Done a (mappend c c')
 feedI (IterC a fr) c            = IterC a $ flip feedI c . fr
@@ -1234,7 +1236,7 @@ inumF :: (ChunkData t, Monad m) => Inum t t m a
 inumF (IterF f) = IterF dochunk
     where dochunk (Chunk t True) = return $ f (chunk t)
           dochunk c              = inumF $ f c
-inumF (Done a c)                 = Done (return a) c
+inumF (Done a c@(Chunk _ eof))   = Done (Done a (Chunk mempty eof)) c
 inumF iter      = return iter
 
 -- | An 'Inum' that only processes 'IterM' and 'IterC' requests and
@@ -1252,26 +1254,17 @@ inumMC _ iter = return iter
 
 -- | Repeat an 'Inum' until an end of file is received, the 'Inum'
 -- fails, or the 'Iter' terminates.
-inumRepeat :: (ChunkData tIn, Monad m) =>
+inumRepeat :: (ChunkData tIn, MonadIO m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
-inumRepeat inum iter0 = do
-  eof <- IterF $ \c@(Chunk _ eof) -> Done eof c
-  inum iter0 `inumBind` \iter ->
-      (if eof || not (isIterActive iter) then return else inumRepeat inum) iter
-
+inumRepeat inum = finishI . inum >=> check
+    where check iter@(Done _ (Chunk _ True)) = iter
+          check iter                         = iter `inumBind` inumRepeat inum
+      
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
-inumNop :: (ChunkData t, Monad m) => Inum t t m a
--- inumNop = inumRepeat (inumMC passCtl `cat` inumF)
-inumNop (IterF f)    = IterF dochunk
-    where dochunk (Chunk t True) = inumMC passCtl $ f (chunk t)
-          dochunk c              = inumNop $ f c
-inumNop (IterM m)    = IterM $ inumNop `liftM` m
-inumNop (IterC a fr) = IterC a $ inumNop . fr
-inumNop (Done a c)   = Done (return a) c
-inumNop iter         = return iter
-{-
--}
+inumNop :: (ChunkData t, MonadIO m) => Inum t t m a
+inumNop = inumRepeat (inumMC passCtl `cat` inumF)
+
 
 --
 -- Support for control operations

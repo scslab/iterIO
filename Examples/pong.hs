@@ -2,9 +2,12 @@
 module Main where
 
 import Control.Concurrent
+import Control.Exception
 import Control.Monad.Trans
-import Data.ByteString.Char8 as S8
-import Data.IterIO
+import qualified Data.ByteString.Char8 as S8
+import Data.IterIO.Base
+import Data.IterIO.ListLike
+import Data.IterIO.Inum
 import Data.IterIO.Extra
 
 minusOne :: Iter [Int] IO () -> Iter [Int] IO ()
@@ -19,19 +22,26 @@ inumPrintList = mkInum' $ do
                   liftIO $ S8.putStrLn $ S8.pack (show x)
                   return x
 
-iterLoop2 :: QSemN -> IO (Iter [Int] IO (), Onum [Int] IO a)
-iterLoop2 sem = do
-  (iterA, enumB) <- iterLoop
-  (iterB, enumA) <- iterLoop
-  forkIO $ enumB |. inumNop |$ inumNop .| iterB >> signalQSemN sem 1
-  return (iterA, enumA)
-
 pong :: IO ()
 pong = do
   sem <- newQSemN 0
-  (iter, enum) <- iterLoop2 sem
-  inumPure [10] `cat` enum |$ inumPrintList .| minusOne iter
-  waitQSemN sem 1
+  (iterA, enumB) <- iterLoop
+  (iterB, enumA) <- iterLoop
+  _ <- forkIO $ do
+         -- tidTrace "thread A"
+         handle (\e@(SomeException _) -> tidTrace $ show e) $
+                (inumPure [10] `cat` enumA |. inumNop) |. inumNop
+                    |$ inumNop .| inumPrintList .| minusOne iterA
+         -- tidTrace "thread A done"
+         signalQSemN sem 1
+  _ <- forkIO $ do
+         -- tidTrace "thread B"
+         handle (\e@(SomeException _) -> tidTrace $ show e) $
+                enumB |. inumNop |$ inumNop .| iterB >> signalQSemN sem 1
+         -- tidTrace "thread B done"
+         signalQSemN sem 1
+  waitQSemN sem 2
+  S8.putStrLn $ S8.pack "Done"
 
 main :: IO ()
 main = pong
