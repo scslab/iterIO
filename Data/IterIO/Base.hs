@@ -1076,17 +1076,20 @@ atEOFI = IterF check
 -- behavior of an 'Iter':
 --
 --     1. An 'Iter' may not return an 'IterF' (asking for more input)
---        if it received a 'Chunk' with the EOF bit 'True'.  (It is
---        okay to return IterF after issuing a successful 'IterC'
---        request.)
+--        after receiving a 'Chunk' with the EOF bit 'True'.  (It is
+--        okay to return IterF after issuing an 'IterM' or 'IterC'.)
 --
 --     2. An 'Iter' returning 'Done' must not set the EOF bit if it
 --        did not receive the EOF bit.
 --
 -- It /is/, however, okay for an 'Iter' to return 'Done' without the
--- EOF bit even if the EOF bit was set on its input chunk, as
--- @feedI@ will just propagate the EOF bit.  For instance, the
--- following code is valid:
+-- EOF bit even if the EOF bit was set on its input chunk.  For
+-- efficiency, @feedI@ will propagate the EOF bit if there have been
+-- no intervening 'IterM' or 'IterC' calls (which might have the
+-- effect of unding an 'EOF' anyway, or instance by moving a file
+-- pointer).
+--
+-- As an example, the following code is valid:
 --
 -- @
 --      feedI (return ()) 'chunkEOF'
@@ -1115,13 +1118,9 @@ feedI :: (ChunkData t, Monad m) =>
 feedI iter c | null c           = iter
 feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
     where
-      noEOF (Done _ (Chunk _ True)) = error "feedI: IterF returned bad EOF"
+      noEOF (Done _ (Chunk _ True)) = error "feedI: illegal EOF"
       noEOF iter                    = iter
       forceEOF (IterF _)            = error "feedI: IterF returned after EOF"
-      forceEOF (IterM m)            = IterM $ forceEOF `liftM` m
-      forceEOF (IterC a fr)         = IterC a $ \r -> 
-                                      case r of Just _  -> fr r
-                                                Nothing -> forceEOF $ fr r
       forceEOF (Done a (Chunk t _)) = Done a (Chunk t True)
       forceEOF iter                 = iter
 feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
@@ -1260,7 +1259,15 @@ inumRepeat inum iter
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop = inumRepeat (inumMC passCtl `cat` inumF)
+-- This does not work yet
+-- inumNop = inumRepeat (inumMC passCtl `cat` inumF)
+inumNop (IterF f)    = IterF dochunk
+    where dochunk (Chunk t True) = inumMC passCtl $ f (chunk t)
+          dochunk c              = inumNop $ f c
+inumNop (IterM m)    = IterM $ inumNop `liftM` m
+inumNop (IterC a fr) = IterC a $ inumNop . fr
+inumNop (Done a c)   = Done (return a) c
+inumNop iter         = return iter
 
 --
 -- Support for control operations
