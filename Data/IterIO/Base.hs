@@ -1233,11 +1233,11 @@ inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 -- example, @inumNop' .| ('Done' () ('chunk' \"abcde\"))@ becomes
 -- @'Done' () ('chunk' \"\")@
 inumF :: (ChunkData t, Monad m) => Inum t t m a
-inumF (IterF f) = IterF dochunk
-    where dochunk (Chunk t True) = return $ f (chunk t)
-          dochunk c              = inumF $ f c
-inumF (Done a c@(Chunk _ eof))   = Done (Done a (Chunk mempty eof)) c
-inumF iter      = return iter
+inumF iter@(IterF _)           = IterF dochunk
+    where dochunk (Chunk t True) = return $ feedI iter (chunk t)
+          dochunk c              = inumF $ feedI iter c
+inumF (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
+inumF iter                     = return iter
 
 -- | An 'Inum' that only processes 'IterM' and 'IterC' requests and
 -- returns the 'Iter' as soon as it requests input (via 'IterF'),
@@ -1253,12 +1253,15 @@ inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
 inumMC _ iter = return iter
 
 -- | Repeat an 'Inum' until an end of file is received, the 'Inum'
--- fails, or the 'Iter' terminates.
+-- fails, or the 'Iter' terminates.  Runs the 'Inum' at least once
+-- even if the 'Iter' is no longer active.
 inumRepeat :: (ChunkData tIn, MonadIO m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
 inumRepeat inum = finishI . inum >=> check
     where check iter@(Done _ (Chunk _ True)) = iter
-          check iter                         = iter `inumBind` inumRepeat inum
+          check iter                         = iter `inumBind` again
+          again iter | isIterActive iter = inumRepeat inum iter
+                     | otherwise         = return iter
       
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
