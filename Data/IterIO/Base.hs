@@ -87,11 +87,14 @@ module Data.IterIO.Base
     , ctlI, safeCtlI
     , CtlHandler, CtlArg(..), CtlRes(..)
     , noCtl, passCtl, consCtl
+    -- * Misc debugging function
+    , tidTrace
     ) where
 
 import Prelude hiding (null)
 import qualified Prelude
 import Control.Applicative (Applicative(..))
+import Control.Concurrent (myThreadId)
 import Control.Exception (SomeException(..), ErrorCall(..), Exception(..)
                          , try, throw)
 import Control.Monad
@@ -110,6 +113,7 @@ import System.IO
 import System.IO.Error (mkIOError, eofErrorType, isEOFError)
 import System.IO.Unsafe
 
+import Debug.Trace
 
 --
 -- Iteratee types and instances
@@ -1246,20 +1250,18 @@ inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
                               \(CtlRes cres) -> inumMC ch $ fr $ cast cres
 inumMC _ iter = return iter
 
--- | Repeat an 'Inum' until an end of file is received or a failure
--- occurs.
+-- | Repeat an 'Inum' until an end of file is received, the 'Inum'
+-- fails, or the 'Iter' terminates.
 inumRepeat :: (ChunkData tIn, Monad m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
-inumRepeat inum iter
-    | not (isIterActive iter) = return iter
-    | otherwise =
-        do eof <- atEOFI
-           if eof then return iter else inum iter `inumBind` inumRepeat inum
+inumRepeat inum iter0 = do
+  eof <- IterF $ \c@(Chunk _ eof) -> Done eof c
+  inum iter0 `inumBind` \iter ->
+      (if eof || not (isIterActive iter) then return else inumRepeat inum) iter
 
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
--- This does not work yet
 -- inumNop = inumRepeat (inumMC passCtl `cat` inumF)
 inumNop (IterF f)    = IterF dochunk
     where dochunk (Chunk t True) = inumMC passCtl $ f (chunk t)
@@ -1268,6 +1270,8 @@ inumNop (IterM m)    = IterM $ inumNop `liftM` m
 inumNop (IterC a fr) = IterC a $ inumNop . fr
 inumNop (Done a c)   = Done (return a) c
 inumNop iter         = return iter
+{-
+-}
 
 --
 -- Support for control operations
@@ -1347,3 +1351,13 @@ consCtl :: (CtlCmd carg cres, ChunkData t, Monad m) =>
 consCtl fn fallback arg@(CtlArg carg) =
     maybe (fallback arg) (fn >=> return . CtlRes) (cast carg)
 infixr 9 `consCtl`
+
+--
+-- Debugging
+--
+
+-- | For debugging.  Print the current thread ID and a message.
+tidTrace :: (MonadIO m) => String -> m ()
+tidTrace msg = liftIO $ do
+                 tid <- myThreadId
+                 putTraceMsg $ show tid ++ ": " ++ msg

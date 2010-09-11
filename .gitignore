@@ -4,7 +4,9 @@
 *~
 /Data/IterIO/ZlibInt.hs
 /Examples/fgrep
+/Examples/httpEcho
 /Examples/httptest
+/Examples/pong
 /Examples/reliable/reference
 /Examples/reliable/tester
 /Examples/simple
