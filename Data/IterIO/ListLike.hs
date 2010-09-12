@@ -80,7 +80,7 @@ sendI sendfn = do
 
 -- | Return the first element when the Iteratee data type is a list.
 headLI :: (Show a, Monad m) => Iter [a] m a
-headLI = IterF $ dohead
+headLI = iterF $ dohead
     where dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
           dohead _                  = throwEOFI "headLI"
 

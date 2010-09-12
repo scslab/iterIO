@@ -1175,12 +1175,15 @@ finishI iter                     = return iter
 
 -- | A function that mostly acts like '>>=', but preserves 'InumFail'
 -- failures.  (By contrast, @m '>>=' k@ will translate an 'InumFail'
--- in @m@ into an 'IterFail'.)
+-- in @m@ into an 'IterFail'.)  Has fixity:
+--
+-- > infixl 1 `inumBind`
 inumBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
 inumBind iter0 next = finishI iter0 >>= check
     where check iter@(InumFail _ _) = iter
           check iter                = iter >>= next
+infixl 1 `inumBind`
 
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The
 -- behavior of @joinI@ is similar to what one would obtain by defining
@@ -1267,11 +1270,12 @@ inumLazy inum iter | isIterActive iter = inum iter
 -- even if the 'Iter' is no longer active.
 inumRepeat :: (ChunkData tIn, MonadIO m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
-inumRepeat inum iter = step $ inum iter
-    where step ii@(IterF _) = iterF $ \c@(Chunk t eof) ->
+inumRepeat inum = runinum
+    where runinum iter = step (inum iter)
+          step ii@(IterF _) = IterF $ \c@(Chunk t eof) ->
                               (if eof && null t then id else step) $ feedI ii c
           step ii | isIterActive ii = inumMC passCtl ii >>= step
-                  | otherwise       = ii `inumBind` inumLazy (inumRepeat inum)
+                  | otherwise       = ii `inumBind` inumLazy runinum
       
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
