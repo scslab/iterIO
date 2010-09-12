@@ -1117,10 +1117,7 @@ atEOFI = IterF check
 -- @
 --      feedI ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
 -- @
-feedI :: (ChunkData t, Monad m) =>
-         Iter t m a
-      -> Chunk t
-      -> Iter t m a
+feedI :: (ChunkData t, Monad m) => Iter t m a -> Chunk t -> Iter t m a
 feedI iter c | null c           = iter
 feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
     where
