@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 -- | This module contains various functions used to construct 'Inum's.
 
@@ -15,6 +17,7 @@ module Data.IterIO.Inum
 
 import Control.Exception (ErrorCall(..), Exception(..))
 import Control.Monad
+import Control.Monad.State.Class
 import Control.Monad.Trans
 import Data.Monoid
 import Data.Typeable
@@ -173,20 +176,19 @@ newtype IterStateT s m a = IterStateT (s -> m (s, a))
 -- This function could equally well have returned an @'Iter' t m (s,
 -- a)@.  However, it returns @'InumR' t t m a@ (equivalent to @'Iter'
 -- t m ('Iter' t m a)@) to make it more convenient to inspect the
--- result and in check for errors.  This is the same trick used by
--- 'finishI', which @runIterStateT@ uses internally, so returning the
--- 'InumR' saves other code from needing to invoke 'finishI' a second
--- time.
+-- result and check for errors.  This is the same trick used by
+-- 'finishI', which @runIterStateT@ uses internally; returning 'InumR'
+-- saves other code from needing to invoke 'finishI' a second time.
 runIterStateT :: (Monad m, ChunkData t) =>
-                IterStateT s (Iter t m) a -> s -> InumR t t m (s, a)
+                 IterStateT s (Iter t m) a -> s -> InumR t t m (s, a)
 runIterStateT (IterStateT isf) s = finishI (isf s) >>= return . check
-    where check (IterFail e)         = InumFail e (s, error "runIterStateT")
-          check iter                 = iter
+    where check (IterFail e) = InumFail e (s, error "runIterStateT")
+          check iter         = iter
 
 -- | This class is kind of silly and wouldn't be required with
 -- -XFlexibleInstances, but is used so that the order and nature of
 -- the type arguments to IterStateT is appropriate for a 'MonadTrans'.
-class IterStateTClass m where
+class (Monad m) => IterStateTClass m where
     isc_return :: a -> IterStateT s m a
     isc_bind   :: IterStateT s m a -> (a -> IterStateT s m b)
                -> IterStateT s m b
@@ -203,7 +205,7 @@ instance (Monad m, ChunkData t) => IterStateTClass (Iter t m) where
               check msa = msa >>= \(s', a) -> join $ runIterStateT (k a) s'
 
     isc_fail msg = IterStateT $ \s -> InumFail (toException $ ErrorCall msg)
-                                              (s, error "isc_fail")
+                                               (s, error "isc_fail")
 
 instance (IterStateTClass m) => Monad (IterStateT s m) where
     return = isc_return
@@ -215,6 +217,13 @@ instance MonadTrans (IterStateT s) where
 
 instance (MonadIO m, IterStateTClass m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
+
+-- | This should be the only declaration that requires
+-- FlexibleInstances, and only because mtl makes that necessary.
+instance (IterStateTClass m) => MonadState s (IterStateT s m) where
+    get   = IterStateT $ \s -> return (s, s)
+    put s = IterStateT $ \_ -> return (s, ())
+
 
 data InumState tIn tOut m a = InumState {
       insCtl :: !(CtlHandler (Iter tIn m))
@@ -230,28 +239,25 @@ type InumM tIn tOut m a = IterStateT (InumState tIn tOut m a) (Iter tIn m)
 data InumDone = InumDone deriving (Show, Typeable)
 instance Exception InumDone
 
--- | Feed data the 'Iter' from within the 'InumM' monad.
+-- | Feed data the 'Iter' from within the 'InumM' monad.  Returns
+-- @'True'@ if the 'Iter' is still active, @'False'@ if the iter has
+-- finished and the 'Inum' should finish.
 ifeed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          tOut -> InumM tIn tOut m a Bool
 ifeed = ipipe . inumPure
 
 -- | Apply another 'Inum' to the 'Iter' from within the 'InumM' monad.
+--  Returns @'True'@ if the 'Iter' is still active, @'False'@ if the
+--  iter has finished and the 'Inum' should finish.
 ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
 ipipe inum = IterStateT $ \s -> do
-              iter <- inumMC (insCtl s) |. inum $ insIter s
-              setIter s iter
-
-setIter :: (ChunkData tIn, Monad m) =>
-           InumState tIn tOut m a -> Iter tOut m a
-        -> Iter tIn m (InumState tIn tOut m a, Bool)
-setIter s0 iter = do
-  let s = s0 { insIter = iter }
-      active = isIterActive iter
-  if active || not (insStopDone s)
-    then return (s, active)
-    else do c <- chunkI
-            InumFail (toException InumDone) (s { insRemain = c }, False)
+               iter <- inumMC (insCtl s) |. inum $ insIter s
+               let active = isIterActive iter
+               if active || not (insStopDone s)
+                 then return (s {insIter = iter }, active)
+                 else do c <- chunkI
+                         return (s {insIter = iter, insRemain = c }, False)
 
 -- | Apply an 'Onum' to the 'Iter' from within the 'InumM' monad.
 irun :: (ChunkData tIn, ChunkData tOut, Monad m) =>
