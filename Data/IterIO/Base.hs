@@ -82,7 +82,7 @@ module Data.IterIO.Base
     -- * Low-level Iter-manipulation functions
     , feedI, finishI, joinI, inumBind
     -- * Some basic Inums
-    , inumPure, inumF, inumMC, inumRepeat, inumNop
+    , inumPure, inumF, inumMC, inumLazy, inumRepeat, inumNop
     -- * Control functions
     , ctlI, safeCtlI
     , CtlHandler, CtlArg(..), CtlRes(..)
@@ -214,7 +214,9 @@ class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 -- Note that @Iter t@ is a 'MonadTrans' and @Iter t m@ is a a 'Monad'
 -- (as discussed in the documentation for module "Data.IterIO").
 data Iter t m a = IterF !(Chunk t -> Iter t m a)
-                -- ^ The iteratee requires more input.
+                -- ^ The iteratee requires more input.  Do not call
+                -- this function directly; use 'feedI' to feed a
+                -- 'Chunk' to an Iter.
                 | IterM !(m (Iter t m a))
                 -- ^ The iteratee must execute monadic bind in monad @m@
                 | forall carg cres. (CtlCmd carg cres) =>
@@ -443,12 +445,13 @@ runI :: (ChunkData t1, ChunkData t2, Monad m) =>
         Iter t1 m a
      -> Iter t2 m a
 runI (Done a _)     = return a
+runI iter@(IterF _) = runI $ feedI iter chunkEOF
 runI (IterFail e)   = IterFail e
 runI (InumFail e i) = InumFail e i
-runI iter@(IterF _) = runI $ feedI iter chunkEOF
 runI iter           = inumMC noCtl iter >>= runI
 
--- | Run an outer enumerator on an iteratee.  Is equivalent to:
+-- | Run an 'Onum' on an 'Iter'.  This is the main way of actually
+-- executing IO with 'Iter's.  @|$@ is equivalent to:
 --
 -- @
 --  inum |$ iter = 'run' ('enum' .| iter)
@@ -498,7 +501,7 @@ infixr 2 |$
 -- >       handler (SomeException _) _ = return "caught error"
 (.|$) :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Onum tOut m a -> Iter tOut m a -> Iter tIn m a
-(.|$) enum iter = runI $ enum .| iter
+(.|$) enum iter = runI (enum .| iter)
 infixr 2 .|$
 
 -- | Concatenate the outputs of two enumerators.  Has fixity:
@@ -1051,11 +1054,14 @@ nullI = IterF check
 dataI :: (Monad m, ChunkData t) => Iter t m t
 dataI = IterF nextChunk
     where nextChunk (Chunk d True) | null d = throwEOFI "dataI"
+          nextChunk (Chunk d _) | null d    = error "dataI: empty chunk"
           nextChunk (Chunk d _)             = return d
 
--- | Returns a non-empty 'Chunk' or an EOF 'Chunk'.
+-- | Returns the next 'Chunk' (which should either be non-empty or
+-- have the EOF bit set).
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
-chunkI = IterF $ \c -> if null c then chunkI else return c
+chunkI = IterF return
+-- Relies on feedI not feeding us an empty chunk
 
 -- | Runs an 'Iter' without consuming any input if the 'Iter'
 -- succeeds.  (See 'tryBI' if you want to avoid consuming input when
@@ -1071,7 +1077,7 @@ atEOFI :: (Monad m, ChunkData t) => Iter t m Bool
 atEOFI = IterF check
     where check c@(Chunk t eof) | not (null t) = Done False c
                                 | eof          = Done True c
-                                | otherwise    = atEOFI
+                                | otherwise    = error "atEOFI: empty chunk"
 
 
 --
@@ -1080,7 +1086,10 @@ atEOFI = IterF check
 
 -- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
 -- 'Done', or in some error condition, simulates the behavior
--- appropriately.
+-- appropriately.  If the 'Chunk' has 'null' data and a False EOF
+-- flag, then simply returns the 'Iter' as is.  (Thus it is safe for
+-- 'IterF' functions to assume they will either get some data or an
+-- EOF.)
 --
 -- Note that this function asserts the following invariants on the
 -- behavior of an 'Iter':
@@ -1133,7 +1142,7 @@ feedI err _                     = err
 
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
 -- 'IterF', 'IterM', or 'IterC' states), then 'return's the 'Iter'
--- much like an 'Inum'.  This function looks a lot line 'inumNop', but
+-- much like an 'Inum'.  This function looks a lot like 'inumNop', but
 -- is actually not real 'Inum' because, upon receiving an EOF,
 -- @finishI@ feeds the EOF to the 'Iter'.  'Inum's are supposed to
 -- return 'Iter's upon receiving EOF, but are not supposed to feed the
@@ -1168,8 +1177,8 @@ finishI (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
 finishI iter                     = return iter
 
 -- | A function that mostly acts like '>>=', but preserves 'InumFail'
--- failures.  (@m '>>=' k@ will translate an 'InumFail' in @m@ into an
--- 'IterFail'.)
+-- failures.  (By contrast, @m '>>=' k@ will translate an 'InumFail'
+-- in @m@ into an 'IterFail'.)
 inumBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
 inumBind iter0 next = finishI iter0 >>= check
@@ -1200,7 +1209,7 @@ joinI iter           = finishI iter >>= joinI
 -- Basic Inums
 --
 
--- | An 'Onum' that will feed pure data to 'Iter's.
+-- | An 'Inum' that will feed pure data to 'Iter's.
 inumPure :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             tOut -> Inum tIn tOut m a
 inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
@@ -1249,16 +1258,23 @@ inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
                               \(CtlRes cres) -> inumMC ch $ fr $ cast cres
 inumMC _ iter = return iter
 
+-- | Runs an 'Inum' only if the 'Iter' is still active.  Othrewise
+-- just returns the 'Iter'.
+inumLazy :: (ChunkData tIn, Monad m) =>
+            Inum tIn tOut m a -> Inum tIn tOut m a
+inumLazy inum iter | isIterActive iter = inum iter
+                   | otherwise         = return iter
+
 -- | Repeat an 'Inum' until an end of file is received, the 'Inum'
 -- fails, or the 'Iter' terminates.  Runs the 'Inum' at least once
 -- even if the 'Iter' is no longer active.
 inumRepeat :: (ChunkData tIn, MonadIO m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
-inumRepeat inum = finishI . inum >=> check
-    where check iter@(Done _ (Chunk _ True)) = iter
-          check iter                         = iter `inumBind` again
-          again iter | isIterActive iter = inumRepeat inum iter
-                     | otherwise         = return iter
+inumRepeat inum iter = step $ inum iter
+    where step ii@(IterF _) = IterF $ \c@(Chunk t eof) ->
+                              (if eof && null t then id else step) $ feedI ii c
+          step ii | isIterActive ii = inumMC passCtl ii >>= step
+                  | otherwise       = ii `inumBind` inumLazy (inumRepeat inum)
       
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
