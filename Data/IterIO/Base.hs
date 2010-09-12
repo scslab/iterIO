@@ -64,7 +64,7 @@ module Data.IterIO.Base
     (-- * Base types
      ChunkData(..), Chunk(..), chunk, chunkEOF
     , CtlCmd
-    , Iter(..)
+    , Iter(..), iterF
     , isIterActive, iterShows, iterShow
     , Inum, InumR, Onum, OnumR
     -- * Execution, concatenation and fusing operators
@@ -216,7 +216,9 @@ class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- ^ The iteratee requires more input.  Do not call
                 -- this function directly; use 'feedI' to feed a
-                -- 'Chunk' to an Iter.
+                -- 'Chunk' to an Iter.  Also you should usually use
+                -- 'iterF' instead of the 'IterF' constructor
+                -- directly.
                 | IterM !(m (Iter t m a))
                 -- ^ The iteratee must execute monadic bind in monad @m@
                 | forall carg cres. (CtlCmd carg cres) =>
@@ -234,6 +236,15 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- the Iteratee.  (In this case, the type @a@ will
                 -- generally be @'Iter' t' m a\'@ for some @t'@ and
                 -- @a'@.)
+
+-- | Builds an 'Iter' in the 'IterF' state.  The difference between
+-- this and using 'IterF' directly is that @iterF@ returns immediately
+-- upon receiving a 'null' chunk.  If you use 'IterF' and do things
+-- like invoke 'liftIO' in a tail-recursive 'Iter', you can easily
+-- cause an infinite loop with 'IterF', which @iterF' prevents.
+iterF :: (ChunkData t) => (Chunk t -> Iter t m a) -> Iter t m a
+iterF f = iter
+    where iter = IterF $ \c -> if null c then iter else f c
 
 -- | Show the current state of an 'Iter', prepending it to some
 -- remaining input (the standard 'ShowS' optimization), when 'a' is in
@@ -668,8 +679,8 @@ copyInput iter0 = doit id iter0
       -- simple prefix of ithe input.  This is the same technique used
       -- by 'ShowS' to optimize the use of (++) on srings.
       doit acc iter@(IterF _) =
-          IterF $ \c -> doit (acc . mappend c) (feedI iter c)
-      doit acc iter | isIterActive iter = inumMC noCtl iter >>= doit acc
+          iterF $ \c -> doit (acc . mappend c) (feedI iter c)
+      doit acc iter | isIterActive iter = inumMC passCtl iter >>= doit acc
                     | otherwise         = return (iter, acc mempty)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
@@ -893,7 +904,7 @@ combineExpected :: (ChunkData t, Monad m) =>
 combineExpected (IterNoParse e) iter =
     case cast e of
       Just (IterExpected saw1 e1) -> mapExceptionI (combine saw1 e1) iter
-      _                        -> iter
+      _                           -> iter
     where
       combine saw1 e1 (IterExpected saw2 e2) =
           IterExpected (if null saw2 then saw1 else saw2) $ e1 ++ e2
@@ -1026,11 +1037,7 @@ ifParse :: (ChunkData t, Monad m) =>
         -- ^ @failure@ action
         -> Iter t m b
         -- ^ result
-ifParse iter yes no = do
-  ea <- tryBI iter
-  case ea of
-    Right a  -> yes a
-    Left err -> combineExpected err no
+ifParse iter yes no = tryBI iter >>= either (\e -> combineExpected e no) yes
 
 -- | @ifNoParse@ is just 'ifParse' with the second and third arguments
 -- reversed.
@@ -1045,23 +1052,19 @@ ifNoParse iter no yes = ifParse iter yes no
 
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, ChunkData t) => Iter t m ()
-nullI = IterF check
-    where check (Chunk _ True) = return ()
-          check _              = nullI
+nullI = IterF $ \(Chunk _ eof) -> if eof then return () else nullI
 
 -- | Returns any non-empty amount of input data, or throws an
 -- exception if EOF is encountered and there is no data.
 dataI :: (Monad m, ChunkData t) => Iter t m t
-dataI = IterF nextChunk
+dataI = iterF nextChunk
     where nextChunk (Chunk d True) | null d = throwEOFI "dataI"
-          nextChunk (Chunk d _) | null d    = error "dataI: empty chunk"
           nextChunk (Chunk d _)             = return d
 
--- | Returns the next 'Chunk' (which should either be non-empty or
--- have the EOF bit set).
+-- | Returns the next 'Chunk' that either contains non-'null' data or
+-- has the EOF bit set.
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
-chunkI = IterF return
--- Relies on feedI not feeding us an empty chunk
+chunkI = iterF return
 
 -- | Runs an 'Iter' without consuming any input if the 'Iter'
 -- succeeds.  (See 'tryBI' if you want to avoid consuming input when
@@ -1074,10 +1077,7 @@ peekI iter0 = copyInput iter0 >>= check
 -- | Does not actually consume any input, but returns 'True' if there
 -- is no more input data to be had.
 atEOFI :: (Monad m, ChunkData t) => Iter t m Bool
-atEOFI = IterF check
-    where check c@(Chunk t eof) | not (null t) = Done False c
-                                | eof          = Done True c
-                                | otherwise    = error "atEOFI: empty chunk"
+atEOFI = iterF $ \(Chunk t _) -> return (null t)
 
 
 --
@@ -1086,10 +1086,7 @@ atEOFI = IterF check
 
 -- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
 -- 'Done', or in some error condition, simulates the behavior
--- appropriately.  If the 'Chunk' has 'null' data and a False EOF
--- flag, then simply returns the 'Iter' as is.  (Thus it is safe for
--- 'IterF' functions to assume they will either get some data or an
--- EOF.)
+-- appropriately.
 --
 -- Note that this function asserts the following invariants on the
 -- behavior of an 'Iter':
@@ -1127,7 +1124,6 @@ atEOFI = IterF check
 --      feedI ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
 -- @
 feedI :: (ChunkData t, Monad m) => Iter t m a -> Chunk t -> Iter t m a
-feedI iter c | null c           = iter
 feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
     where
       noEOF (Done _ (Chunk _ True)) = error "feedI: illegal EOF"
@@ -1135,6 +1131,7 @@ feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
       forceEOF (IterF _)            = error "feedI: IterF returned after EOF"
       forceEOF (Done a (Chunk t _)) = Done a (Chunk t True)
       forceEOF iter                 = feedI iter chunkEOF
+feedI iter c | null c           = iter
 feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
 feedI (Done a c) c'             = Done a (mappend c c')
 feedI (IterC a fr) c            = IterC a $ flip feedI c . fr
@@ -1170,7 +1167,7 @@ feedI err _                     = err
 -- This makes it safe to ignore the left-over data of the inner
 -- 'Done'.
 finishI :: (ChunkData t, Monad m) => Inum t t m a
-finishI iter@(IterF _)           = IterF $ finishI . feedI iter
+finishI iter@(IterF _)           = iterF $ finishI . feedI iter
 finishI (IterM m)                = IterM $ finishI `liftM` m
 finishI (IterC a fr)             = IterC a $ finishI . fr
 finishI (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
@@ -1239,7 +1236,7 @@ inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 -- example, @inumNop' .| ('Done' () ('chunk' \"abcde\"))@ becomes
 -- @'Done' () ('chunk' \"\")@
 inumF :: (ChunkData t, Monad m) => Inum t t m a
-inumF iter@(IterF _)           = IterF dochunk
+inumF iter@(IterF _)           = iterF dochunk
     where dochunk (Chunk t True) = return $ feedI iter (chunk t)
           dochunk c              = inumF $ feedI iter c
 inumF (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
@@ -1271,7 +1268,7 @@ inumLazy inum iter | isIterActive iter = inum iter
 inumRepeat :: (ChunkData tIn, MonadIO m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
 inumRepeat inum iter = step $ inum iter
-    where step ii@(IterF _) = IterF $ \c@(Chunk t eof) ->
+    where step ii@(IterF _) = iterF $ \c@(Chunk t eof) ->
                               (if eof && null t then id else step) $ feedI ii c
           step ii | isIterActive ii = inumMC passCtl ii >>= step
                   | otherwise       = ii `inumBind` inumLazy (inumRepeat inum)

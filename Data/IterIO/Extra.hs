@@ -74,7 +74,7 @@ iterLoop = do
   -- enumerator waits on the inner MVar, while the iteratee uses the outer 
   -- MVar to avoid races when appending to the stored chunk.
   mv <- liftIO $ newEmptyMVar >>= newMVar
-  return (IterF $ iterf mv, enum mv)
+  return (iterF $ iterf mv, enum mv)
     where
       iterf mv c@(Chunk _ eof) = do
              liftIO $ withMVar mv $ \p ->
@@ -82,7 +82,7 @@ iterLoop = do
                     putMVar p $ case mp of
                                   Nothing -> c
                                   Just c' -> mappend c' c
-             if eof then Done () chunkEOF else IterF $ iterf mv
+             if eof then Done () chunkEOF else iterF $ iterf mv
 
       enum mv = let codec = do
                       p <- liftIO $ readMVar mv
@@ -97,14 +97,14 @@ iterLoop = do
 inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
 inumSplit iter1 = do
   mv <- liftIO $ newMVar $ iter1
-  IterF $ iterf mv
+  iterF $ iterf mv
     where
       iterf mv (Chunk t eof) = do
         rold <- liftIO $ takeMVar mv
         rnew <- inumMC passCtl $ feedI rold $ chunk t
         liftIO $ putMVar mv rnew
         case rnew of
-          IterF _ | not eof -> IterF $ iterf mv
+          IterF _ | not eof -> iterF $ iterf mv
           _                 -> return rnew
 
 {- fixIterPure allows MonadFix instances, which support
@@ -160,7 +160,7 @@ fixIterPure f = IterM $ mfix ff
     where
       ff ~(Done a _)  = check $ f a
       -- Warning: IterF case re-runs function, repeating side effects
-      check (IterF _) = return $ IterF $ \c ->
+      check (IterF _) = return $ iterF $ \c ->
                         fixIterPure $ \a -> feedI (f a) c
       check (IterM m) = m >>= check
       check iter      = return iter

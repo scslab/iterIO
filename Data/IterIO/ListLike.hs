@@ -79,47 +79,39 @@ sendI sendfn = do
     Nothing  -> return ()
 
 -- | Return the first element when the Iteratee data type is a list.
-headLI :: (Monad m) => Iter [a] m a
+headLI :: (Show a, Monad m) => Iter [a] m a
 headLI = IterF $ dohead
-    where
-      dohead (Chunk [] True)    = throwEOFI "headI"
-      dohead (Chunk [] _)       = headLI
-      dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
+    where dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
+          dohead _                  = throwEOFI "headLI"
 
 -- | Return 'Just' the first element when the Iteratee data type
 -- is a list, or 'Nothing' on EOF.
-safeHeadLI :: (Monad m) => Iter [a] m (Maybe a)
-safeHeadLI = IterF $ dohead
-    where
-      dohead c@(Chunk [] True)  = Done Nothing c
-      dohead (Chunk [] _)       = safeHeadLI
-      dohead (Chunk (a:as) eof) = Done (Just a) $ Chunk as eof
+safeHeadLI :: (Show a, Monad m) => Iter [a] m (Maybe a)
+safeHeadLI = iterF $ dohead
+    where dohead (Chunk (a:as) eof) = Done (Just a) $ Chunk as eof
+          dohead _                  = Done Nothing chunkEOF
 
 
 -- | Like 'headLI', but works for any 'LL.ListLike' data type.
 headI :: (ChunkData t, LL.ListLike t e, Monad m) =>
          Iter t m e
 headI = do
-  c <- chunkI
-  case c of
-    Chunk t False | null t -> headI
-    Chunk t True  | null t -> throwEOFI "headLikeI"
-    Chunk t eof            -> Done (LL.head t) $ Chunk (LL.tail t) eof
+  (Chunk t eof) <- chunkI
+  if null t then throwEOFI "headI"
+            else Done (LL.head t) $ Chunk (LL.tail t) eof
 
 -- | Like 'safeHeadLI', but works for any 'LL.ListLike' data type.
 safeHeadI :: (ChunkData t, LL.ListLike t e, Monad m) =>
              Iter t m (Maybe e)
 safeHeadI = do
-  c <- chunkI
-  case c of
-    Chunk t False | null t -> safeHeadI
-    Chunk t True  | null t -> Done Nothing $ Chunk t True
-    Chunk t eof            -> Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
+  (Chunk t eof) <- chunkI
+  if null t then return Nothing
+            else Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
 
 -- | Like 'lineI', but returns 'Nothing' on EOF.
-safeLineI :: (Monad m, LL.ListLike t e, Eq t, Enum e, Eq e) =>
+safeLineI :: (ChunkData t, Monad m, LL.ListLike t e, Eq t, Enum e, Eq e) =>
              Iter t m (Maybe t)
-safeLineI = IterF $ doline LL.empty
+safeLineI = iterF $ doline LL.empty
     where
       cr = LL.singleton $ echr '\r'
       nl = LL.singleton $ echr '\n'
@@ -132,7 +124,7 @@ safeLineI = IterF $ doline LL.empty
           in case result of
                Just (l', r') -> Done (Just l') (Chunk r' eof)
                Nothing | eof -> Done Nothing (Chunk acc' True)
-               _             -> IterF $ doline acc'
+               _             -> iterF $ doline acc'
       dolr eof l r
           | LL.isPrefixOf nl r = Just (l, LL.drop (LL.length nl) r)
           | LL.isPrefixOf crnl r = Just (l, LL.drop (LL.length crnl) r)
