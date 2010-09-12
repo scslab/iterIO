@@ -1252,7 +1252,7 @@ inumF iter                     = return iter
 -- reject requests, 'passCtl' to pass them up to the @'Iter' tIn m@
 -- monad, or a custom 'CtlHandler' function.
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-          CtlHandler tIn m -> Inum tIn tOut m a
+          CtlHandler (Iter tIn m) -> Inum tIn tOut m a
 inumMC ch (IterM m) = IterM $ inumMC ch `liftM` m
 inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
                               \(CtlRes cres) -> inumMC ch $ fr $ cast cres
@@ -1320,7 +1320,7 @@ data CtlArg = forall carg cres. (CtlCmd carg cres) => CtlArg !carg
 data CtlRes = forall cres. (Typeable cres) => CtlRes cres
 
 -- | A control request handler maps control requests to 'Iter's.
-type CtlHandler t m = CtlArg -> (Iter t m CtlRes)
+type CtlHandler m = CtlArg -> (m CtlRes)
 
 -- | A control request handler that ignores the request argument and
 -- always fails immediately (thereby not passing the control request
@@ -1339,13 +1339,13 @@ type CtlHandler t m = CtlArg -> (Iter t m CtlRes)
 -- likely wreak havoc in the event of any seek requests, as the outer
 -- enumerator might seek around in the file, confusing the
 -- decompression codec.
-noCtl :: (ChunkData t, Monad m) => CtlHandler t m
+noCtl :: (Monad m) => CtlHandler m
 noCtl _ = return $ CtlRes CtlBad
 
 -- | A control request hander that simply passes control requests
 -- straight through from the @'Iter' tOut m@ monad to the enclosing
 -- @'Iter' tIn m@ monad.
-passCtl :: (ChunkData t, Monad m) => CtlHandler t m
+passCtl :: (ChunkData t, Monad m) => CtlHandler (Iter t m)
 passCtl (CtlArg carg) = safeCtlI carg >>= return . maybe (CtlRes CtlBad) CtlRes
 
 -- | Construct a 'CtlHandler', from a function of a particular
@@ -1355,8 +1355,8 @@ passCtl (CtlArg carg) = safeCtlI carg >>= return . maybe (CtlRes CtlBad) CtlRes
 -- Has fixity:
 --
 -- > infixr 9 `consCtl`
-consCtl :: (CtlCmd carg cres, ChunkData t, Monad m) =>
-           (carg -> Iter t m cres) -> CtlHandler t m -> CtlHandler t m
+consCtl :: (CtlCmd carg cres, Monad m) =>
+           (carg -> m cres) -> CtlHandler m -> CtlHandler m
 consCtl fn fallback arg@(CtlArg carg) =
     maybe (fallback arg) (fn >=> return . CtlRes) (cast carg)
 infixr 9 `consCtl`

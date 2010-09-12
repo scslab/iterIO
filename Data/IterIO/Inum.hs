@@ -62,7 +62,7 @@ iterToCodec iter = let codec = CodecF codec `liftM` iter in codec
 -- 'Inum' fails, code handling that failure will have to send an EOF
 -- or the codec will not be able to clean up.
 mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
-           CtlHandler tIn m
+           CtlHandler (Iter tIn m)
         -- ^ Control request handler
         -> Codec tIn m tOut
         -- ^ Codec to be invoked to produce transcoded chunks.
@@ -106,7 +106,7 @@ inumCBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
              -- ^ Before action
              -> (b -> Iter tIn m c)
              -- ^ After action, as a function of before action result
-             -> (b -> CtlHandler tIn m)
+             -> (b -> CtlHandler (Iter tIn m))
              -- ^ Control request handler, as funciton of before action result
              -> (b -> (Codec tIn m tOut))
              -- ^ Input 'Codec', as a funciton of before aciton result
@@ -216,7 +216,7 @@ instance (MonadIO m, IterStateTClass m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
 
 data InumState tIn tOut m a = InumState {
-      insCtl :: !(CtlHandler tIn m)
+      insCtl :: !(CtlHandler (Iter tIn m))
     , insIter :: !(Iter tOut m a)
     , insStopEOF :: Bool
     , insStopDone :: Bool
@@ -256,7 +256,7 @@ pipe inum = IterStateT $ \s -> do
 -- input with various 'Iter's, and using 'feed' and 'pipe' to send
 -- output.
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-           CtlHandler tIn m -> InumM tIn tOut m a b -> Inum tIn tOut m a
+           CtlHandler (Iter tIn m) -> InumM tIn tOut m a b -> Inum tIn tOut m a
 mkInumM ch inumm iter0 = do
    result <- runIterStateT inumm $ InumState ch iter0 True True
    case result of
