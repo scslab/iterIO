@@ -256,8 +256,9 @@ ipipe inum = IterStateT $ \s -> do
                let active = isIterActive iter
                if active || not (insStopDone s)
                  then return (s {insIter = iter }, active)
-                 else do c <- chunkI
-                         return (s {insIter = iter, insRemain = c }, False)
+                 else do c <- IterF $ \c -> return c
+                         InumFail (toException InumDone)
+                                  (s {insIter = iter, insRemain = c }, False)
 
 -- | Apply an 'Onum' to the 'Iter' from within the 'InumM' monad.
 irun :: (ChunkData tIn, ChunkData tOut, Monad m) =>
