@@ -11,9 +11,9 @@ module Data.IterIO.Inum
     , mkInumC, mkInum, mkInum'
     , inumCBracket, inumBracket
     -- * Enumerator construction monad
-    , IterStateT(..), runIterStateT
+    , IterStateT(..), runIterStateT, catchIterState, tryIterState
     , InumM, mkInumM, mkInumAutoM
-    , setCtlHandler, setAutoEOF, setAutoDone, addCleanup
+    , setCtlHandler, setAutoEOF, setAutoDone, addCleanup, withCleanup
     , ifeed, ifeed1, ipipe, irun, irepeat
     ) where
 
@@ -170,7 +170,7 @@ inumBracket before after codec iter0 =
 -- propagate the state.  Thus, it is possible to extract the state
 -- from an 'IterStateT' even after a failure of the underlying 'Iter'
 -- monad.
-newtype IterStateT s m a = IterStateT { unIterStateT :: (s -> m (s, a)) }
+newtype IterStateT s m a = IterStateT (s -> m (s, a))
 
 -- | Runs an 'IterStateT' monad on some input state.  Because of its
 -- special error handling feature, the 'IterStateT' 'Monad' can only be
@@ -220,6 +220,26 @@ instance MonadTrans (IterStateT s) where
 
 instance (MonadIO m, IterStateTClass m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
+
+-- | Catch an exception thrown in an @'IterStateT' s (Iter t m)@
+-- monad.
+catchIterState :: (ChunkData t, Monad m, Exception e) => 
+                  IterStateT s (Iter t m) a
+               -> (e -> IterStateT s (Iter t m) a)
+               -> IterStateT s (Iter t m) a
+catchIterState m handler = tryIterState m >>= either handler return
+
+-- | Try an 'IterStateT' action, returning @'Left' e@ if it throws an
+-- exception @e@.
+tryIterState :: (ChunkData t, Monad m, Exception e) => 
+                IterStateT s (Iter t m) a
+             -> IterStateT s (Iter t m) (Either e a)
+tryIterState m = IterStateT $ \s -> runIterStateT m s >>= check
+    where check (InumFail e (s, a)) =
+              case fromException e of
+                Just e' -> return (s, Left e')
+                Nothing -> InumFail e (s, Right a)
+          check iter = iter >>= \(s, a) -> return (s, Right a)
 
 -- | This should be the only declaration that requires
 -- FlexibleInstances, and only because mtl makes that necessary.
@@ -291,7 +311,21 @@ ncmodify fn = IterStateT $ \s ->
 -- | Add a cleanup action to be executed when the 'Inum' finishes.
 addCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -> InumM tIn tOut m a ()
-addCleanup action = ncmodify $ \s -> s { insCleanup = action >> insCleanup s }
+addCleanup clean = ncmodify $ \s -> s { insCleanup = clean >> insCleanup s }
+
+-- | Run an 'InumM' action with some cleanup function in effect.
+-- Resets the cleanup function after executing the action (which also
+-- undoes the effects of any 'addCleanup' calls within the action).
+withCleanup :: (ChunkData tIn, Monad m) =>
+              InumM tIn tOut m a ()
+           -> InumM tIn tOut m a b
+           -> InumM tIn tOut m a b
+withCleanup clean action = do
+  old <- gets insCleanup
+  ncmodify $ \s -> s { insCleanup = clean >> old }
+  b <- action
+  modify $ \s -> s { insCleanup = old }
+  return b
 
 -- | A variant of 'mkInumM' that sets the flags controlled by
 -- 'setAutoEOF' and 'setAutoDone' to @'True'@.
@@ -344,6 +378,12 @@ runInumM inumm state0 = do
           (if insAutoEOF s then tryErr e (convertEOF s) else id) $
           return iter
       convertFail iter = return iter
+
+{-
+ithrow :: (Exception e) => e -> InumM tIn tOut m a b
+ithrow e = IterStateT $ \s -> IterF $ \c ->
+           InumFail (toException e) (s { insRemain = c }, error "ithrow")
+-}
 
 -- | Used from within the 'InumM' monad to feed data to the 'Iter'
 -- being processed by that 'Inum'.  Returns @'False'@ if the 'Iter' is
