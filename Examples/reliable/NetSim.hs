@@ -115,7 +115,7 @@ excessive = mkInum $ doit [] Nothing
                     let ms = to `div` 2
                     return $ TOD (fromIntegral $ ms `div` 1000)
                                (fromIntegral $ (ms `mod` 1000 * 1000000))
-      dead = IterF $ const dead
+      dead = iterF $ const dead
       doit :: [L.ByteString] -> (Maybe ClockTime)
               -> Codec [L.ByteString] TM [L.ByteString]
       doit pkts' mtime = do

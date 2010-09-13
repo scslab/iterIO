@@ -13,8 +13,8 @@ module Data.IterIO.Inum
     -- * Enumerator construction monad
     , IterStateT(..), runIterStateT
     , InumM, mkInumM
-    , setCtlHandler, setAutoEOF, setAutoDone
-    , ifeed, ipipe, irun
+    , setCtlHandler, setAutoEOF, setAutoDone, addCleanup
+    , ifeed, ipipe, irun, irepeat
     ) where
 
 import Control.Exception (ErrorCall(..), Exception(..))
@@ -228,11 +228,13 @@ instance (IterStateTClass m) => MonadState s (IterStateT s m) where
 
 
 data InumState tIn tOut m a = InumState {
-      insAutoEOF :: Bool
-    , insAutoDone :: Bool
+      insAutoEOF :: !Bool
+    , insAutoDone :: !Bool
     , insCtl :: !(CtlHandler (Iter tIn m))
     , insIter :: !(Iter tOut m a)
     , insRemain :: !(Chunk tIn)
+    , insCleanup :: !(InumM tIn tOut m a ())
+    , insCleaning :: !Bool
     }
 
 defaultInumState :: (ChunkData tIn, Monad m) => InumState tIn tOut m a
@@ -242,6 +244,8 @@ defaultInumState = InumState {
                    , insCtl = passCtl
                    , insIter = IterF $ const $ error "insIter"
                    , insRemain = mempty
+                   , insCleanup = return ()
+                   , insCleaning = False
                    }
 
 -- | A monad in which to define the actions of an @'Inum' tIn tOut m a@.
@@ -274,6 +278,11 @@ setAutoEOF val = modify $ \s -> s { insAutoEOF = val }
 setAutoDone :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
 setAutoDone val = modify $ \s -> s { insAutoEOF = val }
 
+-- | Add a cleanup action to be executed when the 'Inum' finishes.
+addCleanup :: (ChunkData tIn, Monad m) =>
+              InumM tIn tOut m a () -> InumM tIn tOut m a ()
+addCleanup action = modify $ \s -> s { insCleanup = action >> insCleanup s }
+
 -- | Build an 'Inum' out of an 'InumM' computation.  The 'InumM'
 -- computation can use 'lift' to execute 'Iter' monads and process
 -- input of type 'tIn'.  It must then feed output of type 'tOut' to an
@@ -281,7 +290,8 @@ setAutoDone val = modify $ \s -> s { insAutoEOF = val }
 -- using the 'ifeed', 'ipipe', and 'irun' functions.
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
            InumM tIn tOut m a b -> Inum tIn tOut m a
-mkInumM inumm = runInumM inumm defaultInumState
+mkInumM inumm iter0 =
+    runInumM inumm defaultInumState { insIter = iter0 }
 
 -- | Convert an 'InumM' computation into an 'Inum', given some
 -- 'InumState' to run on.
@@ -290,20 +300,30 @@ runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          -- ^ Monadic computation defining the 'Inum'.
          -> InumState tIn tOut m a
          -- ^ State to run on
-         -> Inum tIn tOut m a
-runInumM inumm state0 iter0 = do
-  let state = state0 { insIter = iter0 }
-  result <- runIterStateT inumm state
-  case result of
-    Done (s, _) _     -> return $ insIter s
-    InumFail e (s, _) ->
-        case fromException e of
-          Just InumDone -> Done (insIter s) (insRemain s)
-          Nothing       ->
-              case fromException e of
-                Just (IterEOF _) | insAutoEOF s -> return $ insIter s
-                _                               -> InumFail e $ insIter s
-    _                 -> error "runInumM" -- Shouldn't happen
+         -> InumR tIn tOut m a
+runInumM inumm state0 = do
+  result1 <- runIterStateT inumm state0 >>= convertFail
+  let state1 = (getState result1) { insAutoDone = False, insCleaning = True }
+  result2 <- runIterStateT (insCleanup state1) state1 >>= convertFail
+  let iter = insIter $ getState result2
+  case (result1, result2) of
+    (InumFail e _, _) -> InumFail e iter
+    (_, InumFail e _) -> InumFail e iter
+    _                 -> return iter
+    where
+      getState (Done (s, _) _)     = s
+      getState (InumFail _ (s, _)) = s
+      getState _                   = error "runInumM getState"
+
+      tryErr e fnjust nothing = maybe nothing fnjust $ fromException e
+      convertDone s InumDone = inumF $
+          Done (s {insRemain = mempty}, error "convertDone") (insRemain s)
+      convertEOF s (IterEOF _) = return $ return (s, error "convertEOF")
+      convertFail iter@(InumFail e (s, _)) =
+          tryErr e (convertDone s) $
+          (if insAutoEOF s then tryErr e (convertEOF s) else id) $
+          return iter
+      convertFail iter = return iter
 
 -- | Used from within the 'InumM' monad to feed data to the 'Iter'
 -- being processed by that 'Inum'.  Returns @'False'@ if the 'Iter' is
@@ -335,3 +355,24 @@ irun :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Onum tOut m a -> InumM tIn tOut m a Bool
 irun onum = ipipe $ runI . onum
 
+-- | Repeats an action until the 'Iter' is done or an EOF error is
+-- thrown.  (Also stops if a different kind of exception is thrown, in
+-- which case the exception is further propagates.)
+irepeat :: (ChunkData tIn, Monad m) =>
+           InumM tIn tOut m a b -> InumM tIn tOut m a ()
+irepeat action = do
+  setAutoEOF True
+  setAutoDone True
+  let loop = action >> loop in loop
+
+{-
+inumMBracket :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+                InumM tIn tOut m a b
+             -- ^ Before action
+             -> (b -> InumM tIn tOut m a c)
+             -- ^ After action
+             -> (b -> InumM tIn tOut m a d)
+             -- ^ Main action
+             -> Inum tIn tOut m a
+inumMBracket before after main iter0 = do
+-}

@@ -25,7 +25,6 @@ module Data.IterIO.ListLike
     )where
 
 import Prelude hiding (null)
-import Control.Exception (onException)
 import Control.Monad
 import Control.Monad.Trans
 -- import qualified Data.ByteString as S
@@ -272,14 +271,24 @@ enumHandle h iter = do
 enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
                  -> Onum t m a
+{-
+enumNonBinHandle h = mkInumM $ do
+  setCtlHandler (fileCtl h)
+  setAutoEOF True
+  setAutoDone True
+  loop
+    where loop = do buf <- liftIO (hWaitForInput h (-1) >>
+                                   LL.hGetNonBlocking h defaultChunkSize)
+                    if null buf then return () else ifeed buf >> loop
+-}
 enumNonBinHandle h = mkInumC (fileCtl h) codec
     where
       codec = do
         _ <- liftIO $ hWaitForInput h (-1)
         buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
         return $ if null buf then CodecE buf else CodecF codec buf
-      -- Note that hGet can block when there is some (but not enough) data
-      -- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
+-- Note that hGet can block when there is some (but not enough) data
+-- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
 
 -- | Enumerate the contents of a file as a series of lazy
 -- 'L.ByteString's.  (This is a type-restricted version of
@@ -291,16 +300,16 @@ enumFile' = enumFile
 -- any 'LL.ListLikeIO' type.  Note that the file is opened with
 -- 'openBinaryFile' to ensure binary mode.
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
-             FilePath
-          -> Onum t m a
-enumFile path = inumCBracket (liftIO $ openBinaryFile path ReadMode)
-                (liftIO . hClose) fileCtl codec
-    where
-      codec h = do
-        buf <- liftIO $ LL.hGet h defaultChunkSize
-        return $ if null buf
-          then CodecE buf
-          else CodecF (codec h) buf
+            FilePath -> Onum t m a
+enumFile path = mkInumM $ do
+                  h <- liftIO $ openBinaryFile path ReadMode
+                  addCleanup $ liftIO $ hClose h
+                  setCtlHandler $ fileCtl h
+                  setAutoEOF True
+                  setAutoDone True
+                  loop h
+    where loop h = do buf <- liftIO $ LL.hGet h defaultChunkSize
+                      if null buf then return () else ifeed buf >> loop h
 
 
 --
@@ -315,19 +324,16 @@ inumLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            FilePath             -- ^ Path to log to
         -> Bool                 -- ^ True to truncate file
         -> Inum t t m a
-inumLog path trunc iter = do
+inumLog path trunc = mkInumM $ do
   h <- liftIO $ openBinaryFile path (if trunc then WriteMode else AppendMode)
   liftIO $ hSetBuffering h NoBuffering
-  inumhLog h iter
+  addCleanup (liftIO $ hClose h)
+  ipipe $ inumhLog h
 
 -- | Like 'inumLog', but takes a writeable file handle rather than a
--- file name.  Closes the handle when done.
+-- file name.  Does not close the handle when done.
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle -> Inum t t m a
-inumhLog h = mkInumM logit
-    where
-      logit = do
-        Chunk buf eof <- lift chunkI
-        unless (null buf) $ liftIO $ LL.hPutStr h buf `onException` hClose h
-        done <- ifeed buf
-        if eof || done then liftIO $ hClose h else logit
+inumhLog h = mkInumM $ irepeat $ do buf <- lift dataI
+                                    liftIO $ LL.hPutStr h buf
+                                    ifeed buf

@@ -167,7 +167,7 @@ enumAccept sock mv iter = do
   enumHandle h iter
 
 iterMVH :: (MonadIO m) => MVar Handle -> Iter L.ByteString m ()
-iterMVH mvh = IterF $ \c -> do h <- liftIO $ readMVar mvh
+iterMVH mvh = iterF $ \c -> do h <- liftIO $ readMVar mvh
                                feedI (handleI h) c
 
 spawnOrConnect :: TM (Target a b)
