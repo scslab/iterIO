@@ -323,13 +323,11 @@ inumLog path trunc iter = do
 -- | Like 'inumLog', but takes a writeable file handle rather than a
 -- file name.  Closes the handle when done.
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
-            Handle
-         -> Inum t t m a
-inumhLog h = mkInum logit
+            Handle -> Inum t t m a
+inumhLog h = mkInumM logit
     where
       logit = do
-        Chunk buf eof <- chunkI
-        liftIO $ unless (null buf) $ LL.hPutStr h buf `onException` hClose h
-        if eof
-          then (liftIO $ hClose h) >> return (CodecE buf)
-          else return (CodecF logit buf)
+        Chunk buf eof <- lift chunkI
+        unless (null buf) $ liftIO $ LL.hPutStr h buf `onException` hClose h
+        done <- ifeed buf
+        if eof || done then liftIO $ hClose h else logit

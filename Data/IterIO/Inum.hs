@@ -240,7 +240,7 @@ defaultInumState = InumState {
                      insAutoEOF = False
                    , insAutoDone = False
                    , insCtl = passCtl
-                   , insIter = error "insIter"
+                   , insIter = IterF $ const $ error "insIter"
                    , insRemain = mempty
                    }
 
@@ -291,45 +291,46 @@ runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          -> InumState tIn tOut m a
          -- ^ State to run on
          -> Inum tIn tOut m a
-runInumM inumm state iter0 = do
-   result <- runIterStateT inumm state { insIter = iter0 }
-   case result of
-     Done (s, _) _     -> return $ insIter s
-     InumFail e (s, _) ->
-         case fromException e of
-           Just InumDone -> Done (insIter s) (insRemain s)
-           Nothing       ->
-               case fromException e of
-                 Just (IterEOF _) | insAutoEOF s -> return $ insIter s
-                 _                               -> InumFail e $ insIter s
-     _                 -> error "runInumM" -- Shouldn't happen
+runInumM inumm state0 iter0 = do
+  let state = state0 { insIter = iter0 }
+  result <- runIterStateT inumm state
+  case result of
+    Done (s, _) _     -> return $ insIter s
+    InumFail e (s, _) ->
+        case fromException e of
+          Just InumDone -> Done (insIter s) (insRemain s)
+          Nothing       ->
+              case fromException e of
+                Just (IterEOF _) | insAutoEOF s -> return $ insIter s
+                _                               -> InumFail e $ insIter s
+    _                 -> error "runInumM" -- Shouldn't happen
 
 -- | Used from within the 'InumM' monad to feed data to the 'Iter'
--- being processed by that 'Inum'.  Returns @'True'@ if the 'Iter' is
--- still active and @'False'@ if the iter has finished and the 'Inum'
--- should finish.  (If the @autoDone@ flag is @'True'@, then @ifeed@,
--- @ipipe@, and @irun@ will never actually return @'False'@, but
--- instead just exit the 'Inum'.)
+-- being processed by that 'Inum'.  Returns @'False'@ if the 'Iter' is
+-- still active and @'True'@ if the iter has finished and the 'Inum'
+-- should also return.  (If the @autoDone@ flag is @'True'@, then
+-- @ifeed@, @ipipe@, and @irun@ will never actually return @'True'@,
+-- but instead just exit the 'Inum' immediately.)
 ifeed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          tOut -> InumM tIn tOut m a Bool
 ifeed = ipipe . inumPure
 
 -- | Apply another 'Inum' to the target 'Iter' from within the 'InumM'
--- monad.  As with 'ifeed', returns @'True'@ when the 'Iter' is still
--- active.
+-- monad.  As with 'ifeed', returns @'True'@ when the 'Iter' is
+-- finished.
 ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
 ipipe inum = IterStateT $ \s -> do
                iter <- inumMC (insCtl s) |. inum $ insIter s
-               let active = isIterActive iter
-               if active || not (insAutoDone s)
-                 then return (s {insIter = iter }, active)
-                 else do c <- IterF $ \c -> return c
+               let done = not $ isIterActive iter
+               if done && insAutoDone s
+                 then do c <- IterF $ \c -> return c
                          InumFail (toException InumDone)
-                                  (s {insIter = iter, insRemain = c }, False)
+                                  (s {insIter = iter, insRemain = c }, True)
+                 else return (s {insIter = iter }, done)
 
 -- | Apply an 'Onum' to the 'Iter' from within the 'InumM' monad.  As
--- with 'ifeed', returns @'True'@ when the 'Iter' is still active.
+-- with 'ifeed', returns @'True'@ when the 'Iter' is finished.
 irun :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Onum tOut m a -> InumM tIn tOut m a Bool
 irun onum = ipipe $ runI . onum
