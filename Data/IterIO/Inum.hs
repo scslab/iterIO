@@ -276,7 +276,7 @@ setAutoEOF val = modify $ \s -> s { insAutoEOF = val }
 -- 'ifeed', 'ipipe', and 'irun' functions to ensure the 'Inum'
 -- terminates when one of these functions returns @'False'@.
 setAutoDone :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
-setAutoDone val = modify $ \s -> s { insAutoEOF = val }
+setAutoDone val = modify $ \s -> s { insAutoDone = val }
 
 -- | Add a cleanup action to be executed when the 'Inum' finishes.
 addCleanup :: (ChunkData tIn, Monad m) =>
