@@ -16,18 +16,17 @@ module Data.IterIO.ListLike
     , SeekMode(..)
     , SizeC(..), SeekC(..), TellC(..)
     , fileCtl
-    -- * Outer enumerators
+    -- * Onums
     , enumDgram, enumDgramFrom
     , enumHandle, enumHandle', enumNonBinHandle
     , enumFile, enumFile'
-    -- * Inner enumerators
+    -- * Inums
     , inumLog, inumhLog
-    )where
+    ) where
 
 import Prelude hiding (null)
 import Control.Monad
 import Control.Monad.Trans
--- import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.Char
@@ -227,7 +226,7 @@ fileCtl h = (\(SeekC mode pos) -> liftIO (hSeek h mode pos))
             `consCtl` passCtl
 
 --
--- EnumOs
+-- Onums
 --
 
 -- | Read datagrams from a socket and feed a list of strings (one for
@@ -235,9 +234,9 @@ fileCtl h = (\(SeekC mode pos) -> liftIO (hSeek h mode pos))
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> Onum [t] m a
-enumDgram sock = mkInum' $ do
+enumDgram sock = mkInumM $ irepeat $ do
   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
-  if r < 0 then throwEOFI "enumDgram" else return [msg]
+  if r < 0 then lift $ throwEOFI "enumDgram" else ifeed [msg]
 
 
 -- | Read datagrams from a socket and feed a list of (Bytestring,
@@ -245,9 +244,9 @@ enumDgram sock = mkInum' $ do
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> Onum [(t, SockAddr)] m a
-enumDgramFrom sock = mkInum' $ do
+enumDgramFrom sock = mkInumM $ irepeat $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
-  if r < 0 then throwEOFI "enumDgramFrom" else return [(msg, addr)]
+  if r < 0 then lift $ throwEOFI "enumDgramFrom" else ifeed [(msg, addr)]
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.
@@ -271,10 +270,10 @@ enumHandle h iter = do
 enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
                  -> Onum t m a
-enumNonBinHandle h = mkInumAutoM $ do
+enumNonBinHandle h = mkInumM $ do
   setCtlHandler (fileCtl h)
   irepeat $ liftIO (hWaitForInput h (-1) >>
-                    LL.hGetNonBlocking h defaultChunkSize) >>= ifeed
+                    LL.hGetNonBlocking h defaultChunkSize) >>= ifeed1
 -- Note that hGet can block when there is some (but not enough) data
 -- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
 
@@ -289,15 +288,15 @@ enumFile' = enumFile
 -- 'openBinaryFile' to ensure binary mode.
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             FilePath -> Onum t m a
-enumFile path = mkInumAutoM $ do
+enumFile path = mkInumM $ do
   h <- liftIO $ openBinaryFile path ReadMode
   addCleanup $ liftIO $ hClose h
   setCtlHandler $ fileCtl h
-  irepeat $ liftIO (LL.hGet h defaultChunkSize) >>= ifeed
+  irepeat $ liftIO (LL.hGet h defaultChunkSize) >>= ifeed1
 
 
 --
--- EnumIs
+-- Inums
 --
 
 -- | This inner enumerator is like 'inumNop' in that it passes
