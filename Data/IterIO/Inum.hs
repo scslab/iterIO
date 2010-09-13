@@ -235,13 +235,12 @@ data InumState tIn tOut m a = InumState {
     , insRemain :: !(Chunk tIn)
     }
 
-defaultInumState :: (ChunkData tIn, Monad m) =>
-                    Iter tOut m a -> InumState tIn tOut m a
-defaultInumState iter = InumState {
+defaultInumState :: (ChunkData tIn, Monad m) => InumState tIn tOut m a
+defaultInumState = InumState {
                      insAutoEOF = False
                    , insAutoDone = False
                    , insCtl = passCtl
-                   , insIter = iter
+                   , insIter = error "insIter"
                    , insRemain = mempty
                    }
 
@@ -275,15 +274,25 @@ setAutoEOF val = modify $ \s -> s { insAutoEOF = val }
 setAutoDone :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
 setAutoDone val = modify $ \s -> s { insAutoEOF = val }
 
--- | Build an 'Inum' in the 'InumM' monad, using 'lift' to consume
--- input with various 'Iter's, and using 'ifeed', 'ipipe', and 'irun'
--- to send output.
+-- | Build an 'Inum' out of an 'InumM' computation.  The 'InumM'
+-- computation can use 'lift' to execute 'Iter' monads and process
+-- input of type 'tIn'.  It must then feed output of type 'tOut' to an
+-- output 'Iter' (which is implicitly contained in the monad state),
+-- using the 'ifeed', 'ipipe', and 'irun' functions.
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-           InumM tIn tOut m a b
-        -- ^ Monadic computation defining the 'Inum'.
-        -> Inum tIn tOut m a
-mkInumM inumm iter0 = do
-   result <- runIterStateT inumm $ defaultInumState iter0
+           InumM tIn tOut m a b -> Inum tIn tOut m a
+mkInumM inumm = runInumM inumm defaultInumState
+
+-- | Convert an 'InumM' computation into an 'Inum', given some
+-- 'InumState' to run on.
+runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+            InumM tIn tOut m a b
+         -- ^ Monadic computation defining the 'Inum'.
+         -> InumState tIn tOut m a
+         -- ^ State to run on
+         -> Inum tIn tOut m a
+runInumM inumm state iter0 = do
+   result <- runIterStateT inumm state { insIter = iter0 }
    case result of
      Done (s, _) _     -> return $ insIter s
      InumFail e (s, _) ->
@@ -293,7 +302,7 @@ mkInumM inumm iter0 = do
                case fromException e of
                  Just (IterEOF _) | insAutoEOF s -> return $ insIter s
                  _                               -> InumFail e $ insIter s
-     _                 -> error "mkInumM" -- Shouldn't happen
+     _                 -> error "runInumM" -- Shouldn't happen
 
 -- | Used from within the 'InumM' monad to feed data to the 'Iter'
 -- being processed by that 'Inum'.  Returns @'True'@ if the 'Iter' is
