@@ -12,7 +12,9 @@ module Data.IterIO.Inum
     , inumCBracket, inumBracket
     -- * Enumerator construction monad
     , IterStateT(..), runIterStateT
-    , InumM, mkInumM, ifeed, ipipe, irun
+    , InumM, mkInumM
+    , setCtlHandler, setAutoEOF, setAutoDone
+    , ifeed, ipipe, irun
     ) where
 
 import Control.Exception (ErrorCall(..), Exception(..))
@@ -233,39 +235,55 @@ data InumState tIn tOut m a = InumState {
     , insRemain :: !(Chunk tIn)
     }
 
+defaultInumState :: (ChunkData tIn, Monad m) =>
+                    Iter tOut m a -> InumState tIn tOut m a
+defaultInumState iter = InumState {
+                     insAutoEOF = False
+                   , insAutoDone = False
+                   , insCtl = passCtl
+                   , insIter = iter
+                   , insRemain = mempty
+                   }
+
 -- | A monad in which to define the actions of an @'Inum' tIn tOut m a@.
 type InumM tIn tOut m a = IterStateT (InumState tIn tOut m a) (Iter tIn m)
 
 data InumDone = InumDone deriving (Show, Typeable)
 instance Exception InumDone
 
+-- | Set the control handler an 'Inum' should use from within an
+-- 'InumM' computation.  (The default is 'passCtl'.)
+setCtlHandler :: (ChunkData tIn, Monad m) =>
+                  CtlHandler (Iter tIn m) -> InumM tIn tOut m a ()
+setCtlHandler ch = modify $ \s -> s { insCtl = ch }
+
+-- | Set the \"Auto EOF\" flag within an 'InumM' computation.  If this
+-- flag is 'True', handle 'IterEOF' exceptions like a normal but
+-- immediate termination of the 'Inum'.  If this flag is @'False'@
+-- (the default), then 'IterEOF' exceptions must be manually caught or
+-- they will terminate the thread.
+setAutoEOF :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
+setAutoEOF val = modify $ \s -> s { insAutoEOF = val }
+
+-- | Set the \"Auto Done\" flag within an 'InumM' computation.  When
+-- @'True'@, the 'Inum' will immediately terminate as soon as the
+-- 'Iter' it is feeding enters a non-active state (i.e., 'Done' or a
+-- failure state).  If this flag is @'False'@ (the default), the
+-- 'InumM' computation will need to monitor the results of the
+-- 'ifeed', 'ipipe', and 'irun' functions to ensure the 'Inum'
+-- terminates when one of these functions returns @'False'@.
+setAutoDone :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
+setAutoDone val = modify $ \s -> s { insAutoEOF = val }
+
 -- | Build an 'Inum' in the 'InumM' monad, using 'lift' to consume
 -- input with various 'Iter's, and using 'ifeed', 'ipipe', and 'irun'
 -- to send output.
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-           Bool
-        -- ^ @autoEOF@ flag.  If 'True', handle 'IterEOF' exceptions
-        -- like a normal but immediate termination of the 'Inum'.  If
-        -- this flag is false, 'IterEOF' exceptions must be manually
-        -- caught or they will terminate the thread.
-        -> Bool
-        -- ^ @autoDone@ flag.  If 'True', automatically terminate the
-        -- 'Inum' as soon as the 'Iter' enters a non-active state.  If
-        -- this flag is false, you will need to monitor the results of
-        -- the 'ifeed', 'ipipe', and 'irun' functions and manually
-        -- return from the 'Inum' when these results are @'False'@.
-        -> CtlHandler (Iter tIn m)
-        -- ^ Control handler function.
-        -> InumM tIn tOut m a b
+           InumM tIn tOut m a b
         -- ^ Monadic computation defining the 'Inum'.
         -> Inum tIn tOut m a
-mkInumM autoEOF autoDone ch inumm iter0 = do
-   result <- runIterStateT inumm $
-             InumState { insAutoEOF = autoEOF
-                       , insAutoDone = autoDone
-                       , insCtl = ch
-                       , insIter = iter0
-                       , insRemain = mempty }
+mkInumM inumm iter0 = do
+   result <- runIterStateT inumm $ defaultInumState iter0
    case result of
      Done (s, _) _     -> return $ insIter s
      InumFail e (s, _) ->
