@@ -241,7 +241,7 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
 -- this and using 'IterF' directly is that @iterF@ returns immediately
 -- upon receiving a 'null' chunk.  If you use 'IterF' and do things
 -- like invoke 'liftIO' in a tail-recursive 'Iter', you can easily
--- cause an infinite loop with 'IterF', which @iterF' prevents.
+-- cause an infinite loop with 'IterF', which @iterF@ prevents.
 iterF :: (ChunkData t) => (Chunk t -> Iter t m a) -> Iter t m a
 iterF f = iter
     where iter = IterF $ \c -> if null c then iter else f c
