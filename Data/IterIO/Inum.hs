@@ -12,11 +12,12 @@ module Data.IterIO.Inum
     , inumCBracket, inumBracket
     -- * Enumerator construction monad
     , IterStateT(..), runIterStateT
-    , InumM, mkInumM
-    , setCtlHandler, setAutoEOF, setAutoDone, addCleanup
+    , InumM, mkInumM, mkInumAutoM
+    , setCtlHandler, setAutoEOF, setAutoDone, setFeedNullEOF, addCleanup
     , ifeed, ipipe, irun, irepeat
     ) where
 
+import Prelude hiding (null)
 import Control.Exception (ErrorCall(..), Exception(..))
 import Control.Monad
 import Control.Monad.State.Class
@@ -169,7 +170,7 @@ inumBracket before after codec iter0 =
 -- propagate the state.  Thus, it is possible to extract the state
 -- from an 'IterStateT' even after a failure of the underlying 'Iter'
 -- monad.
-newtype IterStateT s m a = IterStateT (s -> m (s, a))
+newtype IterStateT s m a = IterStateT { unIterStateT :: (s -> m (s, a)) }
 
 -- | Runs an 'IterStateT' monad on some input state.  Because of its
 -- special error handling feature, the 'IterStateT' 'Monad' can only be
@@ -230,6 +231,7 @@ instance (IterStateTClass m) => MonadState s (IterStateT s m) where
 data InumState tIn tOut m a = InumState {
       insAutoEOF :: !Bool
     , insAutoDone :: !Bool
+    , insFeedNullEOF :: !Bool
     , insCtl :: !(CtlHandler (Iter tIn m))
     , insIter :: !(Iter tOut m a)
     , insRemain :: !(Chunk tIn)
@@ -241,6 +243,7 @@ defaultInumState :: (ChunkData tIn, Monad m) => InumState tIn tOut m a
 defaultInumState = InumState {
                      insAutoEOF = False
                    , insAutoDone = False
+                   , insFeedNullEOF = False
                    , insCtl = passCtl
                    , insIter = IterF $ const $ error "insIter"
                    , insRemain = mempty
@@ -278,10 +281,27 @@ setAutoEOF val = modify $ \s -> s { insAutoEOF = val }
 setAutoDone :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
 setAutoDone val = modify $ \s -> s { insAutoDone = val }
 
+-- | Set the \"Feed null EOF\" flag.  When @'True'@, calling 'ifeed'
+-- with 'null' data raises an exception of class 'IterEOF'.
+setFeedNullEOF :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
+setFeedNullEOF val = modify $ \s -> s { insFeedNullEOF = val }
+
 -- | Add a cleanup action to be executed when the 'Inum' finishes.
 addCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -> InumM tIn tOut m a ()
 addCleanup action = modify $ \s -> s { insCleanup = action >> insCleanup s }
+
+-- | A variant of 'mkInumM' that sets the flags controlled by
+-- 'setAutoEOF', 'setAutoDone', and 'setFeedNullEOF' to @'True'@ by
+-- default.
+mkInumAutoM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+               InumM tIn tOut m a b -> Inum tIn tOut m a
+mkInumAutoM inumm iter0 =
+    runInumM inumm defaultInumState { insIter = iter0
+                                    , insAutoEOF = True
+                                    , insAutoDone = True
+                                    , insFeedNullEOF = True
+                                    }
 
 -- | Build an 'Inum' out of an 'InumM' computation.  The 'InumM'
 -- computation can use 'lift' to execute 'Iter' monads and process
@@ -333,7 +353,10 @@ runInumM inumm state0 = do
 -- but instead just exit the 'Inum' immediately.)
 ifeed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          tOut -> InumM tIn tOut m a Bool
-ifeed = ipipe . inumPure
+ifeed dat = IterStateT $ \s ->
+            if insFeedNullEOF s && null dat
+            then throwEOFI "ifeed: null"
+            else unIterStateT (ipipe $ inumPure dat) s
 
 -- | Apply another 'Inum' to the target 'Iter' from within the 'InumM'
 -- monad.  As with 'ifeed', returns @'True'@ when the 'Iter' is
@@ -357,22 +380,11 @@ irun onum = ipipe $ runI . onum
 
 -- | Repeats an action until the 'Iter' is done or an EOF error is
 -- thrown.  (Also stops if a different kind of exception is thrown, in
--- which case the exception is further propagates.)
+-- which case the exception is further propagates.)  @irepeat@ sets
+-- 'setAutoEOF' and 'setAutoDone' to @'True'@, but leaves
+-- 'setFeedNullEOF' as is.
 irepeat :: (ChunkData tIn, Monad m) =>
            InumM tIn tOut m a b -> InumM tIn tOut m a ()
 irepeat action = do
-  setAutoEOF True
-  setAutoDone True
+  modify $ \s -> s { insAutoEOF = True, insAutoDone = True }
   let loop = action >> loop in loop
-
-{-
-inumMBracket :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-                InumM tIn tOut m a b
-             -- ^ Before action
-             -> (b -> InumM tIn tOut m a c)
-             -- ^ After action
-             -> (b -> InumM tIn tOut m a d)
-             -- ^ Main action
-             -> Inum tIn tOut m a
-inumMBracket before after main iter0 = do
--}

@@ -271,22 +271,10 @@ enumHandle h iter = do
 enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
                  -> Onum t m a
-enumNonBinHandle h = mkInumM $ do
+enumNonBinHandle h = mkInumAutoM $ do
   setCtlHandler (fileCtl h)
-  setAutoEOF True
-  setAutoDone True
-  loop
-    where loop = do buf <- liftIO (hWaitForInput h (-1) >>
-                                   LL.hGetNonBlocking h defaultChunkSize)
-                    if null buf then return () else do ifeed buf >> loop
-{-
-enumNonBinHandle h = mkInumC (fileCtl h) codec
-    where
-      codec = do
-        _ <- liftIO $ hWaitForInput h (-1)
-        buf <- liftIO $ LL.hGetNonBlocking h defaultChunkSize
-        return $ if null buf then CodecE buf else CodecF codec buf
--}
+  irepeat $ liftIO (hWaitForInput h (-1) >>
+                    LL.hGetNonBlocking h defaultChunkSize) >>= ifeed
 -- Note that hGet can block when there is some (but not enough) data
 -- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
 
@@ -301,15 +289,11 @@ enumFile' = enumFile
 -- 'openBinaryFile' to ensure binary mode.
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             FilePath -> Onum t m a
-enumFile path = mkInumM $ do
-                  h <- liftIO $ openBinaryFile path ReadMode
-                  addCleanup $ liftIO $ hClose h
-                  setCtlHandler $ fileCtl h
-                  setAutoEOF True
-                  setAutoDone True
-                  loop h
-    where loop h = do buf <- liftIO $ LL.hGet h defaultChunkSize
-                      if null buf then return () else ifeed buf >> loop h
+enumFile path = mkInumAutoM $ do
+  h <- liftIO $ openBinaryFile path ReadMode
+  addCleanup $ liftIO $ hClose h
+  setCtlHandler $ fileCtl h
+  irepeat $ liftIO (LL.hGet h defaultChunkSize) >>= ifeed
 
 
 --

@@ -84,11 +84,19 @@ iterLoop = do
                                   Just c' -> mappend c' c
              if eof then Done () chunkEOF else iterF $ iterf mv
 
+      enum mv = mkInumM loop
+          where loop = do p <- liftIO $ readMVar mv
+                          Chunk t eof <- liftIO $ takeMVar p
+                          done <- ifeed t
+                          when (not $ eof || done) loop
+                  
+{-
       enum mv = let codec = do
                       p <- liftIO $ readMVar mv
                       Chunk c eof <- liftIO $ takeMVar p
                       return $ if eof then CodecE c else CodecF codec c
                 in mkInum codec
+-}
 
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
