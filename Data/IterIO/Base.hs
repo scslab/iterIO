@@ -294,7 +294,7 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
 instance (ChunkData t) => MonadTrans (Iter t) where
     lift m = IterM $ m >>= return . return
 
--- | The 'Iter' insance of 'MonadIO' handles errors specially.  If the
+-- | The 'Iter' instance of 'MonadIO' handles errors specially.  If the
 -- lifted operation throws an exception, 'liftIO' catches the
 -- exception and returns it as an 'IterFail' failure.  Moreover, an IO
 -- exception satisfying the 'isEOFError' predicate is re-wrapped in an
@@ -465,11 +465,11 @@ runI iter           = inumMC noCtl iter >>= runI
 -- executing IO with 'Iter's.  @|$@ is equivalent to:
 --
 -- @
---  inum |$ iter = 'run' ('enum' .| iter)
+--  inum |$ iter = 'run' (inum .| iter)
 --  infixr 2 |$
 -- @
 (|$) :: (ChunkData t, Monad m) => Onum t m a -> Iter t m a -> m a
-(|$) enum iter = run (enum .| iter)
+(|$) inum iter = run (inum .| iter)
 infixr 2 |$
 
 -- | @.|$@ is a variant of '|$' that allows you to apply an 'Onum'
@@ -1242,7 +1242,7 @@ inumPure :: (Monad m, ChunkData tIn, ChunkData tOut) =>
 inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 
 -- | An 'Inum' that passes data straight through to an 'Iter' in the
--- 'IterF' state and returns the 'Iter' as soon as it enteres any
+-- 'IterF' state and returns the 'Iter' as soon as it enters any
 -- state other than 'IterF'.
 --
 -- When the 'Iter' returns 'Done', @inumF@ pulls the residual data up
@@ -1285,7 +1285,7 @@ inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
                               \(CtlRes cres) -> inumMC ch $ fr $ cast cres
 inumMC _ iter = return iter
 
--- | Runs an 'Inum' only if the 'Iter' is still active.  Othrewise
+-- | Runs an 'Inum' only if the 'Iter' is still active.  Otherwise
 -- just returns the 'Iter'.  See an example at 'cat'.
 inumLazy :: (ChunkData tIn, Monad m) =>
             Inum tIn tOut m a -> Inum tIn tOut m a
