@@ -1261,7 +1261,7 @@ inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
 inumMC _ iter = return iter
 
 -- | Runs an 'Inum' only if the 'Iter' is still active.  Othrewise
--- just returns the 'Iter'.
+-- just returns the 'Iter'.  See an example at 'inumNop'.
 inumLazy :: (ChunkData tIn, Monad m) =>
             Inum tIn tOut m a -> Inum tIn tOut m a
 inumLazy inum iter | isIterActive iter = inum iter
@@ -1287,7 +1287,31 @@ inumRepeat inum = runinum
             if eof then return iter else runinum iter
           
 -- | The dummy 'Inum' which passes all data straight through to the
--- 'Iter'.
+-- 'Iter'.  Note that this is a \"Nop\" in the sense that if you fuse
+-- it to an iter with @inumNop '.|' iter@, you get a result
+-- indistinguishable from @iter@ on its own.  This is useful, for
+-- instance, when switching between various processing at runtime,
+-- with a construct such as:
+--
+-- > enum |. (if debug then inumLog "debug.log" else inumNop) |$ iter
+--
+-- Another type of \"Nop\" you might want is an 'Iter' that literally
+-- does nothing (not even pass through data) and immediately returns
+-- the 'Iter'.  This functionaly is already provided by the monadic
+-- 'return' function.  For example, if @files@ is a (possibly empty)
+-- list of files and you want to concatenate all of them, you can use
+-- a construct such as:
+--
+-- @
+--  catFiles :: ('MonadIO' m) => ['FilePath'] -> 'Onum' 'L.ByteString' m a
+--  catFiles files = 'foldr' ('cat' . 'inumLazy' . 'enumFile') 'return' files
+-- @
+--
+-- Note the use of 'return' as the starting value for 'foldr'.
+-- ('inumNop', because it is not an 'Onum', doesn't even have the
+-- right type to be used here.)  Also note the use of 'inumLazy' as an
+-- optimization to avoid processing files once the 'Iter' has
+-- finished.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = inumRepeat (inumMC passCtl `cat` inumF)
 
