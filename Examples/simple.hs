@@ -58,7 +58,7 @@ lineCountI = count 0
 inumGrep' :: (MonadIO m) => String -> Inum L.ByteString L.ByteString m a
 inumGrep' re iter = do
   Right cre <- liftIO $ compile 0 0 $ S8.pack re
-  flip mkInum' iter $ do
+  flip mkInum iter $ do
     line <- lineI
     Right amatch <- liftIO $ execute cre (S.concat $ L.toChunks line)
     return $ if isJust amatch
@@ -93,12 +93,12 @@ grep re files
           Nothing -> return ()
 
 inumToLines :: (Monad m) => Inum S.ByteString [S.ByteString] m a
-inumToLines = mkInum' $ do
+inumToLines = mkInum $ do
                 line <- lineI
                 return [line]
 
 inumGrep :: (Monad m) => String -> Inum [S.ByteString] [S.ByteString] m a
-inumGrep re = mkInum' $ do
+inumGrep re = mkInum $ do
   line <- headI
   return $ if line =~ packedRe then [line] else []
     where

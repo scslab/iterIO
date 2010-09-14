@@ -654,14 +654,16 @@ tryI = finishI >=> errToEither
 
 -- | Run an 'Iter'.  Catch any exception it throws, or feed the result
 -- to a continuation.
-catchOrI :: (ChunkData t, Monad m) =>
+catchOrI :: (ChunkData t, Monad m, Exception e) =>
             Iter t m a
-         -> (SomeException -> Iter t m b) 
+         -> (e -> Iter t m b) 
          -> (a -> Iter t m b)
          -> (Iter t m b)
 catchOrI iter handler cont = finishI iter >>= check
     where check (Done a _) = cont a
-          check err        = handler $ getIterError err
+          check err        = case fromException $ getIterError err of
+                               Just e -> handler e
+                               Nothing -> err >>= cont
 
 -- | Runs an 'Iter' until it no longer requests input, keeping a copy
 -- of all input that was fed to it (which might be longer than the
@@ -1268,7 +1270,7 @@ inumLazy inum iter | isIterActive iter = inum iter
 -- | Repeat an 'Inum' until an end of file is received, the 'Inum'
 -- fails, or the 'Iter' terminates.  Runs the 'Inum' at least once
 -- even if the 'Iter' is no longer active.
-inumRepeat :: (ChunkData tIn, MonadIO m,      ChunkData tOut) =>
+inumRepeat :: (ChunkData tIn, Monad m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
 inumRepeat inum = runinum
     where runinum = inum `cat` inumLazy again
@@ -1278,9 +1280,8 @@ inumRepeat inum = runinum
           
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
-inumNop :: (ChunkData t, MonadIO m) => Inum t t m a
+inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = inumRepeat (inumMC passCtl `cat` inumF)
-
 
 --
 -- Support for control operations

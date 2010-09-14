@@ -6,6 +6,7 @@ module Data.IterIO.Http (HttpReq(..)
                         , comment, qvalue
                         ) where
 
+import Control.Monad.Trans
 import Data.Array.Unboxed
 import Data.Bits
 import qualified Data.ByteString as S
@@ -390,9 +391,7 @@ httpreqI = do
 
 -- | HTTP Chunk encoder
 inumToChunks :: (Monad m) => Inum L L m a
-inumToChunks = mkInum $ iterToCodec doChunk
-    where
-      doChunk = do
+inumToChunks = mkInum $ do
         Chunk s eof <- chunkI
         let len       = L8.length s
             chunksize = L8.pack $ printf "%x\r\n" len
@@ -403,28 +402,25 @@ inumToChunks = mkInum $ iterToCodec doChunk
 
 -- | HTTP Chunk decoder
 inumFromChunks :: (Monad m) => Inum L L m a
-inumFromChunks = mkInum getsize
+inumFromChunks = mkInumM $ getsize
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
       chunk_ext_val = do char '"'; osp; token <|> quoted_string; osp
       chunk_ext = do char ';'; osp; token; osp; optional chunk_ext_val
 
       getsize = do
-        size <- hexInt
-        osp
-        skipMany chunk_ext
-        crlf
+        size <- lift $ hexInt <* (osp >> skipMany chunk_ext >> crlf)
         if size > 0 then getdata size else gettrailer
 
       getdata n = do
-        s <- stringMaxI n
+        s <- lift $ stringMaxI n
         let n' = n - fromIntegral (L8.length s)
-        return $ CodecF (if n' > 0 then getdata n' else crlf >> getsize) s
+        _ <- ifeed s
+        if n' > 0 then getdata n' else lift crlf >> getsize
 
-      gettrailer = do
+      gettrailer = lift $ do
         skipMany (noctl >> crlf)
         skipI crlf
-        return $ CodecE L8.empty
 
 {-
 postReq :: L

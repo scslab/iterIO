@@ -38,10 +38,10 @@ page pageTitle contents =
              ]
       
 req2Html :: (MonadIO m) => Inum L [Html] m a
-req2Html = mkInum $ do
-  req <- httpreqI
+req2Html = mkInumM $ do
+  req <- lift httpreqI
   liftIO $ when (reqPath req == S8.pack "/slow") $ threadDelay $ 5 * 1000 * 1000
-  return $ CodecE [page "Request" $ req2Html' req]
+  ifeed [page "Request" $ req2Html' req]
 
 req2Html' :: HttpReq -> Html
 req2Html' r = paragraph << (query +++ headers +++ cookies +++ contents)
@@ -69,7 +69,7 @@ req2Html' r = paragraph << (query +++ headers +++ cookies +++ contents)
                  else ulist << (map ((li <<) . def2Html) dd)
 
 html2L :: (Monad m) => Inum [Html] L m a
-html2L = mkInum' $ do
+html2L = mkInum $ do
   h <- headLI
   return $ L.append (headersL xhtmlHeaders)
                     (U.fromString $ showHtml h)

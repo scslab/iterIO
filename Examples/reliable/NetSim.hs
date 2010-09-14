@@ -13,7 +13,7 @@ import System.Time
 import TM
 import Arc4
 import Data.IterIO
-import Data.IterIO.Extra
+-- import Data.IterIO.Extra
 
 type NetSim a = Inum [L.ByteString] [L.ByteString] TM a
 type NetSimM = Iter [L.ByteString] TM
@@ -35,29 +35,28 @@ rndIntI bound = do
 
 
 dropper :: Float -> NetSim a
-dropper dropProb = mkInum' $ do
+dropper dropProb = mkInum $ do
   packet <- headI
   dropit <- rndBoolI dropProb
   return $ if dropit then [] else [packet]
 
 reorderer :: Float -> NetSim a
-reorderer prob = mkInum $ headI >>= oldOrNew
+reorderer prob = mkInumAutoM $ lift headLI >>= oldOrNew
   where
     oldOrNew old = do
-      new <- headI
-      b <- rndBoolI prob
-      return $ if b
-               then CodecF (oldOrNew new) [old]
-               else CodecF (oldOrNew old) [new]
+      new <- lift headLI
+      b <- lift $ rndBoolI prob
+      if b then ifeed [old] >> oldOrNew new
+           else ifeed [new] >> oldOrNew old
 
 duplicater :: Float -> NetSim a
-duplicater dupProb = mkInum' $ do
+duplicater dupProb = mkInum $ do
   packet <- headI
   dupit <- rndBoolI dupProb
   return $ (packet:if dupit then [packet] else [])
 
 badlength :: Float -> NetSim a
-badlength prob = mkInum' $ do
+badlength prob = mkInum $ do
   pkt <- headI
   doit <- rndBoolI prob
   return [if doit then corrupt pkt else pkt]
@@ -67,7 +66,7 @@ badlength prob = mkInum' $ do
                                  (L.drop 1 pkt)
 
 garbage :: Float -> NetSim a
-garbage prob = mkInum' $ do
+garbage prob = mkInum $ do
   pkt <- headI
   doit <- rndBoolI prob
   if doit
@@ -77,7 +76,7 @@ garbage prob = mkInum' $ do
     else return [pkt]
 
 corrupter :: Float -> NetSim a
-corrupter prob = mkInum' $ do
+corrupter prob = mkInum $ do
   pkt <- headI
   doit <- rndBoolI prob
   pkt' <- (if doit then corrupt else return) pkt
@@ -93,7 +92,7 @@ corrupter prob = mkInum' $ do
                         return $ L.append a $ L.cons rb c
         
 truncater :: Float -> NetSim a
-truncater prob = mkInum' $ do
+truncater prob = mkInum $ do
   pkt <- headI
   doit <- rndBoolI prob
   return [if doit then L.init pkt else pkt]
@@ -109,17 +108,17 @@ leqtime (TOD as aps) (TOD bs bps) =
     as < bs || as == bs && aps <= bps
 
 excessive :: NetSim a
-excessive = mkInum $ doit [] Nothing
+excessive = mkInumM $ doit [] Nothing
     where
-      holdtime = do to <- lift $ asks tcTimeout
+      holdtime :: InumM [L.ByteString] [L.ByteString] TM a ClockTime
+      holdtime = do to <- lift $ lift $ asks tcTimeout
                     let ms = to `div` 2
                     return $ TOD (fromIntegral $ ms `div` 1000)
-                               (fromIntegral $ (ms `mod` 1000 * 1000000))
-      dead = iterF $ const dead
-      doit :: [L.ByteString] -> (Maybe ClockTime)
-              -> Codec [L.ByteString] TM [L.ByteString]
+                                 (fromIntegral $ (ms `mod` 1000 * 1000000))
+      -- doit :: [L.ByteString] -> (Maybe ClockTime)
+      --      -> InumM [L.ByteString] [L.ByteString] TM a ()
       doit pkts' mtime = do
-        pkt <- headI
+        pkt <- lift headLI
         let pkts = pkt:pkts'
         now <- liftIO getClockTime
         time <- case mtime of
@@ -127,8 +126,7 @@ excessive = mkInum $ doit [] Nothing
                   Nothing -> liftIO getClockTime
         ht <- holdtime
         if (now `subtime` time) `leqtime` ht
-          then return $ CodecF (doit pkts (Just time)) []
+          then doit pkts (Just time)
           else if length pkts > 6
-               then dead
-               else return $ CodecF (chunkerToCodec chunkI)
-                    (reverse pkts)
+               then lift nullI  -- Kill connection
+               else do ifeed (reverse pkts) >> ipipe inumNop >> return ()

@@ -6,8 +6,8 @@
 -- functionality that are missing from the standard Haskell libraries.
 module Data.IterIO.Extra
     ( -- * Miscellaneous
-      chunkerToCodec
-    , iterLoop
+      -- chunkerToCodec
+      iterLoop
     , inumSplit
     , fixIterPure
       -- * Functionality missing from system libraries
@@ -52,6 +52,7 @@ foreign import ccall unsafe "sys/socket.h shutdown"
 -- Deprecated
 --
 
+{-
 -- | Creates a 'Codec' from an 'Iter' that returns 'Chunk's.  The
 -- 'Codec' returned will keep offering to translate more input until
 -- The 'Iter' returns a 'Chunk' with the EOF bit set.
@@ -61,6 +62,7 @@ chunkerToCodec iter = do
   if eof
    then return $ CodecE d
    else return $ CodecF (chunkerToCodec iter) d
+-}
 
 -- | Create a loopback @('Iter', 'Onum')@ pair.  The iteratee and
 -- enumerator can be used in different threads.  Any data fed into the

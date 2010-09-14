@@ -70,7 +70,7 @@ pktshow (DataP ackno seqno payload) =
                     else L8.unpack payload)
 
 pktDebug :: (MonadIO m) => String -> Inum [L.ByteString] [L.ByteString] m a
-pktDebug prefix = mkInum' $ do
+pktDebug prefix = mkInum $ do
   raw <- headI
   case pktparse raw of
     Nothing  -> liftIO $ S8.hPut stderr
@@ -91,7 +91,7 @@ pktPut iter = safeHeadI >>= process
 -}
 
 pktPut :: (Monad m) => Inum [Packet] L.ByteString m a
-pktPut = mkInum' $ headI >>= process
+pktPut = mkInum $ headI >>= process
     where
       process (DataP _ _ payload)
           | L.null payload = throwEOFI "EOF"
@@ -275,22 +275,22 @@ expectI goal | L.null goal = return True
     else return False
 
 lE :: (Monad m) => Int -> Onum L.ByteString m a
-lE n0 = mkInum $ codec n0
+lE n0 = mkInumM $ codec n0
     where
       codec n
-          | n <= 0      = return $ CodecE L.empty
+          | n <= 0      = return ()
           | n < linelen = ret n (replicate (n-1) '.')
           | otherwise =
               let msg = show n ++ " more characters to go"
                   msgpad = msg ++ (replicate ((linelen - length msg) - 1) ' ')
               in ret n msgpad
       linelen = 47
-      ret n str = return $ (if n <= linelen then CodecE
-                               else CodecF (codec $ n - linelen))
-                          (L8.pack $ str ++ "\n")
+      ret n str = do done <- ifeed (L8.pack $ str ++ "\n")
+                     when (not done && n > linelen) $ codec $ n - linelen
+
 
 packE :: (Monad m) => Inum L.ByteString L.ByteString m a
-packE = mkInum' $ do
+packE = mkInum $ do
   packet' <- stringExactI $ fromIntegral L.defaultChunkSize
   let packet = L.fromChunks [S8.concat $ L.toChunks packet']
   return packet
@@ -306,15 +306,15 @@ nI n = do
     n'           -> nI n'
 
 a4E :: (Monad m) => String -> Int -> Onum L.ByteString m a
-a4E key len = mkInum $ enumChunks (a4new key) len
+a4E key len = mkInumM $ enumChunks (a4new key) len
     where
       enumChunks a4 n
-          | n <= 0    = return $ CodecE L.empty
+          | n <= 0    = return ()
           | otherwise =
               let chunklen = min n L.defaultChunkSize
                   (c, a4') = a4chunk a4 chunklen
-              in return $
-                 CodecF (enumChunks a4' (n - chunklen)) (L.fromChunks [c])
+              in do done <- ifeed (L.fromChunks [c])
+                    unless done $ enumChunks a4' (n - chunklen)
 
 a4I :: (MonadIO m) => String -> Int -> Iter L.ByteString m Bool
 a4I key len = iter (a4new key) len

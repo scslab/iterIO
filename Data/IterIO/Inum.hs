@@ -5,13 +5,11 @@
 -- | This module contains various functions used to construct 'Inum's.
 
 module Data.IterIO.Inum
-    (-- * Enumerator construction functions
-     Codec, CodecR(..)
-    , iterToCodec
-    , mkInumC, mkInum, mkInum'
-    , inumCBracket, inumBracket
-    -- * Enumerator construction monad
+    (-- * Simple Enumerator construction function
+     mkInum
+    -- * IterStateT monad
     , IterStateT(..), runIterStateT, catchIterState, tryIterState
+    -- * Enumerator construction monad
     , InumM, mkInumM, mkInumAutoM
     , setCtlHandler, setAutoEOF, setAutoDone, addCleanup, withCleanup
     , ifeed, ifeed1, ipipe, irun, irepeat
@@ -31,6 +29,7 @@ import Data.IterIO.Base
 -- Enumerator construction functions
 --
 
+{-
 -- | A @Codec@ is an 'Iter' that tranlates data from some input type
 -- @tIn@ to an output type @tOut@ and returns the result in a
 -- 'CodecR'.  If the @Codec@ is capable of repeatedly being invoked to
@@ -96,16 +95,32 @@ mkInum :: (Monad m, ChunkData tIn, ChunkData tOut) =>
        -- ^ Codec to be invoked to produce transcoded chunks.
        -> Inum tIn tOut m a
 mkInum = mkInumC passCtl
+-}
 
--- | A variant of 'mkInum' that transcodes data using a stateless
--- translation 'Iter' instead of a 'Codec'
-mkInum' :: (Monad m, ChunkData tIn, ChunkData tOut) =>
+-- | Construct an simple @'Inum' tIn tOut m a@ from a transcoder
+-- @'Iter tIn m tOut@.  The returned 'Inum' simply invokes the
+-- transcoder over and over again to get more data.  It finishes when
+-- the @'Iter' tOut m a@ being feed by the 'Inum' is no longer active
+-- or the trancoder @'Iter' tIn m tOut@ throws an exception of class
+-- 'IterEOF'.  If the transcoder throws any other kind of exception,
+-- the whole 'Inum' fails with an 'InumFail' error.
+--
+-- The 'Inum's created by this function are simple and stateless.  For
+-- a more powerful interface, see 'mkInumM' and the 'InumM' monad.
+mkInum :: (Monad m, ChunkData tIn, ChunkData tOut) =>
            Iter tIn m tOut
         -- ^ This Iteratee will be executed repeatedly to produce
         -- transcoded chunks.
         -> Inum tIn tOut m a
-mkInum' fn iter = mkInum (iterToCodec fn) iter
+mkInum fn = loop
+    where
+      loop = inumMC passCtl `cat` process
+      process iter@(IterF _) =
+          catchOrI fn (\(IterEOF _) -> return iter) $ loop . feedI iter . chunk
+      process iter = return iter
 
+
+{-
 -- | A variant of 'inumBracket' that also takes a 'CtlHandler' (as a
 -- function of the input).
 inumCBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
@@ -157,6 +172,7 @@ inumBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             -> Inum tIn tOut m a
 inumBracket before after codec iter0 =
     inumCBracket before after (const noCtl) codec iter0
+-}
 
 --
 -- Monad
@@ -407,13 +423,13 @@ ifeed1 dat = if null dat then lift $ throwEOFI "ifeed: null" else ifeed dat
 ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
 ipipe inum = IterStateT $ \s -> do
-               iter <- inumMC (insCtl s) |. inum $ insIter s
-               let done = not $ isIterActive iter
-               if done && insAutoDone s
-                 then do c <- IterF $ \c -> return c
-                         InumFail (toException InumDone)
-                                  (True, s {insIter = iter, insRemain = c })
-                 else return (done, s {insIter = iter })
+  iter <- inumRepeat (inumMC (insCtl s) `cat` inumF) |. inum $ insIter s
+  let done = not $ isIterActive iter
+  if done && insAutoDone s
+    then do c <- IterF $ \c -> return c
+            InumFail (toException InumDone)
+                     (True, s {insIter = iter, insRemain = c })
+    else return (done, s {insIter = iter })
 
 -- | Apply an 'Onum' to the 'Iter' from within the 'InumM' monad.  As
 -- with 'ifeed', returns @'True'@ when the 'Iter' is finished.
