@@ -1,6 +1,6 @@
 
 module Data.IterIO.Zlib (-- * Codec and Inum functions
-                         ZState, deflateInit2, inflateInit2, zCodec
+                         ZState, deflateInit2, inflateInit2
                         , inumZState, inumZlib, inumGzip, inumGunzip
                         -- * Constants from zlib.h
                         , max_wbits, max_mem_level, def_mem_level, zlib_version
@@ -20,7 +20,8 @@ import qualified Data.ByteString.Lazy.Internal as L
 import Foreign
 import Foreign.C
 
-import Data.IterIO
+import Data.IterIO.Base
+import Data.IterIO.Inum
 import Data.IterIO.ZlibInt
 
 -- | State used by 'inumZState', the most generic zlib 'Inum'.
@@ -204,6 +205,38 @@ zExec flush = do
                                            else liftIO $ peekCString cm
                                       liftIO $ throwIO $ ErrorCall m
     _ | otherwise               -> return r
+
+{-
+inumZState :: (MonadIO m) =>
+              ZState
+           -> Inum L.ByteString L.ByteString m a
+inumZState = mkInumM . start
+    where
+      start zs0 = do
+        xx <- lift $ peekI dataI
+        tidTrace $ "start xx is " ++ (show $ L.take 50 xx)
+        loop zs0
+      loop zs0 = do
+        (Chunk dat eof) <- lift chunkI
+        ((r, rest), zs) <- liftIO $ runStateT (runz eof dat) zs0
+        lift $ Done () (Chunk rest eof) -- XXX sketchy and doesn't work
+                                        -- missing iterF somewhere in Inum.hs?
+        tidTrace $ "rest is " ++ (show $ L.take 50 rest)
+        done <- ifeed $ zOut zs L.empty
+        xx <- lift $ peekI dataI
+        tidTrace $ "xx is " ++ (show $ L.take 50 xx)
+        unless (done || eof || r == z_STREAM_END) $ loop zs { zOut = id }
+
+      runz False L.Empty = return (z_OK, L.Empty)
+      runz eof s = do
+               s' <- zPushIn s
+               flush <- if eof && L.null s' then gets zFinish
+                                            else return z_NO_FLUSH
+               r <- zExec flush
+               if r == z_STREAM_END || L.null s'
+                 then (,) r `liftM` zPopIn s'
+                 else runz eof s'
+-}
 
 -- | A 'Codec' for compressing or uncompressing a stream of
 -- 'L.ByteString's with zlib.

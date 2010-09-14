@@ -518,7 +518,7 @@ infixr 2 .|$
 -- | Concatenate the outputs of two enumerators.  Has fixity:
 --
 -- > infixr 3 `cat`
-cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+cat :: (ChunkData tIn, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
@@ -1271,11 +1271,18 @@ inumLazy inum iter | isIterActive iter = inum iter
 inumRepeat :: (ChunkData tIn, MonadIO m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
 inumRepeat inum = runinum
+    where runinum = inum `cat` inumLazy again
+          again iter@(IterF _) = do eof <- atEOFI
+                                    if eof then return iter else runinum iter
+          again iter = runinum iter
+          
+{-
     where runinum iter = step (inum iter)
           step ii@(IterF _) = IterF $ \c@(Chunk t eof) ->
                               (if eof && null t then id else step) $ feedI ii c
           step ii | isIterActive ii = inumMC passCtl ii >>= step
                   | otherwise       = ii `inumBind` inumLazy runinum
+-}
       
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
