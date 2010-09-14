@@ -377,7 +377,7 @@ runInumM inumm state0 = do
           tryErr e (convertDone s) $
           (if insAutoEOF s then tryErr e (convertEOF s) else id) $
           return iter
-      convertFail iter = return iter
+      convertFail iter = inumF iter
 
 {-
 ithrow :: (Exception e) => e -> InumM tIn tOut m a b

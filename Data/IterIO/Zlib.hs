@@ -206,65 +206,27 @@ zExec flush = do
                                       liftIO $ throwIO $ ErrorCall m
     _ | otherwise               -> return r
 
-{-
+
 inumZState :: (MonadIO m) =>
               ZState
            -> Inum L.ByteString L.ByteString m a
-inumZState = mkInumM . start
+inumZState = mkInumM . loop
     where
-      start zs0 = do
-        xx <- lift $ peekI dataI
-        tidTrace $ "start xx is " ++ (show $ L.take 50 xx)
-        loop zs0
       loop zs0 = do
         (Chunk dat eof) <- lift chunkI
-        ((r, rest), zs) <- liftIO $ runStateT (runz eof dat) zs0
-        lift $ Done () (Chunk rest eof) -- XXX sketchy and doesn't work
-                                        -- missing iterF somewhere in Inum.hs?
-        tidTrace $ "rest is " ++ (show $ L.take 50 rest)
+        (r, zs) <- lift $ IterM $ liftIO (runStateT (runz eof dat) zs0) >>=
+                   \((r, rest), zs) -> return $ Done (r, zs) (Chunk rest eof)
         done <- ifeed $ zOut zs L.empty
-        xx <- lift $ peekI dataI
-        tidTrace $ "xx is " ++ (show $ L.take 50 xx)
         unless (done || eof || r == z_STREAM_END) $ loop zs { zOut = id }
 
       runz False L.Empty = return (z_OK, L.Empty)
-      runz eof s = do
-               s' <- zPushIn s
-               flush <- if eof && L.null s' then gets zFinish
-                                            else return z_NO_FLUSH
-               r <- zExec flush
-               if r == z_STREAM_END || L.null s'
-                 then (,) r `liftM` zPopIn s'
-                 else runz eof s'
--}
-
--- | A 'Codec' for compressing or uncompressing a stream of
--- 'L.ByteString's with zlib.
-zCodec :: (MonadIO m) => ZState -> Codec L.ByteString m L.ByteString
-zCodec zs0 = do
-  (Chunk dat eof) <- chunkI
-  ((r, rest), zs) <- liftIO $ runStateT (runz eof dat) zs0
-  if eof || r == z_STREAM_END
-    then Done (CodecE $ zOut zs L.empty) (Chunk rest eof)
-    else Done (CodecF (zCodec zs { zOut = id }) $ zOut zs L.empty)
-             (Chunk rest eof)
-    where
-      runz False L.Empty = return (z_OK, L.Empty)
-      runz eof s = do
-               s' <- zPushIn s
-               flush <- if eof && L.null s' then gets zFinish
-                                            else return z_NO_FLUSH
-               r <- zExec flush
-               if r == z_STREAM_END || L.null s'
-                 then (,) r `liftM` zPopIn s'
-                 else runz eof s'
-
--- | The most general zlib 'Inum', which allows any mode permitted by
--- the 'deflateInit2' and 'inflateInit2' functions.
-inumZState :: (MonadIO m) =>
-              ZState
-           -> Inum L.ByteString L.ByteString m a
-inumZState zs = mkInumC noCtl (zCodec zs)
+      runz eof s0 = do
+        s <- zPushIn s0
+        flush <- if eof && L.null s then gets zFinish else return z_NO_FLUSH
+        r <- zExec flush
+        if r == z_STREAM_END || L.null s
+          then do s' <- zPopIn s; return (r, s')
+          else runz eof s
 
 -- | An 'Inum' that compresses in zlib format.  To uncompress, use
 -- 'inumGunzip'.

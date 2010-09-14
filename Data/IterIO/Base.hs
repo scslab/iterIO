@@ -1077,7 +1077,7 @@ peekI iter0 = copyInput iter0 >>= check
 -- | Does not actually consume any input, but returns 'True' if there
 -- is no more input data to be had.
 atEOFI :: (Monad m, ChunkData t) => Iter t m Bool
-atEOFI = iterF $ \(Chunk t _) -> return (null t)
+atEOFI = iterF $ \c@(Chunk t _) -> Done (null t) c
 
 
 --
@@ -1268,22 +1268,14 @@ inumLazy inum iter | isIterActive iter = inum iter
 -- | Repeat an 'Inum' until an end of file is received, the 'Inum'
 -- fails, or the 'Iter' terminates.  Runs the 'Inum' at least once
 -- even if the 'Iter' is no longer active.
-inumRepeat :: (ChunkData tIn, MonadIO m) =>
+inumRepeat :: (ChunkData tIn, MonadIO m,      ChunkData tOut) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
 inumRepeat inum = runinum
     where runinum = inum `cat` inumLazy again
           again iter@(IterF _) = do eof <- atEOFI
                                     if eof then return iter else runinum iter
-          again iter = runinum iter
+          again iter           = runinum iter
           
-{-
-    where runinum iter = step (inum iter)
-          step ii@(IterF _) = IterF $ \c@(Chunk t eof) ->
-                              (if eof && null t then id else step) $ feedI ii c
-          step ii | isIterActive ii = inumMC passCtl ii >>= step
-                  | otherwise       = ii `inumBind` inumLazy runinum
--}
-      
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.
 inumNop :: (ChunkData t, MonadIO m) => Inum t t m a
