@@ -515,7 +515,32 @@ infixr 2 |$
 (.|$) enum iter = runI (enum .| iter)
 infixr 2 .|$
 
--- | Concatenate the outputs of two enumerators.  Has fixity:
+-- | Concatenate the outputs of two enumerators.  For example,
+-- @'enumFile' \"file1\" \`cat\` 'enumFile' \"file2\"@ produces an
+-- 'Onum' that outputs the concatenation files \"file1\" and
+-- \"file2\".  Unless there is a failure, @cat@ always invokes both
+-- 'Inum's, in case the 'Inum' of the second argument has some monadic
+-- side-effects that must be executed even when the 'Iter' has already
+-- finished.  You can wrap 'inumLazy' around an 'Inum' to prevent this
+-- behavior and have it just return immediately if the 'Iter' has
+-- stopped accepting input.
+--
+-- @cat@ is useful in right folds.  Say, for example, that @files@ is
+-- a list of files that you want to concatenate.  You can use a
+-- construct such as:
+--
+-- @
+--  catFiles :: ('MonadIO' m) => ['FilePath'] -> 'Onum' 'L.ByteString' m a
+--  catFiles files = 'foldr' ('cat' . 'inumLazy' . 'enumFile') 'return' files
+-- @
+--
+-- Note the use of 'return' as the starting value for 'foldr'.
+-- ('return' acts like a no-operation 'Inum' when concatenating, while
+-- 'inumNop' acts as a no-operation in fusing.)  Also note the use of
+-- 'inumLazy' as an optimization to avoid processing files once the
+-- 'Iter' has finished.
+--
+-- @cat@ has fixity:
 --
 -- > infixr 3 `cat`
 cat :: (ChunkData tIn, Monad m) =>
@@ -1261,7 +1286,7 @@ inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
 inumMC _ iter = return iter
 
 -- | Runs an 'Inum' only if the 'Iter' is still active.  Othrewise
--- just returns the 'Iter'.  See an example at 'inumNop'.
+-- just returns the 'Iter'.  See an example at 'cat'.
 inumLazy :: (ChunkData tIn, Monad m) =>
             Inum tIn tOut m a -> Inum tIn tOut m a
 inumLazy inum iter | isIterActive iter = inum iter
@@ -1297,21 +1322,9 @@ inumRepeat inum = runinum
 --
 -- Another type of \"Nop\" you might want is an 'Iter' that literally
 -- does nothing (not even pass through data) and immediately returns
--- the 'Iter'.  This functionaly is already provided by the monadic
--- 'return' function.  For example, if @files@ is a (possibly empty)
--- list of files and you want to concatenate all of them, you can use
--- a construct such as:
---
--- @
---  catFiles :: ('MonadIO' m) => ['FilePath'] -> 'Onum' 'L.ByteString' m a
---  catFiles files = 'foldr' ('cat' . 'inumLazy' . 'enumFile') 'return' files
--- @
---
--- Note the use of 'return' as the starting value for 'foldr'.
--- ('inumNop', because it is not an 'Onum', doesn't even have the
--- right type to be used here.)  Also note the use of 'inumLazy' as an
--- optimization to avoid processing files once the 'Iter' has
--- finished.
+-- the 'Iter'.  Such a nop is useful as the initial value of a fold.
+-- This second \"Nop\" functionaly is already provided by the monadic
+-- 'return' function.  See an example at 'cat'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = inumRepeat (inumMC passCtl `cat` inumF)
 
