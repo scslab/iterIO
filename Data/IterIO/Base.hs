@@ -1274,9 +1274,17 @@ inumRepeat :: (ChunkData tIn, Monad m) =>
               (Inum tIn tOut m a) -> (Inum tIn tOut m a)
 inumRepeat inum = runinum
     where runinum = inum `cat` inumLazy again
-          again iter@(IterF _) = do eof <- atEOFI
-                                    if eof then return iter else runinum iter
-          again iter           = runinum iter
+          again iter@(IterF _) = do
+            eof <- atEOFI
+            if eof then return iter else runinum iter
+          again iter           = do
+            -- Here we might miss an EOF we haven't read yet, but but
+            -- don't want to request more than residual input in case
+            -- monadic side-effects are required to produce that
+            -- input.  (Note the capital IterF, which makes the next
+            -- line different from atEOFI.)
+            eof <- IterF $ \c@(Chunk t eof) -> Done (eof && null t) c
+            if eof then return iter else runinum iter
           
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.

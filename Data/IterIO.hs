@@ -192,7 +192,7 @@ input into lines:
     -- works most conveniently with regular expressions.  (Otherwise,
     -- we would prefer lazy ByteStrings.)
     inumToLines :: (Monad m) => 'Inum' S.ByteString [S.ByteString] m a
-    inumToLines = 'mkInum'' $ do
+    inumToLines = 'mkInum' $ do
                     line <- 'lineI'
                     return [line]
 @
@@ -218,17 +218,18 @@ true, however.  For examply, the '|$' operator requires an 'Onum', as
 it wouldn't know what data to feed to an arbitrary 'Inum'.
 
 Iteratee-enumerators are generally constructed using either 'mkInum'
-or `mkInum'`, and by convention most 'Inum' functions have names
-starting \"@inum@...\".  'mkInum'' takes an argument of type @Iter tIn
+or `mkInumM`, and by convention most 'Inum' functions have names
+starting \"@inum@...\".  'mkInum' takes an argument of type @Iter tIn
 m tOut@ that consumes input of type @tIn@ to produce output of type
 @tOut@.  (For @inumToLines@, @tIn@ is @S.ByteString@ and @tOut@ is
-@[S.ByteString]@).  'mkInum' is like `mkInum'`, but the transcoding
-function is of type @'Codec' tIn m tOut@, which is designed to allow
-the transcoder to keep state from one invocation to the next (unlike
-@'Iter' tIn m tOut@), as well as to signal EOF explicitly.  In
-@inumToLines@, we do not need to keep state and are happy just to let
-'lineI' throw an exception on EOF.  `mkInum'` will catch the EOF
-exception and do the right thing.
+@[S.ByteString]@).  This is fine for simple stateless translation
+functions, but sometimes one would like to keep state and use more
+complex logic in an 'Inum'.  For that, the 'mkInumM' function creates
+an 'Inum' out of a computation in a dedicated 'InumM' monad.  In
+@inumToLines@, we do not need to keep state.  We are happy just to let
+'lineI' throw an exception on EOF, which `mkInum` will catch and
+handle gracefully.  (Throwing exceptions of type 'IterEOF' is the
+standard way of exiting an 'Inum' created by 'mkInum'.)
 
 We similarly define an 'Inum' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),
@@ -239,7 +240,7 @@ and a simple 'Inum' to count list elements (since @lineCountI ::
 
 @
     inumGrep :: (Monad m) => String -> 'Inum' [S.ByteString] [S.ByteString] m a
-    inumGrep re = `mkInum'` $ do
+    inumGrep re = `mkInum` $ do
       line <- 'headI'
       return $ if line =~ packedRe then [line] else []
         where
