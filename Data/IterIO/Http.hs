@@ -398,7 +398,7 @@ inumToChunks = mkInum $ do
             trailer   = if eof && len > 0
                         then L8.pack "\r\n0\r\n\r\n"
                         else L8.pack "\r\n"
-        return $ L8.append chunksize $ L8.append s trailer
+        return $ L8.concat [chunksize, s, trailer]
 
 -- | HTTP Chunk decoder
 inumFromChunks :: (Monad m) => Inum L L m a

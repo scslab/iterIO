@@ -78,7 +78,7 @@ module Data.IterIO.Base
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
-    , nullI, dataI, chunkI, peekI, atEOFI
+    , nullI, dataI, chunkI, peekI, atEOFI, ungetI
     -- * Low-level Iter-manipulation functions
     , feedI, finishI, joinI, inumBind
     -- * Some basic Inums
@@ -1106,6 +1106,10 @@ peekI iter0 = copyInput iter0 >>= check
 atEOFI :: (Monad m, ChunkData t) => Iter t m Bool
 atEOFI = iterF $ \c@(Chunk t _) -> Done (null t) c
 
+-- | Place data back onto the input stream, where it will be the next
+-- data consumed by subsequent 'Iter's..
+ungetI :: t -> Iter t m ()
+ungetI = Done () . chunk
 
 --
 -- Iter manipulation functions

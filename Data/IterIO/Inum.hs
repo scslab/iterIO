@@ -2,7 +2,28 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
 
--- | This module contains various functions used to construct 'Inum's.
+-- | This module contains two different functions for constructiing
+-- 'Inum's.  The first, 'mkInum', creates simple, stateless 'Inum's
+-- out of 'Iter's that translate from an input type to an output type.
+-- As an example, here is a simple HTTP chunk encoder.  It translates
+-- input into a series of HTTP chunks preceded by their length in hex,
+-- with a 0-length chunk signifiying an end-of-file:
+--
+-- > inumToChunks :: (Monad m) => Inum L.ByteString L.ByteString m a
+-- > inumToChunks = mkInum $ do
+-- >         Chunk s eof <- chunkI
+-- >         let len       = L8.length s
+-- >             chunksize = L8.pack $ printf "%x\r\n" len
+-- >             trailer   = if eof && len > 0
+-- >                         then L8.pack "\r\n0\r\n\r\n"
+-- >                         else L8.pack "\r\n"
+-- >         return $ L8.concat [chunksize, s, trailer]
+--
+-- For more complex 'Inum's that need state and different control
+-- flow, there is the 'mkInumM' function.  'mkInumM' creates an 'Inum'
+-- out of a computation in the 'InumM' monad.  'InumM' is a
+-- 'MonadTrans' around 'Iter'.  Thus you can consume input by applying
+-- 'lift' to any 'Iter' of the input type and monad.
 
 module Data.IterIO.Inum
     (-- * Simple Enumerator construction function
@@ -26,82 +47,14 @@ import Data.Typeable
 import Data.IterIO.Base
 
 --
--- Enumerator construction functions
+-- Simple enumerator construction function
 --
 
-{-
--- | A @Codec@ is an 'Iter' that tranlates data from some input type
--- @tIn@ to an output type @tOut@ and returns the result in a
--- 'CodecR'.  If the @Codec@ is capable of repeatedly being invoked to
--- translate more input, it returns a 'CodecR' in the 'CodecF' state.
--- This convention allows @Codec@s to maintain state from one
--- invocation to the next by currying the state into the codec
--- function for the next time it is invoked.  A @Codec@ that cannot
--- process more input returns a 'CodecR' in the 'CodecE' state,
--- possibly including some final output.
-type Codec tIn m tOut = Iter tIn m (CodecR tIn m tOut)
-
--- | The result type of a 'Codec' that translates from type @tIn@ to
--- @tOut@ by executing in monad @'Iter' tIn m@.  The result
--- potentially includes a new 'Codec' for translating subsequent
--- input.
-data CodecR tIn m tOut = CodecF { unCodecF :: !(Codec tIn m tOut)
-                                , unCodecR :: !tOut }
-                          -- ^ This is the normal 'Codec' result,
-                          -- which includes another 'Codec' (often the
-                          -- same as the one that was just called) for
-                          -- processing further input.
-                        | CodecE { unCodecR :: !tOut }
-                          -- ^ This constructor is used if the 'Codec'
-                          -- is ending--i.e., returning for the last
-                          -- time--and thus cannot provide another
-                          -- 'Codec' to process further input.
-
--- | Transform an ordinary 'Iter' into a stateless 'Codec'.
-iterToCodec :: (ChunkData t, Monad m) => Iter t m a -> Codec t m a
-iterToCodec iter = let codec = CodecF codec `liftM` iter in codec
-
--- | Build an 'Inum' given a 'Codec' that returns chunks of the
--- appropriate type and a 'CtlHandler' to handle control requests.
--- Makes an effort to send an EOF to the codec if the inner 'Iter'
--- fails, so as to facilitate cleanup.  However, if a containing
--- 'Inum' fails, code handling that failure will have to send an EOF
--- or the codec will not be able to clean up.
-mkInumC :: (Monad m, ChunkData tIn, ChunkData tOut) =>
-           CtlHandler (Iter tIn m)
-        -- ^ Control request handler
-        -> Codec tIn m tOut
-        -- ^ Codec to be invoked to produce transcoded chunks.
-        -> Inum tIn tOut m a
-mkInumC cf codec = inumMC cf `cat` process
-    where
-      process iter@(IterF _) =
-          catchOrI codec (chkeof iter) $ \codecr ->
-              case codecr of
-                CodecF c d -> mkInumC cf c (feedI iter $ chunk d)
-                CodecE d   -> inumMC cf (feedI iter $ chunk d)
-      process iter =
-          case codec of
-            IterF _ -> catchOrI (runI codec) (chkeof iter) (\_ -> return iter)
-            _       -> return iter
-      chkeof iter e = if isIterEOF e then return iter else InumFail e iter
-                
--- | A variant of 'mkInumC' that passes all control requests from the
--- innner 'Iter' through to enclosing enumerators.  (If you want to
--- reject all control requests, use @'mkInumC' 'noCtl'@ instead of
--- @mkInum@.)
-mkInum :: (Monad m, ChunkData tIn, ChunkData tOut) =>
-          Codec tIn m tOut
-       -- ^ Codec to be invoked to produce transcoded chunks.
-       -> Inum tIn tOut m a
-mkInum = mkInumC passCtl
--}
-
--- | Construct an simple @'Inum' tIn tOut m a@ from a transcoder
--- @'Iter tIn m tOut@.  The returned 'Inum' simply invokes the
--- transcoder over and over again to get more data.  It finishes when
--- the @'Iter' tOut m a@ being feed by the 'Inum' is no longer active
--- or the trancoder @'Iter' tIn m tOut@ throws an exception of class
+-- | Construct a simple @'Inum' tIn tOut m a@ from a transcoder @'Iter
+-- tIn m tOut@.  The returned 'Inum' simply invokes the transcoder
+-- over and over again to get more data.  It finishes when the @'Iter'
+-- tOut m a@ being feed by the 'Inum' is no longer active or the
+-- trancoder @'Iter' tIn m tOut@ throws an exception of class
 -- 'IterEOF'.  If the transcoder throws any other kind of exception,
 -- the whole 'Inum' fails with an 'InumFail' error.
 --
@@ -120,62 +73,8 @@ mkInum fn = loop
       process iter = return iter
 
 
-{-
--- | A variant of 'inumBracket' that also takes a 'CtlHandler' (as a
--- function of the input).
-inumCBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
-                (Iter tIn m b)
-             -- ^ Before action
-             -> (b -> Iter tIn m c)
-             -- ^ After action, as a function of before action result
-             -> (b -> CtlHandler (Iter tIn m))
-             -- ^ Control request handler, as funciton of before action result
-             -> (b -> (Codec tIn m tOut))
-             -- ^ Input 'Codec', as a funciton of before aciton result
-             -> Inum tIn tOut m a
-inumCBracket before after cf codec iter0 = tryI before >>= checkBefore
-    where
-      checkBefore (Left (e, _)) = InumFail e iter0
-      checkBefore (Right b)     = finishI (mkInumC (cf b) (codec b) iter0)
-                                  >>= checkMain b
-      checkMain b iter = tryI (after b) >>= checkAfter iter
-      checkAfter iter (Left (e,_)) = iter `inumBind` InumFail e
-      checkAfter iter _            = iter
-
--- | Build an 'Inum' from a @before@ action, an @after@ function, and
--- an @input@ 'Codec' in a manner analogous to the IO @'bracket'@
--- function.  For instance, you could implement @`enumFile'`@ as
--- follows:
 --
--- >   enumFile' :: (MonadIO m) => FilePath -> Onum L.ByteString m a
--- >   enumFile' path = inumBracket (liftIO $ openBinaryFile path ReadMode)
--- >                                (liftIO . hClose) doGet
--- >       where
--- >         doGet h = do
--- >           buf <- liftIO $ hWaitForInput h (-1) >> L.hGetNonBlocking h 8192
--- >           return $ if null buf then CodecE L.empty
--- >                                else CodecF (doGet h) buf
---
--- (As a side note, the simple 'L.hGet' function can block when there
--- is some input data but not as many bytes as requested.  Thus, in
--- order to work with named pipes and process data as it arrives, it
--- is best to call 'hWaitForInput' followed by 'L.hGetNonBlocking'
--- rather than simply 'L.hGet'.  This is a common idiom in enumerators
--- that use 'Handle's.)
-inumBracket :: (Monad m, ChunkData tIn, ChunkData tOut) =>
-               (Iter tIn m b)
-            -- ^ Before action
-            -> (b -> Iter tIn m c)
-            -- ^ After action, as a function of before action result
-            -> (b -> (Codec tIn m tOut))
-            -- ^ Input 'Codec', as a funciton of before aciton result
-            -> Inum tIn tOut m a
-inumBracket before after codec iter0 =
-    inumCBracket before after (const noCtl) codec iter0
--}
-
---
--- Monad
+-- IterStateT monad
 --
 
 -- | @IterStateT@ is a lot like the @'StateT'@ monad transformer, but
@@ -263,6 +162,10 @@ instance (IterStateTClass m) => MonadState s (IterStateT s m) where
     get   = IterStateT $ \s -> return (s, s)
     put s = IterStateT $ \_ -> return ((), s)
 
+
+--
+-- InumM monad
+--
 
 data InumState tIn tOut m a = InumState {
       insAutoEOF :: !Bool
@@ -431,10 +334,11 @@ ipipe inum = IterStateT $ \s -> do
                      (True, s {insIter = iter, insRemain = c })
     else return (done, s {insIter = iter })
 
--- | Apply an 'Onum' to the 'Iter' from within the 'InumM' monad.  As
--- with 'ifeed', returns @'True'@ when the 'Iter' is finished.
-irun :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-        Onum tOut m a -> InumM tIn tOut m a Bool
+-- | Apply an 'Onum' (or 'Inum' of an arbitrary, unused input type) to
+-- the 'Iter' from within the 'InumM' monad.  As with 'ifeed', returns
+-- @'True'@ when the 'Iter' is finished.
+irun :: (ChunkData tAny, ChunkData tIn, ChunkData tOut, Monad m) =>
+        Inum tAny tOut m a -> InumM tIn tOut m a Bool
 irun onum = ipipe $ runI . onum
 
 -- | Repeats an action until the 'Iter' is done or an EOF error is
