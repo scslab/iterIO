@@ -67,15 +67,19 @@ infixr 3 <|>
 --
 -- @
 --   myMany :: (ChunkData t, Monad m) => Iter t m a -> Iter t m [a]
---   myMany iter = iter \\/ return [] '$' (:) '>$>' myMany iter
+--   myMany iter = iter \\/ return [] '$' \\r -> 'fmap' ((:) r) (myMany iter)
 -- @
 --
 -- In other words, @myMany@ tries running @iter@.  If @iter@ fails,
 -- then @myMany@ returns the empty list.  If @iter@ succeeds, its
--- result is fed to @(:) '>$>' myMany iter@, which is equivalent to:
+-- result @r@ is added to the head of the list returned by calling
+-- @myMany@ recursively.  This idiom of partially applying a binary
+-- funciton to a result and then applying the resulting function to an
+-- iter via 'fmap' is so common that there is an infix operator for
+-- it, @'>$>'@.  Thus, the above code can be written:
 --
 -- @
---     \\iterResult -> (iterResult :) ``fmap`` myMany iter
+--   myMany iter = iter \\/ return [] '$' (:) '>$>' myMany iter
 -- @
 --
 -- @\\/@ has fixity:
@@ -88,8 +92,8 @@ infixr 3 <|>
 infix 2 \/
 
 -- | @(f >$> a) t@ is equivalent to @f t '<$>' a@.  Particularly
--- useful with infix combinators such as '\/' and ``orEmpty`` for
--- chaining a bunch of parse actions.  (See the example at 'orEmpty'.)
+-- useful with infix combinators such as '\/' and ``orEmpty`` when
+-- chaining parse actions.  See examples at '\/' and 'orEmpty'.
 --
 -- Has fixity:
 --
@@ -170,8 +174,8 @@ expectedI :: String             -- ^ Input actually received
           -> Iter t m a
 expectedI saw target = throwI $ IterExpected saw [target]
 
--- | Repeatedly invoke an 'Iter', and right-folding a function over
--- the results.
+-- | Repeatedly invoke an 'Iter' and right-fold a function over the
+-- results.
 foldrI :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
 foldrI f z iter = iter \/ return z $ f >$> foldrI f z iter
