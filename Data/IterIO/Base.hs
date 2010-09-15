@@ -1226,7 +1226,7 @@ feedI err _                     = err
 -- >     case iter' of
 -- >       IterFail e   -> ... handle error ...
 -- >       InumFail e i -> ... handle error ...
--- >       (Done a _)   -> ... do something with a ...
+-- >       Done a _     -> ... do something with a ...
 --
 -- Note that @finishI@ pulls any left-over data up to the enclosing
 -- 'Iter' when it returns 'Done'.  In other words, spelled out, a
@@ -1234,8 +1234,9 @@ feedI err _                     = err
 --
 -- >       Done (Done a (Chunk mempty eof) t eof)
 --
--- This makes it safe to ignore the left-over data of the inner
--- 'Done'.
+-- This makes it safe to ignore the residual data from the inner
+-- 'Done', as with @Done a _ -> ...@ in the example above.  No
+-- residual data is lost in this case.
 finishI :: (ChunkData t, Monad m) => Inum t t m a
 finishI iter@(IterF _)           = iterF $ finishI . feedI iter
 finishI (IterM m)                = IterM $ finishI `liftM` m
