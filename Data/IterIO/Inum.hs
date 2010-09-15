@@ -319,7 +319,14 @@ defaultInumState = InumState {
                    , insCleaning = False
                    }
 
--- | A monad in which to define the actions of an @'Inum' tIn tOut m a@.
+-- | A monad in which to define the actions of an @'Inum' tIn tOut m
+-- a@.  Note @InumM tIn tOut m a@ is a 'Monad' of kind @* -> *@.  @a@
+-- is the (almost always parametric) return type of the 'Inum'.  A
+-- fifth type argument is required for monadic computations of kind
+-- @*@, e.g.:
+--
+-- > seven :: InumM tIn tOut m a Int
+-- > seven = return 7
 type InumM tIn tOut m a = IterStateT (InumState tIn tOut m a) (Iter tIn m)
 
 data InumDone = InumDone deriving (Show, Typeable)
