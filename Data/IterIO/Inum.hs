@@ -22,7 +22,7 @@ module Data.IterIO.Inum
     -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM
     , setCtlHandler, setAutoEOF, setAutoDone, addCleanup, withCleanup
-    , ifeed, ifeed1, ipipe, irun, irepeat, idone
+    , ifeed, ifeed1, ipipe, irun, irepeat, ipullup, idone
     ) where
 
 import Prelude hiding (null)
@@ -488,6 +488,16 @@ irepeat :: (ChunkData tIn, Monad m) =>
 irepeat action = do
   imodify $ \s -> s { insAutoEOF = True, insAutoDone = True }
   let loop = action >> loop in loop
+
+-- | If the target 'Iter' being fed by the 'Inum' is in the 'Done'
+-- state, this funciton pops the residual data out of the 'Iter' and
+-- returns it.  If the target is in any other state, returns 'mempty'.
+ipullup :: (ChunkData tIn, ChunkData tOut, Monad m) => InumM tIn tOut m a tOut
+ipullup = IterStateT $ \s ->
+    case insIter s of
+      Done a (Chunk t eof) ->
+          return (t, s { insIter = Done a $ Chunk mempty eof })
+      _ -> return (mempty, s)
 
 -- | Immediately perform a successful exit from an 'InumM' monad,
 -- terminating the 'Inum' and returning the current state of the

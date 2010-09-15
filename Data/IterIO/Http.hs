@@ -405,7 +405,7 @@ inumFromChunks :: (Monad m) => Inum L L m a
 inumFromChunks = mkInumM $ getchunk
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
-      chunk_ext_val = char '='; osp; token <|> quoted_string; osp
+      chunk_ext_val = do char '='; osp; token <|> quoted_string; osp
       chunk_ext = do char ';'; osp; token; osp; optional chunk_ext_val
       getchunk = do
         size <- lift $ hexInt <* (osp >> skipMany chunk_ext >> crlf)
