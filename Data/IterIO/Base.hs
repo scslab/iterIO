@@ -29,10 +29,11 @@
      from type @tIn@ to type @tOut@ for consumption by another
      iteratee.
 
-     'Inum's are generally constructed using the function 'mkInum',
-     which takes a 'Codec' that transcodes from the input to the
-     output type.  'mkInum' deals with the details of error handling
-     while the 'Codec' simply transforms data.
+     'Inum's are generally constructed using the functions @'mkInum'@
+     and @'mkInumM'@ in module "Data.IterIO.Inum".  The first funciton
+     uses a simple @'Iter' tIn m tOut@ to translate between input type
+     @tIn@ and output type @tOut@.  The second function, @'mkInumM'@,
+     allows construction of more complex 'Inum's.
 
      An important special kind of 'Inum' is an /outer enumerator/,
      which is just an 'Inum' with the void input type @()@.  Outer
@@ -415,9 +416,10 @@ type InumR tIn tOut m a = Iter tIn m (Iter tOut m a)
 -- as happens when enumerators are concatenated with the 'cat'
 -- function.
 --
--- @Onum@s should generally be constructed using the 'mkInum'
--- function, just like 'Inum's, the only difference being that for an
--- @Onum@ the input type of the 'Codec' must be @()@.
+-- @Onum@s should generally be constructed using the 'mkInum' or
+-- 'mkInumM' function, just like 'Inum's, the only difference being
+-- that for an @Onum@ the input type is @()@, so executing 'Iter's to
+-- consume input will be of little use.
 type Onum t m a = Inum () t m a
 
 -- | The result of running an 'Onum'.
@@ -1378,17 +1380,12 @@ type CtlHandler m = CtlArg -> (m CtlRes)
 --
 -- One use of this is for 'Inum's that change the data in such a way
 -- that control requests would not make sense to outer enumerators.
--- Suppose @gunzipCodec@ is a codec that uncompresses a file in gzip
--- format.  The corresponding inner enumerator should probably be
--- defined as:
---
--- > inumGunzip :: (Monad m) => Inum ByteString ByteString m a
--- > inumGunzip = enumCI noCtl gunzipCodec
---
--- The alternate definition @inumGunzip = mkInum gunzipCodec@ would
--- likely wreak havoc in the event of any seek requests, as the outer
--- enumerator might seek around in the file, confusing the
--- decompression codec.
+-- Suppose @inumGunzip@ is a codec that uncompresses a file in gzip
+-- format.  It should probably be call @'setCtlHandler' noCtl@ before
+-- producing any output.  Otherwise, problems would likely ensue in
+-- the event of any seek requests, as whatever enumerator surrounds
+-- @inumGunzip@ might seek around in the file, confusing the
+-- @inumGunzip@.
 noCtl :: (Monad m) => CtlHandler m
 noCtl _ = return $ CtlRes CtlBad
 
