@@ -22,7 +22,7 @@ module Data.IterIO.Inum
     -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM
     , setCtlHandler, setAutoEOF, setAutoDone, addCleanup, withCleanup
-    , ifeed, ifeed1, ipipe, irun, irepeat, ipullup, idone
+    , ifeed, ifeed1, ipipe, irun, irepeat, ipopresid, idone
     ) where
 
 import Prelude hiding (null)
@@ -213,7 +213,10 @@ inumConcat = 'mkInumM' loop
     where loop = do
             'Chunk' t eof <- 'lift' 'chunkI'
             done <- 'ifeed' $ L.concat t
-            'unless' (eof || done) loop
+            if not (eof || done)
+              then loop
+              else do resid <- 'ipopresid'
+                      'lift' $ 'ungetI' [resid]
 @
 
 There are several points to note about this function.  It reads data
@@ -230,23 +233,40 @@ As previously mentioned, data is fed to the target 'Iter', which here
 is of type @'Iter' L.ByteString m a@, using 'ifeed'.  'ifeed' returns
 a 'Bool' that is @'True'@ when the 'Iter' is no longer active.  This
 brings us to another point--there is no implicit looping or
-repetition.  We explicitly loop via a tail-recursive call to @loop@
-unless the @eof@ flag was set in the input or 'ifeed' returned
-@'True'@ because the target 'Iter' has finished.
+repetition.  We explicitly loop via a tail-recursive call to @loop@ so
+long as the @eof@ flag is clear and 'ifeed' returned @'False'@ because
+the target 'Iter' has not finished.
 
-This looks much clumsier than the version based on 'mkInum', but
-several of these steps can be make implicit.  There is an \"AutoEOF\"
-flag, controlable with the 'setAutoEOF' function, that causes
-'IterEOF' exceptions to produce normal termination of the 'Inum',
-rather than failure.  Another flag, \"AutoDone\", is controlable with
-the 'setAutoDone' function and causes the 'Inum' to exit immediately
-when the underlying 'Iter' is no longer active (i.e., the 'ifeed'
-function returns @'True'@).  Both of these flags are set at once by
-the 'mkInumAutoM' function, which yields the following simpler
-implementation of @inumConcat@:
+What happens when @eof@ or @done@ is set?  One possibility is to do
+nothing.  This is often correct.  Falling off the end of the 'InumM'
+do-block causes the 'Inum' to return the current state of the 'Iter'.
+However, it may be that the 'Inum' has been fused to the target
+'Iter', in which case any left-over residual data fed to but not
+consumed by the target 'Iter' will be discarded.  We may instead want
+to put the data back on the input stream.  The 'ipopresid' function
+extracts any left-over data from the target 'Iter', while 'ungetI'
+places data back in the input stream.  Since here the input stream is
+a list of @L.ByteString@s, we have to place @resid@ in a list.  (After
+doing this, the list element boundaries may be different, but all the
+input bytes will be there.)  Note that the version of @inumConcat@
+implemented with 'mkInum' at <#1> does not have this input-restoring
+feature.
+
+The code above looks much clumsier than the version based on 'mkInum',
+but several of these steps can be made implicit.  There is an
+\"AutoEOF\" flag, controlable with the 'setAutoEOF' function, that
+causes 'IterEOF' exceptions to produce normal termination of the
+'Inum', rather than failure.  Another flag, \"AutoDone\", is
+controlable with the 'setAutoDone' function and causes the 'Inum' to
+exit immediately when the underlying 'Iter' is no longer active (i.e.,
+the 'ifeed' function returns @'True'@).  Both of these flags are set
+at once by the 'mkInumAutoM' function, which yields the following
+simpler implementation of @inumConcat@:
 
 @
-inumConcat = 'mkInumAutoM' loop
+inumConcat = 'mkInumAutoM' $ do
+  'addCleanup' $ 'ipopresid' >>= \r -> 'lift' $ 'ungetI' [r]
+  loop
     where loop = do
             t <- 'lift' 'dataI'    -- AutoEOF flag will handle IterEOF err
             'ifeed' $ L.concat t -- AutoDone flag will catch True result
@@ -258,7 +278,8 @@ Finally, there is a function 'irepeat' that automatically sets the
 'InumM' computation.  Using 'irepeat' to simplifying further, we have:
 
 @
-inumConcat = 'mkInumM' $ 'irepeat' $ 'lift' 'dataI' >>= 'ifeed' . L.concat
+'inumConcat' = 'mkInumM' $ 'withCleanup' ('ipopresid' >>= \r -> 'lift' $ 'ungetI' [r]) $
+             'irepeat' $ 'lift' 'dataI' >>= 'ifeed' . L.concat
 @
 
 In addition to 'ifeed', the 'ipipe' function invokes a different
@@ -492,8 +513,8 @@ irepeat action = do
 -- | If the target 'Iter' being fed by the 'Inum' is in the 'Done'
 -- state, this funciton pops the residual data out of the 'Iter' and
 -- returns it.  If the target is in any other state, returns 'mempty'.
-ipullup :: (ChunkData tIn, ChunkData tOut, Monad m) => InumM tIn tOut m a tOut
-ipullup = IterStateT $ \s ->
+ipopresid :: (ChunkData tIn, ChunkData tOut, Monad m) => InumM tIn tOut m a tOut
+ipopresid = IterStateT $ \s ->
     case insIter s of
       Done a (Chunk t eof) ->
           return (t, s { insIter = Done a $ Chunk mempty eof })
