@@ -202,10 +202,10 @@ around 'Iter'.  Thus, you can consume input by applying 'lift' to any
 'Iter' of the same input type and monad.
 
 The 'InumM' monad implicitly keeps track of the state of the 'Iter'
-being fed by the enumerator.  Output can be fed to that 'Iter' by
-means of the 'ifeed' function.  As an example, here is another version
-of the @inumConcat@ function given previously (above the description
-of 'mkInum'):
+being fed by the enumerator, which we call the \"target 'Iter'\".
+Output can be fed to the target 'Iter' by means of the 'ifeed'
+function.  As an example, here is another version of the @inumConcat@
+function given previously for 'mkInum' at <#1>:
 
 @
 inumConcat :: (Monad m) => 'Inum' [L.ByteString] L.ByteString m a
@@ -226,22 +226,24 @@ is no more input.  It also avoids throwing an 'IterEOF' exception on
 end of file, as 'dataI' would; such an exception would cause the
 'Inum' to fail.
 
-Data is fed to the underlying @'Iter' tOut m a@--the target of the
-'Inum'--using the 'ifeed' function.  'ifeed' returns a 'Bool' that is
-@'True'@ when the 'Iter' is no longer active.  This brings us to the
-final point--there is no implicit looping or repetition.  We
-explicitly loop via a tail-recursive call to @loop@ unless the @eof@
-flag was set in the input or 'ifeed' returned @'True'@ because the
-target 'Iter' has finished.
+As previously mentioned, data is fed to the target 'Iter', which here
+is of type @'Iter' L.ByteString m a@, using 'ifeed'.  'ifeed' returns
+a 'Bool' that is @'True'@ when the 'Iter' is no longer active.  This
+brings us to another point--there is no implicit looping or
+repetition.  We explicitly loop via a tail-recursive call to @loop@
+unless the @eof@ flag was set in the input or 'ifeed' returned
+@'True'@ because the target 'Iter' has finished.
 
-Several of these steps can be automated.  There is a flag, controlable
-with the 'setAutoEOF' function, that causes 'IterEOF' exceptions to
-produce normal termination of the 'Inum', rather than failure.
-Another flag, controlable with the 'setAutoDone' function, causes the
-'Inum' to exit immediately when the underlying 'Iter' is no longer
-active (i.e., the 'ifeed' function returns @'True'@).  Both of these
-flags are set at once by using 'mkInumAutoM' instead of 'mkInumM'.
-This yields the following simpler implementation:
+This looks much clumsier than the version based on 'mkInum', but
+several of these steps can be make implicit.  There is an \"AutoEOF\"
+flag, controlable with the 'setAutoEOF' function, that causes
+'IterEOF' exceptions to produce normal termination of the 'Inum',
+rather than failure.  Another flag, \"AutoDone\", is controlable with
+the 'setAutoDone' function and causes the 'Inum' to exit immediately
+when the underlying 'Iter' is no longer active (i.e., the 'ifeed'
+function returns @'True'@).  Both of these flags are set at once by
+the 'mkInumAutoM' function, which yields the following simpler
+implementation of @inumConcat@:
 
 @
 inumConcat = 'mkInumAutoM' loop
@@ -253,8 +255,7 @@ inumConcat = 'mkInumAutoM' loop
 
 Finally, there is a function 'irepeat' that automatically sets the
 \"AutoEOF\" and \"AutoDone\" flags and then loops forever on an
-'InumM' computation.  Using 'irepeat' to simplifying further we can
-have:
+'InumM' computation.  Using 'irepeat' to simplifying further, we have:
 
 @
 inumConcat = 'mkInumM' $ 'irepeat' $ 'lift' 'dataI' >>= 'ifeed' . L.concat
@@ -263,29 +264,37 @@ inumConcat = 'mkInumM' $ 'irepeat' $ 'lift' 'dataI' >>= 'ifeed' . L.concat
 In addition to 'ifeed', the 'ipipe' function invokes a different
 'Inum' from within the 'InumM' monad, piping its output directly to
 the target 'Iter'.  As an example, consider an 'Inum' that processes a
-mail message and appends a signature line.  The following does the
-trick:
+mail message and appends a signature line, implemented as follows:
 
 @
-inumAddSig :: (Monad m) => Inum L.ByteString L.ByteString m a
-inumAddSig = mkInumM $ do
-  ipipe inumNop
-  ifeed "\\n--\\nSend from my Haskell interpreter.\\n"
+inumAddSig :: (Monad m) => 'Inum' L.ByteString L.ByteString m a
+inumAddSig = 'mkInumM' $ do
+  'ipipe' 'inumNop'
+  'ifeed' $ L8.pack \"\\n--\\nSent from my Haskell interpreter.\\n\"
 @
 
 Here we start by using 'inumNop' to \"pipe\" all input to the target
-'Iter' unmodified.  On reading and end of file, 'inumNop' returns, at
+'Iter' unmodified.  On reading an end of file, 'inumNop' returns, at
 which point we use 'ifeed' to append our signature.
 
-There is also a function 'irun' that runs an 'Onum' (or 'Inum' of a
-different type) on the target 'Iter'.  For instance, to read the
-signature from a file called @\".signature\"@, one could use:
+A similar function 'irun' runs an 'Onum' (or 'Inum' of a different
+type) on the target 'Iter'.  For instance, to read the signature from
+a file called @\".signature\"@, one could use:
 
 @
-inumAddSig = mkInumM $ do
-  ipipe inumNop
-  irun $ enumFile \".signature\"
+inumAddSig :: ('MonadIO' m) => 'Inum' L.ByteString L.ByteString m a
+inumAddSig = 'mkInumM' $ do
+  'ipipe' 'inumNop'
+  'irun' $ 'enumFile' \".signature\"
 @
+
+Of course, these examples are a bit contrived.  An even simpler
+implementation is:
+
+@
+inumAddSig = 'inumNop' ``cat`` 'runI' . 'enumFile' \".signature\"
+@
+
 
 -}
 
