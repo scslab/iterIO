@@ -306,7 +306,7 @@ inumLength = mkInumM . loop
                  | otherwise = do
             t <- lift dataI
             let (h, r) = LL.splitAt n t
-            lift $ ungetI r
+            iunget r
             _ <- ifeed1 h       -- Keep feeding even if Done
             loop $ n - LL.length h
 
@@ -328,6 +328,7 @@ inumLog path trunc = mkInumM $ do
 -- file name.  Does not close the handle when done.
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle -> Inum t t m a
-inumhLog h = mkInumM $ irepeat $ do buf <- lift dataI
-                                    liftIO $ LL.hPutStr h buf
-                                    ifeed buf
+inumhLog h = mkInumM $ do addCleanup (ipopresid >>= iunget)
+                          irepeat $ do buf <- lift dataI
+                                       liftIO $ LL.hPutStr h buf
+                                       ifeed buf
