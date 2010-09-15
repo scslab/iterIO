@@ -90,10 +90,14 @@ handleLogI h prefix = forever $ do
 
 inumTee :: (Monad m, ChunkData t) =>
            Iter t m () -> Inum t t m a
-inumTee iter = mkInumM $ irepeat $ do
-  buf <- lift dataI
-  lift $ feedI iter $ chunk buf
-  ifeed buf
+inumTee = mkInumAutoM . loop
+    where
+      loop iter = do
+        buf <- lift dataI
+        iter' <- lift $ inumPure buf iter
+        -- iter' <- lift $ inumMC passCtl $ feedI iter $ chunk buf
+        _ <- ifeed buf
+        loop iter'
 
 stderrLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e, Eq t, Enum e, Eq e) =>
              t -> Inum t t m a
