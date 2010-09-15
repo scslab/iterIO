@@ -21,6 +21,7 @@ module Data.IterIO.ListLike
     , enumHandle, enumHandle', enumNonBinHandle
     , enumFile, enumFile'
     -- * Inums
+    , inumLength
     , inumLog, inumhLog
     ) where
 
@@ -145,13 +146,11 @@ lineI = do
 stringMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
               Int
            -> Iter t m t
-stringMaxI maxlen = IterF $ dostring
-    where
-      dostring (Chunk s eof) =
-          if null s && maxlen > 0 && not eof
-            then stringMaxI maxlen
-            else case LL.splitAt maxlen s of
-                   (h, t) -> Done h $ Chunk t eof
+stringMaxI maxlen = IterF $ \(Chunk s eof) ->
+                    if null s && maxlen > 0 && not eof
+                    then stringMaxI maxlen
+                    else case LL.splitAt maxlen s of
+                           (h, t) -> Done h $ Chunk t eof
 
 -- | Return a sring that is exactly len bytes, unless an EOF is
 -- encountered in which case a shorter string is returned.
@@ -298,6 +297,18 @@ enumFile path = mkInumM $ do
 --
 -- Inums
 --
+
+-- | Feed exactly some number of bytes to an 'Iter'.  Throws an error
+-- if that many bytes are not available.
+inumLength :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
+inumLength = mkInumM . loop
+    where loop n | n <= 0    = return ()
+                 | otherwise = do
+            t <- lift dataI
+            let (h, r) = LL.splitAt n t
+            lift $ ungetI r
+            _ <- ifeed1 h       -- Keep feeding even if Done
+            loop $ n - LL.length h
 
 -- | This inner enumerator is like 'inumNop' in that it passes
 -- unmodified 'Chunk's straight through to an iteratee.  However, it

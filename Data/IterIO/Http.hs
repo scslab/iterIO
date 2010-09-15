@@ -402,25 +402,17 @@ inumToChunks = mkInum $ do
 
 -- | HTTP Chunk decoder
 inumFromChunks :: (Monad m) => Inum L L m a
-inumFromChunks = mkInumM $ getsize
+inumFromChunks = mkInumM $ getchunk
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
-      chunk_ext_val = do char '"'; osp; token <|> quoted_string; osp
+      chunk_ext_val = char '='; osp; token <|> quoted_string; osp
       chunk_ext = do char ';'; osp; token; osp; optional chunk_ext_val
-
-      getsize = do
+      getchunk = do
         size <- lift $ hexInt <* (osp >> skipMany chunk_ext >> crlf)
-        if size > 0 then getdata size else gettrailer
-
-      getdata n = do
-        s <- lift $ stringMaxI n
-        let n' = n - fromIntegral (L8.length s)
-        _ <- ifeed s
-        if n' > 0 then getdata n' else lift crlf >> getsize
-
-      gettrailer = lift $ do
-        skipMany (noctl >> crlf)
-        skipI crlf
+        if size > 0 then ipipe (inumLength size) >> getchunk
+                    else lift $ do
+                      skipMany (noctl >> crlf)
+                      skipI crlf
 
 {-
 postReq :: L
