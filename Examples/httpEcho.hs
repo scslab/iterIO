@@ -81,8 +81,23 @@ headersL :: [String] -> L
 headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
  where crlf = L.pack ['\r', '\n']
 
-stderrLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) => Inum t t m a
-stderrLog = inumhLog IO.stderr
+handleLogI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e, Eq t, Enum e, Eq e) =>
+              IO.Handle -> t -> Iter t m ()
+handleLogI h prefix = forever $ do
+  line <- lineI
+  liftIO $ LL.hPutStr h prefix
+  liftIO $ LL.hPutStrLn h line
+
+inumTee :: (Monad m, ChunkData t) =>
+           Iter t m () -> Inum t t m a
+inumTee iter = mkInumM $ irepeat $ do
+  buf <- lift dataI
+  lift $ feedI iter $ chunk buf
+  ifeed buf
+
+stderrLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e, Eq t, Enum e, Eq e) =>
+             t -> Inum t t m a
+stderrLog prefix = inumTee $ handleLogI IO.stderr prefix
 
 -- server prototype
 
@@ -129,7 +144,7 @@ handleConnection :: Net.Socket -> IO ()
 handleConnection s = do
   h <- Net.socketToHandle s IO.ReadWriteMode
   IO.hSetBuffering h IO.NoBuffering
-  enumHandle' h |. stderrLog
+  enumHandle' h |. stderrLog (L.pack "< ")
      |$ req2Html .| html2L .| handleI h
 
 warn :: String -> IO ()
