@@ -1,44 +1,33 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FlexibleInstances #-}
 
 -- | This module contains two different functions for constructiing
 -- 'Inum's.  The first, 'mkInum', creates simple, stateless 'Inum's
 -- out of 'Iter's that translate from an input type to an output type.
--- For example, suppose you are processing a list of @L.ByteString@s
--- representing packets, and want to concatenate them all into one
--- continuous stream of bytes.  You could implement an 'Inum' to do
--- this, @inumConcat@, as follows:
---
--- @
---iterConcat :: (Monad m) => 'Iter' [L.ByteString] m L.ByteString
---iterConcat = L.concat ``liftM`` 'dataI'
---
---inumConcat :: (Monad m) => 'Inum' [L.ByteString] L.ByteString m a
---inumConcat = 'mkInum' iterConcat
--- @
---
--- For more complex 'Inum's that need state and different control
--- flow, there is the 'mkInumM' function.  'mkInumM' creates an 'Inum'
--- out of a computation in the 'InumM' monad.  'InumM' is a
--- 'MonadTrans' around 'Iter'.  Thus you can consume input by applying
--- 'lift' to any 'Iter' of the input type and monad.
+-- The second, 'mkInumM', creates an 'Inum' out of a computation in
+-- the 'InumM' monad.  'InumM' is a 'MonadTrans' around 'Iter'.  Thus
+-- 'InumM' computations can consume input by applying 'lift' to any
+-- 'Iter' of the appropriate input type and monad, and can produce
+-- output by calling any of the 'ifeed', 'ipipe', and 'irun'
+-- functions.
 
 module Data.IterIO.Inum
     (-- * Simple Enumerator construction function
+     -- $mkInumIntro
      mkInum
     -- * IterStateT monad
-    , IterStateT(..), runIterStateT, catchIterState, tryIterState
+    , IterStateT(..), runIterStateT
+    , iget, igets, iput, imodify
     -- * Enumerator construction monad
+    -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM
     , setCtlHandler, setAutoEOF, setAutoDone, addCleanup, withCleanup
-    , ifeed, ifeed1, ipipe, irun, irepeat
+    , ifeed, ifeed1, ipipe, irun, irepeat, idone
     ) where
 
 import Prelude hiding (null)
 import Control.Exception (ErrorCall(..), Exception(..))
 import Control.Monad
-import Control.Monad.State.Class
 import Control.Monad.Trans
 import Data.Monoid
 import Data.Typeable
@@ -49,26 +38,41 @@ import Data.IterIO.Base
 -- Simple enumerator construction function
 --
 
--- | Construct a simple @'Inum' tIn tOut m a@ from a transcoder @'Iter
--- tIn m tOut@.  The returned 'Inum' simply invokes the transcoder
--- over and over again to get more data.  It finishes when the @'Iter'
--- tOut m a@ being feed by the 'Inum' is no longer active or the
--- trancoder @'Iter' tIn m tOut@ throws an exception of class
+-- $mkInumIntro
+--
+-- The 'mkInum' function allows you to create stateless 'Inum's out of
+-- simple transcoding 'Iter's.  As an example, suppose you are
+-- processing a list of @L.ByteString@s representing packets, and want
+-- to concatenate them all into one continuous stream of bytes.  You
+-- could implement an 'Inum' called @inumConcat@ to do this as
+-- follows:
+--
+-- @
+--iterConcat :: (Monad m) => 'Iter' [L.ByteString] m L.ByteString
+--iterConcat = L.concat ``liftM`` 'dataI'
+--
+--inumConcat :: (Monad m) => 'Inum' [L.ByteString] L.ByteString m a
+--inumConcat = 'mkInum' iterConcat
+-- @
+--
+
+-- | Construct a simple @'Inum' tIn tOut m a@ from a transcoder of
+-- type @'Iter' tIn m tOut@.  The created 'Inum' simply invokes the
+-- transcoder over and over again to get more data.  It finishes when
+-- the @'Iter' tOut m a@ being feed by the 'Inum' is no longer active
+-- or the trancoder @'Iter' tIn m tOut@ throws an exception of class
 -- 'IterEOF'.  If the transcoder throws any other kind of exception,
 -- the whole 'Inum' fails with an 'InumFail' error.
---
--- The 'Inum's created by this function are simple and stateless.  For
--- a more powerful interface, see 'mkInumM' and the 'InumM' monad.
 mkInum :: (Monad m, ChunkData tIn, ChunkData tOut) =>
            Iter tIn m tOut
         -- ^ This Iteratee will be executed repeatedly to produce
         -- transcoded chunks.
         -> Inum tIn tOut m a
-mkInum fn = loop
+mkInum codec = loop
     where
       loop = inumMC passCtl `cat` process
-      process iter@(IterF _) =
-          catchOrI fn (\(IterEOF _) -> return iter) $ loop . feedI iter . chunk
+      process iter@(IterF _) = catchOrI codec (\(IterEOF _) -> return iter) $
+                               loop . feedI iter . chunk
       process iter = return iter
 
 
@@ -135,6 +139,28 @@ instance MonadTrans (IterStateT s) where
 instance (MonadIO m, IterStateTClass m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
 
+-- | Returns the state in the 'IterStateT' monad.  Analogous to
+-- @'get'@ for @'StateT'@.
+iget :: (Monad m) => IterStateT s m s
+iget = IterStateT $ \s -> return (s, s)
+
+-- | Returns a particular field of the state in the 'IterStateT'
+-- monad.  Analogous to @'gets'@ for @'StateT'@.
+igets :: (Monad m) => (s -> a) -> IterStateT s m a
+igets f = IterStateT $ \s -> return (f s, s)
+
+-- | Sets the state in the 'IterStateT' monad.  Analogous to @'put'@
+-- for @'StateT'@.
+iput :: (Monad m) => s -> IterStateT s m ()
+iput s = IterStateT $ \_ -> return ((), s)
+
+-- | Modifies the state in the 'IterStateT' monad.  Analogous to
+-- @'modify'@ for @'StateT'@.
+imodify :: (Monad m) => (s -> s) -> IterStateT s m ()
+imodify f = IterStateT $ \s -> return ((), f s)
+
+
+{-
 -- | Catch an exception thrown in an @'IterStateT' s (Iter t m)@
 -- monad.
 catchIterState :: (ChunkData t, Monad m, Exception e) => 
@@ -160,11 +186,108 @@ tryIterState m = IterStateT $ \s -> runIterStateT m s >>= check
 instance (IterStateTClass m) => MonadState s (IterStateT s m) where
     get   = IterStateT $ \s -> return (s, s)
     put s = IterStateT $ \_ -> return ((), s)
+-}
 
 
 --
 -- InumM monad
 --
+
+{- $mkInumMIntro
+
+Complex 'Inum's that need state and non-trivial control flow can be
+constructed using the 'mkInumM' function.  'mkInumM' creates an 'Inum'
+out of a computation in the 'InumM' monad.  'InumM' is a 'MonadTrans'
+around 'Iter'.  Thus, you can consume input by applying 'lift' to any
+'Iter' of the same input type and monad.
+
+The 'InumM' monad implicitly keeps track of the state of the 'Iter'
+being fed by the enumerator.  Output can be fed to that 'Iter' by
+means of the 'ifeed' function.  As an example, here is another version
+of the @inumConcat@ function given previously (above the description
+of 'mkInum'):
+
+@
+inumConcat :: (Monad m) => 'Inum' [L.ByteString] L.ByteString m a
+inumConcat = 'mkInumM' loop
+    where loop = do
+            'Chunk' t eof <- 'lift' 'chunkI'
+            done <- 'ifeed' $ L.concat t
+            'unless' (eof || done) loop
+@
+
+There are several points to note about this function.  It reads data
+in 'Chunk's using 'chunkI', rather than just inputting data with
+'dataI'.  Because we are in the @'InumM' tIn tOut m a@ monad and not
+the @'Iter' t m@ monad, we must use 'lift' to invoke an 'Iter'
+computation such as 'chunkI'.  The choice of 'chunkI' rather than
+'dataI' allows @inumConcat@ to see the @eof@ flag and know when there
+is no more input.  It also avoids throwing an 'IterEOF' exception on
+end of file, as 'dataI' would; such an exception would cause the
+'Inum' to fail.
+
+Data is fed to the underlying @'Iter' tOut m a@--the target of the
+'Inum'--using the 'ifeed' function.  'ifeed' returns a 'Bool' that is
+@'True'@ when the 'Iter' is no longer active.  This brings us to the
+final point--there is no implicit looping or repetition.  We
+explicitly loop via a tail-recursive call to @loop@ unless the @eof@
+flag was set in the input or 'ifeed' returned @'True'@ because the
+target 'Iter' has finished.
+
+Several of these steps can be automated.  There is a flag, controlable
+with the 'setAutoEOF' function, that causes 'IterEOF' exceptions to
+produce normal termination of the 'Inum', rather than failure.
+Another flag, controlable with the 'setAutoDone' function, causes the
+'Inum' to exit immediately when the underlying 'Iter' is no longer
+active (i.e., the 'ifeed' function returns @'True'@).  Both of these
+flags are set at once by using 'mkInumAutoM' instead of 'mkInumM'.
+This yields the following simpler implementation:
+
+@
+inumConcat = 'mkInumAutoM' loop
+    where loop = do
+            t <- 'lift' 'dataI'    -- AutoEOF flag will handle IterEOF err
+            'ifeed' $ L.concat t -- AutoDone flag will catch True result
+            loop
+@
+
+Finally, there is a function 'irepeat' that automatically sets the
+\"AutoEOF\" and \"AutoDone\" flags and then loops forever on an
+'InumM' computation.  Using 'irepeat' to simplifying further we can
+have:
+
+@
+inumConcat = 'mkInumM' $ 'irepeat' $ 'lift' 'dataI' >>= 'ifeed' . L.concat
+@
+
+In addition to 'ifeed', the 'ipipe' function invokes a different
+'Inum' from within the 'InumM' monad, piping its output directly to
+the target 'Iter'.  As an example, consider an 'Inum' that processes a
+mail message and appends a signature line.  The following does the
+trick:
+
+@
+inumAddSig :: (Monad m) => Inum L.ByteString L.ByteString m a
+inumAddSig = mkInumM $ do
+  ipipe inumNop
+  ifeed "\\n--\\nSend from my Haskell interpreter.\\n"
+@
+
+Here we start by using 'inumNop' to \"pipe\" all input to the target
+'Iter' unmodified.  On reading and end of file, 'inumNop' returns, at
+which point we use 'ifeed' to append our signature.
+
+There is also a function 'irun' that runs an 'Onum' (or 'Inum' of a
+different type) on the target 'Iter'.  For instance, to read the
+signature from a file called @\".signature\"@, one could use:
+
+@
+inumAddSig = mkInumM $ do
+  ipipe inumNop
+  irun $ enumFile \".signature\"
+@
+
+-}
 
 data InumState tIn tOut m a = InumState {
       insAutoEOF :: !Bool
@@ -197,7 +320,7 @@ instance Exception InumDone
 -- 'InumM' computation.  (The default is 'passCtl'.)
 setCtlHandler :: (ChunkData tIn, Monad m) =>
                   CtlHandler (Iter tIn m) -> InumM tIn tOut m a ()
-setCtlHandler ch = modify $ \s -> s { insCtl = ch }
+setCtlHandler ch = imodify $ \s -> s { insCtl = ch }
 
 -- | Set the \"Auto EOF\" flag within an 'InumM' computation.  If this
 -- flag is 'True', handle 'IterEOF' exceptions like a normal but
@@ -205,7 +328,7 @@ setCtlHandler ch = modify $ \s -> s { insCtl = ch }
 -- (the default), then 'IterEOF' exceptions must be manually caught or
 -- they will terminate the thread.
 setAutoEOF :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
-setAutoEOF val = modify $ \s -> s { insAutoEOF = val }
+setAutoEOF val = imodify $ \s -> s { insAutoEOF = val }
 
 -- | Set the \"Auto Done\" flag within an 'InumM' computation.  When
 -- @'True'@, the 'Inum' will immediately terminate as soon as the
@@ -215,9 +338,9 @@ setAutoEOF val = modify $ \s -> s { insAutoEOF = val }
 -- 'ifeed', 'ipipe', and 'irun' functions to ensure the 'Inum'
 -- terminates when one of these functions returns @'False'@.
 setAutoDone :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
-setAutoDone val = modify $ \s -> s { insAutoDone = val }
+setAutoDone val = imodify $ \s -> s { insAutoDone = val }
 
--- | Like modify, but throws an error if the insCleaning flag is set.
+-- | Like imodify, but throws an error if the insCleaning flag is set.
 ncmodify :: (ChunkData tIn, Monad m) =>
             (InumState tIn tOut m a -> InumState tIn tOut m a)
             -> InumM tIn tOut m a ()
@@ -239,10 +362,10 @@ withCleanup :: (ChunkData tIn, Monad m) =>
            -> InumM tIn tOut m a b
            -> InumM tIn tOut m a b
 withCleanup clean action = do
-  old <- gets insCleanup
+  old <- igets insCleanup
   ncmodify $ \s -> s { insCleanup = clean >> old }
   b <- action
-  modify $ \s -> s { insCleanup = old }
+  imodify $ \s -> s { insCleanup = old }
   return b
 
 -- | A variant of 'mkInumM' that sets the flags controlled by
@@ -328,7 +451,7 @@ ipipe inum = IterStateT $ \s -> do
   iter <- inumRepeat (inumMC (insCtl s) `cat` inumF) |. inum $ insIter s
   let done = not $ isIterActive iter
   if done && insAutoDone s
-    then do c <- IterF $ \c -> return c
+    then do c <- IterF return
             InumFail (toException InumDone)
                      (True, s {insIter = iter, insRemain = c })
     else return (done, s {insIter = iter })
@@ -347,5 +470,15 @@ irun onum = ipipe $ runI . onum
 irepeat :: (ChunkData tIn, Monad m) =>
            InumM tIn tOut m a b -> InumM tIn tOut m a ()
 irepeat action = do
-  modify $ \s -> s { insAutoEOF = True, insAutoDone = True }
+  imodify $ \s -> s { insAutoEOF = True, insAutoDone = True }
   let loop = action >> loop in loop
+
+-- | Immediately perform a successful exit from an 'InumM' monad,
+-- terminating the 'Inum' and returning the current state of the
+-- 'Iter'.  Can be used to end an 'irepeat' loop.  (Use @'lift' $
+-- 'throwI' ...@ for an unsuccessful exit.)
+idone :: (ChunkData tIn, Monad m) => InumM tIn tOut m a b
+idone = IterStateT $ \s -> do
+          c <- IterF return
+          InumFail (toException InumDone) (error "idone", s { insRemain = c })
+
