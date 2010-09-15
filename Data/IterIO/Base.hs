@@ -1320,26 +1320,29 @@ inumF iter                     = return iter
 -- returns a result, or experiences an error.  The first argument
 -- specifies what to do with 'IterC' requests, and can be 'noCtl' to
 -- reject requests, 'passCtl' to pass them up to the @'Iter' tIn m@
--- monad, or a custom 'CtlHandler' function.  This function is useful
--- for partially executing and iter until it requires more input.  For
--- example, to duplicate the input stream and execute two 'Iter's in
--- parallel:
+-- monad, or a custom 'CtlHandler' function for the @'Iter' tIn m@
+-- monad.
+--
+-- @inumMC@ is useful for partially executing and iter up to the point
+-- where it requires more input.  For example, to duplicate the input
+-- stream and execute two 'Iter's incrementally on the same input:
 --
 -- @
--- iterTee :: (ChunkData t, Monad m) =>
---            Iter t m a -> Iter t m b -> Iter t m (a, b)
--- iterTee a0 b0 = loop (a0 <* nullI) (b0 <* nullI)
---     where loop a b = do
---             c@(Chunk _ eof) <- chunkI
---             a' <- inumMC passCtl $ feedI a c
---             b' <- inumMC passCtl $ feedI b c
---             if eof || not (isIterActive a') && not (isIterActive b')
---               then liftM2 (,) a' b'
---               else loop a' b'
+--  iterTee :: ('ChunkData' t, 'Monad' m) =>
+--             'Iter' t m a -> 'Iter' t m b -> 'Iter' t m (a, b)
+--  iterTee a0 b0 = loop (a0 '<*' 'nullI') (b0 '<*' 'nullI')
+--      where loop a b = do
+--              c\@(Chunk _ eof) <- 'chunkI'
+--              a' <- inumMC 'passCtl' $ 'feedI' a c
+--              b' <- inumMC 'passCtl' $ 'feedI' b c
+--              if eof then 'liftM2' (,) a' b' else loop a' b'
 -- @
 --
--- See the description of 'feedI' for a discussion of why this is not
--- a good idea without @inumMC@ or something comparable.
+-- (Note the use of @iter '<*' 'nullI'@, which is equivalent to
+-- @iter >>= \\r -> 'nullI' >> r@ and discards any residual input.)
+-- See the description of 'feedI' for a discussion of why this
+-- function is not a good idea without @inumMC@ or something
+-- comparable.
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           CtlHandler (Iter tIn m) -> Inum tIn tOut m a
 inumMC ch (IterM m) = IterM $ inumMC ch `liftM` m
