@@ -1117,12 +1117,49 @@ ungetI = Done () . chunk
 -- Iter manipulation functions
 --
 
--- | Runs an 'Iter' on a 'Chunk' of data.  When the 'Iter' is already
--- 'Done', or in some error condition, simulates the behavior
+-- | Feeds an 'Iter' with a 'Chunk' of data.  When the 'Iter' is
+-- already 'Done', or in some error condition, simulates the behavior
 -- appropriately.
 --
--- Note that this function asserts the following invariants on the
--- behavior of an 'Iter':
+-- It is important to remember that @feedI@ is a pure transformation
+-- of an 'Iter'--it doesn't actually execute anything.  For example,
+-- the following attempt to duplicate the input stream to feed two
+-- 'Iter's in parallel is a bad idea:
+--
+-- > iterTeeBad :: (ChunkData t, Monad m) =>
+-- >               Iter t m a -> Iter t m b -> Iter t m (a, b)
+-- > iterTeeBad a b = do
+-- >   c@(Chunk t eof) <- chunkI
+-- >   let (a', b') = (feedI a c, feedI b c)  -- Bad idea
+-- >   if eof then liftM2 (,) (runI a') (runI b') else iterTeeBad a' b'
+--
+-- (The purpose of the 'runI' calls is to ensure that any residual
+-- input is discarded rather than duplicated.)  The problem is that
+-- this code will keep feeding input to the two 'Iter's, but won't
+-- actually execute anything.  So not only will monadic side effects
+-- fail to happen until all the input has been received (possibly
+-- rendering the program incorrect), but the program will end up
+-- buffering all the input in memory, when it would likely be better
+-- to process it incrementally.
+--
+-- The fix is to ensure that the 'Iter's are actually processed by
+-- passing them through an 'Inum' that will actually execute them.
+-- For instance, you could say:
+--
+-- @
+--    a' <- 'inumPure' t a
+--    b' <- 'inumPure' t b
+-- @
+--
+-- or:
+--
+-- @
+--    a' <- 'inumMC' 'passCtl' $ feedI a c
+--    b' <- 'inumMC' 'passCtl' $ feedI b c
+-- @
+--
+-- Note that @feedI@ asserts the following invariants on the behavior
+-- of an 'Iter':
 --
 --     1. An 'Iter' may not return an 'IterF' (asking for more input)
 --        after receiving a 'Chunk' with the EOF bit 'True'.
@@ -1283,7 +1320,26 @@ inumF iter                     = return iter
 -- returns a result, or experiences an error.  The first argument
 -- specifies what to do with 'IterC' requests, and can be 'noCtl' to
 -- reject requests, 'passCtl' to pass them up to the @'Iter' tIn m@
--- monad, or a custom 'CtlHandler' function.
+-- monad, or a custom 'CtlHandler' function.  This function is useful
+-- for partially executing and iter until it requires more input.  For
+-- example, to duplicate the input stream and execute two 'Iter's in
+-- parallel:
+--
+-- @
+-- iterTee :: (ChunkData t, Monad m) =>
+--            Iter t m a -> Iter t m b -> Iter t m (a, b)
+-- iterTee a0 b0 = loop (a0 <* nullI) (b0 <* nullI)
+--     where loop a b = do
+--             c@(Chunk _ eof) <- chunkI
+--             a' <- inumMC passCtl $ feedI a c
+--             b' <- inumMC passCtl $ feedI b c
+--             if eof || not (isIterActive a') && not (isIterActive b')
+--               then liftM2 (,) a' b'
+--               else loop a' b'
+-- @
+--
+-- See the description of 'feedI' for a discussion of why this is not
+-- a good idea without @inumMC@ or something comparable.
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           CtlHandler (Iter tIn m) -> Inum tIn tOut m a
 inumMC ch (IterM m) = IterM $ inumMC ch `liftM` m
