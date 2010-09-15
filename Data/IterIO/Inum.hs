@@ -275,7 +275,7 @@ inumConcat = 'mkInumAutoM' $ do
 
 The 'addCleanup' function registers actions that should always be
 executed when the 'Inum' finishes.  Here we use it to place residual
-data from the target 'Iter' back into the 'Inum'\'s input stream.
+data from the target 'Iter' back into the `Inum`'s input stream.
 
 Finally, there is a function 'irepeat' that automatically sets the
 /AutoEOF/ and /AutoDone/ flags and then loops forever on an 'InumM'
@@ -401,10 +401,13 @@ addCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -> InumM tIn tOut m a ()
 addCleanup clean = ncmodify $ \s -> s { insCleanup = clean >> insCleanup s }
 
--- | Run an 'InumM' action with some cleanup action in effect.  If the
--- action returns without causing non-local termination of the 'Inum',
--- then the cleanup action is never executed and the effects of any
--- calls to 'addCleanup' within the 'InumM' are reset.
+-- | Run an 'InumM' action with some cleanup action in effect for
+-- non-local termination (which means an invocation of 'idone', an
+-- exception, or termination of the 'Inum' because of /AutoDone/ or
+-- /AutoEOF/).  If the action returns without causing non-local
+-- termination of the 'Inum', then the cleanup action is never
+-- executed and the effects of any calls to 'addCleanup' within the
+-- 'InumM' are reset.
 withCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -- ^ Cleanup action
            -> InumM tIn tOut m a b  -- ^ Action to execute with Cleanup
