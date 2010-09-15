@@ -5,19 +5,18 @@
 -- | This module contains two different functions for constructiing
 -- 'Inum's.  The first, 'mkInum', creates simple, stateless 'Inum's
 -- out of 'Iter's that translate from an input type to an output type.
--- As an example, here is a simple HTTP chunk encoder.  It translates
--- input into a series of HTTP chunks preceded by their length in hex,
--- with a 0-length chunk signifiying an end-of-file:
+-- For example, suppose you are processing a list of @L.ByteString@s
+-- representing packets, and want to concatenate them all into one
+-- continuous stream of bytes.  You could implement an 'Inum' to do
+-- this, @inumConcat@, as follows:
 --
--- > inumToChunks :: (Monad m) => Inum L.ByteString L.ByteString m a
--- > inumToChunks = mkInum $ do
--- >         Chunk s eof <- chunkI
--- >         let len       = L8.length s
--- >             chunksize = L8.pack $ printf "%x\r\n" len
--- >             trailer   = if eof && len > 0
--- >                         then L8.pack "\r\n0\r\n\r\n"
--- >                         else L8.pack "\r\n"
--- >         return $ L8.concat [chunksize, s, trailer]
+-- @
+--iterConcat :: (Monad m) => 'Iter' [L.ByteString] m L.ByteString
+--iterConcat = L.concat ``liftM`` 'dataI'
+--
+--inumConcat :: (Monad m) => 'Inum' [L.ByteString] L.ByteString m a
+--inumConcat = 'mkInum' iterConcat
+-- @
 --
 -- For more complex 'Inum's that need state and different control
 -- flow, there is the 'mkInumM' function.  'mkInumM' creates an 'Inum'
