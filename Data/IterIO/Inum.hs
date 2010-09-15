@@ -22,7 +22,7 @@ module Data.IterIO.Inum
     -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM
     , setCtlHandler, setAutoEOF, setAutoDone, addCleanup, withCleanup
-    , ifeed, ifeed1, ipipe, irun, irepeat, ipopresid, idone
+    , ifeed, ifeed1, ipipe, irun, irepeat, ipopresid, iunget, idone
     ) where
 
 import Prelude hiding (null)
@@ -216,7 +216,7 @@ inumConcat = 'mkInumM' loop
             if not (eof || done)
               then loop
               else do resid <- 'ipopresid'
-                      'lift' $ 'ungetI' [resid]
+                      'iunget' [resid]
 @
 
 There are several points to note about this function.  It reads data
@@ -244,7 +244,7 @@ However, it may be that the 'Inum' has been fused to the target
 'Iter', in which case any left-over residual data fed to but not
 consumed by the target 'Iter' will be discarded.  We may instead want
 to put the data back on the input stream.  The 'ipopresid' function
-extracts any left-over data from the target 'Iter', while 'ungetI'
+extracts any left-over data from the target 'Iter', while 'iunget'
 places data back in the input stream.  Since here the input stream is
 a list of @L.ByteString@s, we have to place @resid@ in a list.  (After
 doing this, the list element boundaries may be different, but all the
@@ -254,18 +254,18 @@ feature.
 
 The code above looks much clumsier than the version based on 'mkInum',
 but several of these steps can be made implicit.  There is an
-\"AutoEOF\" flag, controlable with the 'setAutoEOF' function, that
+/AutoEOF/ flag, controlable with the 'setAutoEOF' function, that
 causes 'IterEOF' exceptions to produce normal termination of the
-'Inum', rather than failure.  Another flag, \"AutoDone\", is
-controlable with the 'setAutoDone' function and causes the 'Inum' to
-exit immediately when the underlying 'Iter' is no longer active (i.e.,
-the 'ifeed' function returns @'True'@).  Both of these flags are set
-at once by the 'mkInumAutoM' function, which yields the following
-simpler implementation of @inumConcat@:
+'Inum', rather than failure.  Another flag, /AutoDone/, is controlable
+with the 'setAutoDone' function and causes the 'Inum' to exit
+immediately when the underlying 'Iter' is no longer active (i.e., the
+'ifeed' function returns @'True'@).  Both of these flags are set at
+once by the 'mkInumAutoM' function, which yields the following simpler
+implementation of @inumConcat@:
 
 @
 inumConcat = 'mkInumAutoM' $ do
-  'addCleanup' $ 'ipopresid' >>= \r -> 'lift' $ 'ungetI' [r]
+  'addCleanup' $ 'ipopresid' >>= 'iunget' . (: [])
   loop
     where loop = do
             t <- 'lift' 'dataI'    -- AutoEOF flag will handle IterEOF err
@@ -273,14 +273,24 @@ inumConcat = 'mkInumAutoM' $ do
             loop
 @
 
+The 'addCleanup' function registers actions that should always be
+executed when the 'Inum' finishes.  Here we use it to place residual
+data from the target 'Iter' back into the 'Inum'\'s input stream.
+
 Finally, there is a function 'irepeat' that automatically sets the
-\"AutoEOF\" and \"AutoDone\" flags and then loops forever on an
-'InumM' computation.  Using 'irepeat' to simplifying further, we have:
+/AutoEOF/ and /AutoDone/ flags and then loops forever on an 'InumM'
+computation.  Using 'irepeat' to simplifying further, we have:
 
 @
-'inumConcat' = 'mkInumM' $ 'withCleanup' ('ipopresid' >>= \r -> 'lift' $ 'ungetI' [r]) $
+'inumConcat' = 'mkInumM' $ 'withCleanup' ('ipopresid' >>= 'iunget' . (: [])) $
              'irepeat' $ 'lift' 'dataI' >>= 'ifeed' . L.concat
 @
+
+'withCleanup', demonstrated here, is a variant of 'addCleanup' that is
+in effect only for the duration of a single action, and only if that
+action executes a non-local exit (e.g., by calling 'idone', throwing
+an exception, or triggering temrination via the /AutoEOF/ or
+/AutoDone/ flags).
 
 In addition to 'ifeed', the 'ipipe' function invokes a different
 'Inum' from within the 'InumM' monad, piping its output directly to
@@ -391,12 +401,13 @@ addCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -> InumM tIn tOut m a ()
 addCleanup clean = ncmodify $ \s -> s { insCleanup = clean >> insCleanup s }
 
--- | Run an 'InumM' action with some cleanup function in effect.
--- Resets the cleanup function after executing the action (which also
--- undoes the effects of any 'addCleanup' calls within the action).
+-- | Run an 'InumM' action with some cleanup action in effect.  If the
+-- action returns without causing non-local termination of the 'Inum',
+-- then the cleanup action is never executed and the effects of any
+-- calls to 'addCleanup' within the 'InumM' are reset.
 withCleanup :: (ChunkData tIn, Monad m) =>
-              InumM tIn tOut m a ()
-           -> InumM tIn tOut m a b
+              InumM tIn tOut m a () -- ^ Cleanup action
+           -> InumM tIn tOut m a b  -- ^ Action to execute with Cleanup
            -> InumM tIn tOut m a b
 withCleanup clean action = do
   old <- igets insCleanup
@@ -520,6 +531,10 @@ ipopresid = IterStateT $ \s ->
           return (t, s { insIter = Done a $ Chunk mempty eof })
       _ -> return (mempty, s)
 
+-- | @iunget = 'lift' . 'ungetI'@.
+iunget :: (MonadTrans mt, ChunkData t, Monad m) => t -> mt (Iter t m) ()
+iunget = lift . ungetI
+
 -- | Immediately perform a successful exit from an 'InumM' monad,
 -- terminating the 'Inum' and returning the current state of the
 -- 'Iter'.  Can be used to end an 'irepeat' loop.  (Use @'lift' $
@@ -528,4 +543,3 @@ idone :: (ChunkData tIn, Monad m) => InumM tIn tOut m a b
 idone = IterStateT $ \s -> do
           c <- IterF return
           InumFail (toException InumDone) (error "idone", s { insRemain = c })
-
