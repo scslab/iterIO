@@ -475,18 +475,26 @@ runI iter           = inumMC noCtl iter >>= runI
 infixr 2 |$
 
 -- | @.|$@ is a variant of '|$' that allows you to apply an 'Onum'
--- from within an 'Iter' monad.  It has fixity:
+-- from within an 'Iter' monad.  This is often useful in conjuction
+-- with 'inumPure', if you want to parse at some coarse-granularity
+-- (such as lines), and then re-parse the contents of some
+-- coarser-grained parse unit.  For example:
+--
+-- >     rawcommand <- lineI
+-- >     command <- inumPure rawcommand .| parseCommandI
+-- >     return Request { cmd = command, rawcmd = rawcommand }
+--
+-- @.|$@ has the same fixity as @|$@, namely:
 --
 -- > infixr 2 .|$
 --
--- @enum .|$ iter@ is sort of equivalent to @'lift' (enum |$ iter)@,
--- except that the latter will call 'throw' on failures, causing
--- language-level exceptions that cannot be caught within the outer
--- 'Iter'.  Thus, it is better to use @.|$@ than
--- @'lift' (... '|$' ...)@, though in the less general case of the
--- IO monad, @enum .|$ iter@ is equivalent to
--- @'liftIO' (enum '|$' iter)@ as illustrated by the following
--- examples:
+-- As suggested by the types, @enum .|$ iter@ is sort of equivalent to
+-- @'lift' (enum |$ iter)@, except that the latter will call 'throw'
+-- on failures, causing language-level exceptions that cannot be
+-- caught within the outer 'Iter'.  Thus, it is better to use @.|$@
+-- than @'lift' (... '|$' ...)@, though in the less general case of
+-- the IO monad, @enum .|$ iter@ is equivalent to @'liftIO' (enum '|$'
+-- iter)@ as illustrated by the following examples:
 --
 -- > -- Catches exception, because .|$ propagates failure through the outer
 -- > -- Iter Monad, where it can still be caught.
@@ -507,6 +515,7 @@ infixr 2 |$
 -- > -- Catches the exception, because liftIO uses the IO catch function to
 -- > -- turn language-level exceptions into monadic Iter failures.  (By
 -- > -- contrast, lift works in any Monad, so cannot do this in apply2.)
+-- > -- This example illustrates how liftIO is not equivalent to lift.
 -- > apply3 :: IO String
 -- > apply3 = inumPure "test1" |$ iter `catchI` handler
 -- >     where
