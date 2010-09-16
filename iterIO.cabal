@@ -8,7 +8,7 @@ Author:         David Mazieres
 Stability:      experimental
 Maintainer:     http://www.scs.stanford.edu/~dm/addr/
 Category:       System, Data
-Synopsis:       Iteratee-based IO with simple pipe operators
+Synopsis:       Iteratee-based IO with pipe operators
 Extra-source-files:
         Examples/simple.hs, Examples/fgrep.hs, Examples/zpipe.hs,
         Examples/reliable/Arc4.hs, Examples/reliable/NetSim.hs,

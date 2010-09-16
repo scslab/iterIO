@@ -257,7 +257,7 @@ absUri = do
                  rfc3986_test (rfc3986_unreserved .|. rfc3986_sub_delims) c
                  || c == eord ':'
   
--- | Returns (scheme, host, path, query)
+-- | Returns (scheme, host, path, query).  See RFC 3986.
 uri :: (Monad m) => Iter L m (S, S, Maybe Int, S, S)
 uri = absUri
       <|> path
@@ -413,6 +413,10 @@ inumFromChunks = mkInumM $ getchunk
                     else lift $ do
                       skipMany (noctl >> crlf)
                       skipI crlf
+
+--
+-- Form decoding (RFC 2854)
+--
 
 {-
 postReq :: L
