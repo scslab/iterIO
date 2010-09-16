@@ -79,7 +79,7 @@ module Data.IterIO.Base
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
-    , nullI, dataI, chunkI, peekI, atEOFI, ungetI
+    , nullI, dataI, pureI, chunkI, peekI, atEOFI, ungetI
     -- * Low-level Iter-manipulation functions
     , feedI, finishI, joinI, inumBind
     -- * Some basic Inums
@@ -1098,6 +1098,14 @@ dataI :: (Monad m, ChunkData t) => Iter t m t
 dataI = iterF nextChunk
     where nextChunk (Chunk d True) | null d = throwEOFI "dataI"
           nextChunk (Chunk d _)             = return d
+
+-- | A variant of 'dataI' that reads the whole input up to an
+-- end-of-file and returns it.
+pureI :: (Monad m, ChunkData t) => Iter t m t
+pureI = loop id
+    where loop acc = do
+            Chunk t eof <- chunkI
+            if eof then return $ acc t else loop $ acc . mappend t
 
 -- | Returns the next 'Chunk' that either contains non-'null' data or
 -- has the EOF bit set.

@@ -23,7 +23,7 @@ module Data.IterIO.ListLike
     , enumFile, enumFile'
     , enumStdin
     -- * Inums
-    , inumLength
+    , inumTake, inumTakeExact
     , inumLog, inumhLog
     ) where
 
@@ -305,8 +305,8 @@ enumStdin = enumHandle stdin
 
 -- | Feed exactly some number of bytes to an 'Iter'.  Throws an error
 -- if that many bytes are not available.
-inumLength :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
-inumLength = mkInumM . loop
+inumTakeExact :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
+inumTakeExact = mkInumM . loop
     where loop n | n <= 0    = return ()
                  | otherwise = do
             t <- lift dataI
@@ -314,6 +314,12 @@ inumLength = mkInumM . loop
             iunget r
             _ <- ifeed1 h       -- Keep feeding even if Done
             loop $ n - LL.length h
+
+-- | Feed some number of bytes to an 'Iter', or feed fewer if an EOF
+-- is encountered.
+inumTake :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
+inumTake n = mkInumM $ setAutoEOF True >> ipipe (inumTakeExact n)
+
 
 -- | This inner enumerator is like 'inumNop' in that it passes
 -- unmodified 'Chunk's straight through to an iteratee.  However, it
