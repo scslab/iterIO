@@ -22,7 +22,7 @@ inumStopString pat0 = mkInumM $ nextChunk L8.empty
       nextChunk old = do
         (Chunk t eof) <- lift chunkI
         case search $ L8.append old t of
-          (a, b) | not (L8.null b) -> do lift $ Done () (chunk $ L8.drop plen b)
+          (a, b) | not (L8.null b) -> do lift $ Done () (chunk $ b)
                                          ifeed a
           (a, _) | eof             -> ifeed a
           (a, _)                   -> checkEnd a
@@ -42,13 +42,14 @@ inumStopString pat0 = mkInumM $ nextChunk L8.empty
 
 {-
 main :: IO ()
-main = enumHandle stdin |$ do
-         inumStopString (L8.pack "TheEnd") .| out
+main = enumStdin |$ do
+         inumStopString end .| stdoutI
+         match end
          liftIO $ putStrLn "\n\n*** We have reached THE END #1 ***\n\n"
-         inumStopString (L8.pack "TheEnd") .| out
+         inumStopString end .| stdoutI
+         match end
          liftIO $ putStrLn "\n\n*** We have reached THE END #2 ***\n\n"
-         out
+         stdoutI
     where
-      out = catchOrI (dataI >>= liftIO . L8.putStr)
-            (\(IterEOF _) -> return ()) (const out)
+      end = L8.pack "TheEnd"
 -}

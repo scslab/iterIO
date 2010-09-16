@@ -12,6 +12,7 @@ module Data.IterIO.ListLike
     , lineI, safeLineI
     , stringExactI, stringMaxI
     , handleI, sockDgramI
+    , stdoutI
     -- * Control requests
     , SeekMode(..)
     , SizeC(..), SeekC(..), TellC(..)
@@ -20,6 +21,7 @@ module Data.IterIO.ListLike
     , enumDgram, enumDgramFrom
     , enumHandle, enumHandle', enumNonBinHandle
     , enumFile, enumFile'
+    , enumStdin
     -- * Inums
     , inumLength
     , inumLog, inumhLog
@@ -146,11 +148,10 @@ lineI = do
 stringMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
               Int
            -> Iter t m t
-stringMaxI maxlen = IterF $ \(Chunk s eof) ->
-                    if null s && maxlen > 0 && not eof
-                    then stringMaxI maxlen
-                    else case LL.splitAt maxlen s of
-                           (h, t) -> Done h $ Chunk t eof
+stringMaxI maxlen | maxlen <= 0 = return mempty
+                  | otherwise   = iterF $ \(Chunk s eof) ->
+                                  case LL.splitAt maxlen s of
+                                    (h, t) -> Done h $ Chunk t eof
 
 -- | Return a sring that is exactly len bytes, unless an EOF is
 -- encountered in which case a shorter string is returned.
@@ -158,13 +159,10 @@ stringExactI :: (ChunkData t, LL.ListLike t e, Monad m) =>
                 Int
              -> Iter t m t
 stringExactI len | len <= 0  = return mempty
-                 | otherwise = accumulate mempty
-    where
-      accumulate acc = do
-        t <- stringMaxI (len - LL.length acc)
-        if null t then return acc else
-            let acc' = LL.append acc t
-            in if LL.length t == len then return acc' else accumulate acc'
+                 | otherwise = do
+  t <- stringMaxI len
+  let tlen = LL.length t
+  if tlen >= len then return t else LL.append t `liftM` stringMaxI (len - tlen)
 
 -- | Puts strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
 -- writes an EOF to the handle.
@@ -197,6 +195,11 @@ sockDgramI s mdest = do
   case mpkt of
     Nothing  -> return ()
     Just pkt -> liftIO (genSendTo s pkt mdest) >> sockDgramI s mdest
+
+-- | An 'Iter' that uses 'LL.hPutStr' to writes all output to
+-- 'stdout'.
+stdoutI :: (LL.ListLikeIO t e, ChunkData t, MonadIO m) => Iter t m ()
+stdoutI = putI (liftIO . LL.hPutStr stdout) (return ())
 
 --
 -- Control functions
@@ -293,6 +296,8 @@ enumFile path = mkInumM $ do
   setCtlHandler $ fileCtl h
   irepeat $ liftIO (LL.hGet h defaultChunkSize) >>= ifeed1
 
+enumStdin :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) => Onum t m a
+enumStdin = enumHandle stdin
 
 --
 -- Inums

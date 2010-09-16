@@ -20,7 +20,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          -- $Parseclike
                          , many, skipMany, sepBy, endBy, sepEndBy
                          , many1, skipMany1, sepBy1, endBy1, sepEndBy1
-                         , satisfy, char, string
+                         , satisfy, char, match, string, stringCase
                          ) where
 
 import Prelude hiding (null)
@@ -526,15 +526,36 @@ char :: (ChunkData t, LL.ListLike t e, Eq e, Enum e, Monad m) =>
         Char -> Iter t m e
 char target = satisfy (toEnum (ord target) ==) <?> show target
 
--- | Read input that exactly matches a string.
-string :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
-          String -> Iter t m t
-string fulltarget = doMatch ft
+-- | Read input that exactly matches some target.
+match :: (ChunkData t, LL.ListLike t e, Eq e, Monad m) =>
+         t -> Iter t m t
+match ft = doMatch ft
     where
-      ft = LL.fromString fulltarget
       doMatch target | LL.null target = return ft
                      | otherwise      = do
         m <- stringMaxI $ LL.length target
         if not (LL.null m) && LL.isPrefixOf m target
           then doMatch $ LL.drop (LL.length m) target
-          else expectedI (show $ LL.toString m) $ show $ LL.toString target
+          else expectedI (chunkShow m) $ chunkShow target
+
+-- | Read input that exactly matches a string.
+string :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
+          String -> Iter t m t
+string = match . LL.fromString
+
+-- | Read input that matches a string up to case.
+stringCase :: (ChunkData t, LL.ListLike t e, Enum e, Eq e, Monad m) =>
+              String -> Iter t m t
+stringCase ft = doMatch LL.empty $ ft
+    where
+      prefix a b | LL.null a = True
+                 | otherwise =
+                     if toLower (chr $ fromEnum $ LL.head a) /= toLower (head b)
+                     then False else LL.tail a `prefix` LL.tail b
+      doMatch acc target | LL.null target = return acc
+                         | otherwise      = do
+        m <- stringMaxI $ LL.length target
+        if not (LL.null m) && m `prefix` target
+          then doMatch (LL.append acc m) $ LL.drop (LL.length m) target
+          else expectedI (chunkShow m) $ chunkShow target
+

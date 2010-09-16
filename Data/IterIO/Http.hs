@@ -415,8 +415,10 @@ inumFromChunks = mkInumM $ getchunk
                       skipI crlf
 
 --
--- Form decoding (RFC 2854)
+-- Form decoding (RFC 2388)
 --
+
+-- inumPart :: (Monad m) => Inum L L m a
 
 {-
 postReq :: L
