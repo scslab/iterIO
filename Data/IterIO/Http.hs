@@ -1,11 +1,13 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
-module Data.IterIO.Http {- (HttpReq(..)
+module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
                         , Multipart(..), multipartI
-                        ) -}
+                        -- * For debugging
+                        , bcharTab, postReq
+                        )
     where
 
 import Control.Monad.Trans
@@ -27,7 +29,7 @@ import Text.Printf
 
 import Data.IterIO
 import Data.IterIO.Parse
-import Data.IterIO.Search
+-- import Data.IterIO.Search
 
 -- import System.IO
 -- import Debug.Trace
@@ -452,8 +454,8 @@ multipartI req = case reqBoundary req of
     skipline = skipWhileI (eord '\n' /=) >> char '\n' >> return ()
     findpart b = do
       match $ L.fromChunks [b]
-      last <- ((string "--" >> return True) <|> return False) <* skipline
-      if last then return Nothing else Just <$> parsepart
+      done <- ((string "--" >> return True) <|> return False) <* skipline
+      if done then return Nothing else Just <$> parsepart
     parsepart = do
       cdhdr@(field, val) <- hdr_field_val
       inumPure field .|$ stringCase "Content-Disposition"
