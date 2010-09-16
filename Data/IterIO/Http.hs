@@ -446,17 +446,17 @@ reqBoundary req = case reqContentType req of
                                           lookup (S8.pack "boundary") parms
                     _ -> Nothing
 
-skipLine :: (Monad m) => Iter L m ()
-skipLine = skipWhileI (eord '\n' /=) >> char '\n' >> return ()
-
 multipartI :: (Monad m) => HttpReq -> Iter L m (Maybe (Multipart))
 multipartI req = case reqBoundary req of
                    Just b  -> findpart $ S8.pack "--" `S8.append` b
                    Nothing -> return Nothing
   where
+    nextLine :: (Monad m) => Iter L m ()
+    nextLine = skipWhileI (\c -> c `elem` map eord " \t\r") >>
+               char '\n' >> return ()
     findpart b = do
       match $ L.fromChunks [b]
-      done <- ((string "--" >> return True) <|> return False) <* skipLine
+      done <- ((string "--" >> return True) <|> return False) <* nextLine
       if done then return Nothing else Just <$> parsepart
     parsepart = do
       cdhdr@(field, val) <- hdr_field_val
@@ -491,7 +491,7 @@ mptest = inumPure postReq |$ (httpreqI >>= getHead)
           Nothing -> return ()
           Just mp -> do liftIO $ print mp
                         (inumMultipart req ) .| stdoutI
-                        liftIO $ putStrLn "\n\n"
+                        liftIO $ putStr "\n\n"
                         getHead req
                    
 
