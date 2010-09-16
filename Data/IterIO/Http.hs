@@ -4,9 +4,9 @@ module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
-                        , Multipart(..), multipartI, inumPart
+                        , Multipart(..), multipartI, inumMultipart
                         -- * For debugging
-                        , bcharTab, postReq
+                        , bcharTab, postReq, mptest
                         )
     where
 
@@ -472,8 +472,8 @@ multipartI req = case reqBoundary req of
                  , mpHeaders = cdhdr:hdrs
                  }
 
-inumPart :: (Monad m) => HttpReq -> Inum L L m a
-inumPart req iter = flip mkInumM (iter <* nullI) $ do
+inumMultipart :: (Monad m) => HttpReq -> Inum L L m a
+inumMultipart req iter = flip mkInumM (iter <* nullI) $ do
   b <- bstr
   ipipe $ inumStopString b
   lift $ (crlf <?> chunkShow b)
@@ -481,6 +481,20 @@ inumPart req iter = flip mkInumM (iter <* nullI) $ do
       bstr = case reqBoundary req of
                Just b  -> return $ S8.pack "\r\n--" `S8.append` b
                Nothing -> lift $ throwI $ IterMiscParseErr "inumPart: no parts"
+
+mptest :: IO ()
+mptest = inumPure postReq |$ (httpreqI >>= getHead)
+    where
+      getHead req = do
+        mmp <- multipartI req
+        case mmp of
+          Nothing -> return ()
+          Just mp -> do liftIO $ print mp
+                        (inumMultipart req ) .| stdoutI
+                        liftIO $ putStrLn "\n\n"
+                        getHead req
+                   
+
 
 postReq :: L
 postReq = L8.pack
@@ -499,11 +513,11 @@ postReq = L8.pack
  \-----------------------------28986267117678495841915281966\n\
  \Content-Disposition: form-data; name=\"justatestkey\"\n\
  \\n\
- \nothing\n\
+ \nothing\r\n\
  \-----------------------------28986267117678495841915281966\n\
  \Content-Disposition: form-data; name=\"hate\"\n\
  \\n\
- \666\n\
+ \666\r\n\
  \-----------------------------28986267117678495841915281966\n\
  \Content-Disposition: form-data; name=\"file1\"; filename=\"x\"\n\
  \Content-Type: application/octet-stream\n\
@@ -512,7 +526,7 @@ postReq = L8.pack
  \nameserver 127.0.0.1\n\
  \nameserver 64.81.79.2\n\
  \nameserver 216.231.41.2\n\
- \\n\
+ \\r\n\
  \-----------------------------28986267117678495841915281966--\n"
 
 
