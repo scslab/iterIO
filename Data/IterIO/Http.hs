@@ -4,7 +4,7 @@ module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
-                        , Multipart(..), multipartI
+                        , Multipart(..), multipartI, inumPart
                         -- * For debugging
                         , bcharTab, postReq
                         )
@@ -29,7 +29,7 @@ import Text.Printf
 
 import Data.IterIO
 import Data.IterIO.Parse
--- import Data.IterIO.Search
+import Data.IterIO.Search
 
 -- import System.IO
 -- import Debug.Trace
@@ -446,22 +446,24 @@ reqBoundary req = case reqContentType req of
                                           lookup (S8.pack "boundary") parms
                     _ -> Nothing
 
+skipLine :: (Monad m) => Iter L m ()
+skipLine = skipWhileI (eord '\n' /=) >> char '\n' >> return ()
+
 multipartI :: (Monad m) => HttpReq -> Iter L m (Maybe (Multipart))
 multipartI req = case reqBoundary req of
                    Just b  -> findpart $ S8.pack "--" `S8.append` b
                    Nothing -> return Nothing
   where
-    skipline = skipWhileI (eord '\n' /=) >> char '\n' >> return ()
     findpart b = do
       match $ L.fromChunks [b]
-      done <- ((string "--" >> return True) <|> return False) <* skipline
+      done <- ((string "--" >> return True) <|> return False) <* skipLine
       if done then return Nothing else Just <$> parsepart
     parsepart = do
       cdhdr@(field, val) <- hdr_field_val
       inumPure field .|$ stringCase "Content-Disposition"
       parms <- inumPure (L.fromChunks [val]) .|$
-               many (olws >> char ';' >>
-                     (parameter <|> (token >>= \t -> return (t, S.empty))))
+               sepBy (parameter <|> (token >>= \t -> return (t, S.empty)))
+                     (olws >> char ';')
       hdrs <- many hdr_field_val
       crlf
       return Multipart {
@@ -470,6 +472,15 @@ multipartI req = case reqBoundary req of
                  , mpHeaders = cdhdr:hdrs
                  }
 
+inumPart :: (Monad m) => HttpReq -> Inum L L m a
+inumPart req iter = flip mkInumM (iter <* nullI) $ do
+  b <- bstr
+  ipipe $ inumStopString b
+  lift $ (crlf <?> chunkShow b)
+    where
+      bstr = case reqBoundary req of
+               Just b  -> return $ S8.pack "\r\n--" `S8.append` b
+               Nothing -> lift $ throwI $ IterMiscParseErr "inumPart: no parts"
 
 postReq :: L
 postReq = L8.pack
