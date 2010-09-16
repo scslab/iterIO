@@ -1,10 +1,12 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
-module Data.IterIO.Http (HttpReq(..)
+module Data.IterIO.Http {- (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
-                        ) where
+                        , Multipart(..), multipartI
+                        ) -}
+    where
 
 import Control.Monad.Trans
 import Data.Array.Unboxed
@@ -25,7 +27,7 @@ import Text.Printf
 
 import Data.IterIO
 import Data.IterIO.Parse
--- import Data.IterIO.Search
+import Data.IterIO.Search
 
 -- import System.IO
 -- import Debug.Trace
@@ -127,7 +129,7 @@ percent_decode test = foldrI L.cons' L.empty getc
     where
       getc = do
         c <- headI
-        case c :: Word8 of
+        case c of
           _ | c == eord '%' -> getval
           _ | test c        -> return c
           _                 -> expectedI (show c) "percent_decode predicate"
@@ -158,7 +160,7 @@ qvalue = do char 'q'; olws; char '='; olws; frac <|> one
     where
       frac = do char '0'
                 char '.' \/ return 0 $ \_ ->
-                    whileMinMaxI 1 3 (isDigit . w2c) \/ return 0 $ readI
+                    whileMinMaxI 0 3 (isDigit . w2c) \/ return 0 $ readI
       one = do char '1'
                optional $ do char '.'
                              optional $ whileMinMaxI 0 3 (== eord '0')
@@ -174,7 +176,7 @@ parameter = do
 
 
 --
--- URI parsing
+-- URI parsing (RFC 3986)
 --
 
 -- | RFC3986 syntax classes unreserved characters
@@ -257,7 +259,7 @@ absUri = do
                  rfc3986_test (rfc3986_unreserved .|. rfc3986_sub_delims) c
                  || c == eord ':'
   
--- | Returns (scheme, host, path, query).  See RFC 3986.
+-- | Returns (scheme, host, path, query).
 uri :: (Monad m) => Iter L m (S, S, Maybe Int, S, S)
 uri = absUri
       <|> path
@@ -358,13 +360,18 @@ content_type_hdr req = do
   parms <- many $ olws >> char ';' >> parameter
   return req { reqContentType = Just (typ, parms) }
 
-any_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
-any_hdr req = do
+hdr_field_val :: (Monad m) => Iter L m (S, S)
+hdr_field_val = do
   field <- S8.map toLower <$> token
   char ':'
   olws
   val <- strictify <$> text
   crlf
+  return (field, val)
+
+any_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+any_hdr req = do
+  (field, val) <- hdr_field_val
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
   case Map.lookup field request_headers of
     Nothing -> return req'
@@ -386,7 +393,7 @@ httpreqI = do
 
 
 --
--- Cunk encoding and decoding
+-- Cunk encoding and decoding (RFC 2616)
 --
 
 -- | HTTP Chunk encoder
@@ -415,12 +422,53 @@ inumFromChunks = mkInumM $ getchunk
                       skipI crlf
 
 --
--- Form decoding (RFC 2388)
+-- Form decoding (RFC 2388, RFC 2046)
 --
 
--- inumPart :: (Monad m) => Inum L L m a
+-- | Mime boundary characters
+bcharTab :: UArray Word8 Bool
+bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
+    where
+      isBChar c = isAlphaNum c || elem c otherBChars
+      otherBChars = "'()/+_,-./:=? "
 
-{-
+data Multipart = Multipart {
+      mpName :: S
+    , mpParams :: [(S, S)]
+    , mpHeaders :: [(S, S)]
+    } deriving (Show)
+
+reqBoundary :: HttpReq -> Maybe S
+reqBoundary req = case reqContentType req of
+                    Just (typ, parms) | typ == S8.pack "multipart/form-data" ->
+                                          lookup (S8.pack "boundary") parms
+                    _ -> Nothing
+
+multipartI :: (Monad m) => HttpReq -> Iter L m (Maybe (Multipart))
+multipartI req = case reqBoundary req of
+                   Just b  -> findpart $ S8.pack "--" `S8.append` b
+                   Nothing -> return Nothing
+  where
+    skipline = skipWhileI (eord '\n' /=) >> char '\n' >> return ()
+    findpart b = do
+      match $ L.fromChunks [b]
+      last <- ((string "--" >> return True) <|> return False) <* skipline
+      if last then return Nothing else Just <$> parsepart
+    parsepart = do
+      cdhdr@(field, val) <- hdr_field_val
+      inumPure field .|$ stringCase "Content-Disposition"
+      parms <- inumPure (L.fromChunks [val]) .|$
+               many (olws >> char ';' >>
+                     (parameter <|> (token >>= \t -> return (t, S.empty))))
+      hdrs <- many hdr_field_val
+      crlf
+      return Multipart {
+                   mpName = maybe S.empty id $ lookup (S8.pack "name") parms
+                 , mpParams = parms
+                 , mpHeaders = cdhdr:hdrs
+                 }
+
+
 postReq :: L
 postReq = L8.pack
  "POST /testSubmit HTTP/1.1\n\
@@ -455,12 +503,7 @@ postReq = L8.pack
  \-----------------------------28986267117678495841915281966--\n"
 
 
--- | Mime boundary characters
-bcharTab :: UArray Word8 Bool
-bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
-    where
-      isBChar c = isAlphaNum c || elem c otherBChars
-      otherBChars = "'()/+_,-./:=? "
+{-
 -}
 
 

@@ -23,16 +23,18 @@ myListen pn = do
   Net.listen sock Net.maxListenQueue
   return sock
 
+{-
 testreq :: (MonadIO m) => Iter L m ()
 testreq = do
   req <- httpreqI
   liftIO $ print req
+-}
 
-main :: IO ()
+main :: IO HttpReq
 main = Net.withSocketsDo $ do
          sock <- myListen port
          (s, addr) <- Net.accept sock
          print addr
          h <- Net.socketToHandle s IO.ReadWriteMode
          Net.sClose sock
-         enumHandle h |. inumLog "http.log" True |$ testreq
+         enumHandle h |. inumLog "http.log" True |$ httpreqI

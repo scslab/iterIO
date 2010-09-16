@@ -11,11 +11,10 @@ import Data.IterIO
 
 -- | Feeds input to an Iteratee until some boundary string is found.
 inumStopString :: (Monad m) =>
-                  L8.ByteString
+                  S8.ByteString
                -> Inum L8.ByteString L8.ByteString m a
-inumStopString pat0 = mkInumM $ nextChunk L8.empty
+inumStopString spat = mkInumM $ nextChunk L8.empty
     where
-      spat = Search.strictify pat0
       lpat = L8.fromChunks [spat]
       plen = toEnum $ S8.length spat
       search = Search.breakOn spat

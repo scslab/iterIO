@@ -255,8 +255,9 @@ ensureI test = do
 
 -- | Skip all input elements encountered until an element is found
 -- that does not match the specified predicate.
-skipWhileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m ()
-skipWhileI test = IterF $ \(Chunk t eof) ->
+skipWhileI :: (ChunkData t, LL.ListLike t e, Monad m) =>
+              (e -> Bool) -> Iter t m ()
+skipWhileI test = iterF $ \(Chunk t eof) ->
                   case LL.dropWhile test t of
                     t1 | LL.null t1 && not eof -> skipWhileI test
                     t1 -> Done () $ Chunk t1 eof
@@ -329,10 +330,11 @@ whilePredsI preds = do
 
 -- | Return all input elements up to the first one that does not match
 -- the specified predicate.
-whileI :: (LL.ListLike t e, Monad m) => (e -> Bool) -> Iter t m t
+whileI :: (ChunkData t, LL.ListLike t e, Monad m)
+          => (e -> Bool) -> Iter t m t
 whileI test = more LL.empty
     where
-      more t0 = IterF $ \(Chunk t eof) ->
+      more t0 = iterF $ \(Chunk t eof) ->
                 case LL.span test t of
                   (t1, t2) | not (LL.null t2) || eof ->
                                Done (LL.append t0 t1) $ Chunk t2 eof
@@ -349,7 +351,7 @@ whileMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
              Int                  -- ^ Maximum number to match
           -> (e -> Bool)          -- ^ Predicate test
           -> Iter t m t
-whileMaxI nmax test = IterF $ \(Chunk t eof) ->
+whileMaxI nmax test = iterF $ \(Chunk t eof) ->
         let s = LL.takeWhile test $ LL.take nmax t
             slen = LL.length s
             rest = LL.drop slen t
