@@ -1,7 +1,7 @@
 
 module Main where
 
-import Control.Monad.Trans
+-- import Control.Monad.Trans
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Network.Socket as Net
 import qualified System.IO as IO
