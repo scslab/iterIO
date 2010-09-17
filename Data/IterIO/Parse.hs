@@ -183,8 +183,13 @@ expectedI :: String             -- ^ Input actually received
           -> Iter t m a
 expectedI saw target = throwI $ IterExpected saw [target]
 
--- | Executes an 'Iter' returning a 'LL.ListLike' type, asserts that
--- the type is not empty.
+-- | Takes an 'Iter' returning a 'LL.ListLike' type, executes the
+-- 'Iter' once, and throws a parse error if the returned value is
+-- 'LL.null'.  (Note that this is quite different from the @'some'@
+-- method of the @'Alternative'@ class in "Control.Applicative", which
+-- executes a computation one /or more/ times.  This library does not
+-- use @'Alternative'@ because @`Alternative`@'s @\<|\>@ operator has
+-- left instead of right fixity.)
 someI :: (ChunkData t, Monad m, LL.ListLike a e) => Iter t m a -> Iter t m a
 someI iter = flip (<?>) "someI" $ do
   a <- iter

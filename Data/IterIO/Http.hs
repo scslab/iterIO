@@ -470,7 +470,7 @@ urlencTab = listArray (0, 127) $ fmap ok ['\0'..'\177']
                | otherwise       = True
 
 controlI :: (Monad m) => Iter L m (S, S)
-controlI = do
+controlI = flip (<?>) "form control NAME=VALUE" $ do
   name <- encval
   value <- (char '=' >> encval) <|> nil
   return (name, value)
