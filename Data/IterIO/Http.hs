@@ -424,10 +424,41 @@ inumFromChunks = mkInumM $ getchunk
                       skipI crlf
 
 --
--- application/x-www-form-urlencoded
+-- application/x-www-form-urlencoded decoding
 --
--- Where is this specified??
+-- The HTML 4.01 spec says:
 --
+--   This is the default content type. Forms submitted with this
+--   content type must be encoded as follows:
+--       
+--    1. Control names and values are escaped. Space characters are
+--       replaced by `+', and then reserved characters are escaped as
+--       described in [RFC1738], section 2.2: Non-alphanumeric characters
+--       are replaced by `%HH', a percent sign and two hexadecimal digits
+--       representing the ASCII code of the character. Line breaks are
+--       represented as "CR LF" pairs (i.e., `%0D%0A').
+-- 
+--    2. The control names/values are listed in the order they appear in
+--       the document. The name is separated from the value by `=' and
+--       name/value pairs are separated from each other by `&'.
+--
+-- RFC 1738 says:
+--
+--   ...only alphanumerics, the special characters "$-_.+!*'(),", and
+--   reserved characters used for their reserved purposes may be used
+--   unencoded within a URL.
+--
+-- On the other hand, RFC 2986 says the following are reserved:
+--   :/?#[]@!$&'()*+,;=
+--
+-- And that the only unreserved characters are:
+--   unreserved  = ALPHA / DIGIT / "-" / "." / "_" / "~"
+--
+-- In practice, browsers seem to encode everything (including "~"),
+-- except for ALPHA, DIGIT, and the four characters:
+--   -._*
+
+
 
 --
 -- multipart/form-data decoding, as specified throughout the following:
