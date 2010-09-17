@@ -5,7 +5,7 @@
 
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orEmpty, (<?>), expectedI
-                         , foldrI, foldr1I, foldrMinMaxI
+                         , someI, foldrI, foldr1I, foldrMinMaxI
                          , foldlI, foldl1I, foldMI, foldM1I
                          , skipI, ensureI
                          , skipWhileI, skipWhile1I
@@ -14,8 +14,8 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , concatI, concat1I, concatMinMaxI
                          , readI, eofI
                          -- * Applicative combinators
-                         , (<$>), (<$), Applicative(..), (<**>)
-                         , (>$>), (<++>), (<:>), nil
+                         , (<$>), (<$), ($>), (>$>), Applicative(..), (<**>)
+                         , (<++>), (<:>), nil
                          -- * Parsing Iteratees
                          -- $Parseclike
                          , many, skipMany, sepBy, endBy, sepEndBy
@@ -103,6 +103,15 @@ infix 2 \/
 (>$>) f a t = f t <$> a
 infixr 3 >$>
 
+-- | @fa $> b = b <$ fa@ -- replaces the output value of a functor
+-- with some pure value.  Has the same fixity as '<$>' and '<$',
+-- namely:
+--
+-- > infixl 4 $>
+($>) :: (Functor f) => f a -> b -> f b
+($>) = flip (<$)
+infixl 4 $>
+
 
 {-
 -- | @orI@ is a version of '<|>' with infinite backtracking, allowing
@@ -173,6 +182,13 @@ expectedI :: String             -- ^ Input actually received
           -> String             -- ^ Description of input that was wanted
           -> Iter t m a
 expectedI saw target = throwI $ IterExpected saw [target]
+
+-- | Executes an 'Iter' returning a 'LL.ListLike' type, asserts that
+-- the type is not empty.
+someI :: (ChunkData t, Monad m, LL.ListLike a e) => Iter t m a -> Iter t m a
+someI iter = flip (<?>) "someI" $ do
+  a <- iter
+  if LL.null a then throwI $ IterMiscParseErr "someI" else return a
 
 -- | Repeatedly invoke an 'Iter' and right-fold a function over the
 -- results.

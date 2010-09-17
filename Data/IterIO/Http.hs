@@ -4,13 +4,13 @@ module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
-                        , form_urlencoded
+                        , urlencodedFormI
                         , Multipart(..), multipartI, inumMultipart
                         -- * For debugging
-                        , bcharTab, postReq, mptest
-                        )
-    where
+                        , postReq, mptest
+                        ) where
 
+import Control.Monad
 import Control.Monad.Trans
 import Data.Array.Unboxed
 import Data.Bits
@@ -464,26 +464,23 @@ inumFromChunks = mkInumM $ getchunk
 
 urlencTab :: UArray Word8 Bool
 urlencTab = listArray (0, 127) $ fmap ok ['\0'..'\177']
-    where ok c | c <= ' '       = False
-               | c >= '\177'    = False
-               | c `elem` "+&=" = False
-               | otherwise      = True
+    where ok c | c <= ' '        = False
+               | c >= '\177'     = False
+               | c `elem` "%+&=" = False
+               | otherwise       = True
 
 controlI :: (Monad m) => Iter L m (S, S)
-controlI = undefined $ urlencTab
-{-
 controlI = do
   name <- encval
   value <- (char '=' >> encval) <|> nil
   return (name, value)
     where
-      encval = fmap strictify $ many1 $
-               while1I (urlencTab !) <|> (char '+' *> return spc)
-      spc = L8.singleton ' '
--}
+      encval = liftM strictify $ concat1I $
+               someI (percent_decode (urlencTab !))
+               <|> L8.singleton ' ' <$ char '+'
 
-form_urlencoded :: (Monad m) => Iter L m [(S,S)]
-form_urlencoded = sepBy controlI (char '&')
+urlencodedFormI :: (Monad m) => Iter L m [(S,S)]
+urlencodedFormI = sepBy controlI (char '&')
 
 --
 -- multipart/form-data decoding, as specified throughout the following:
@@ -498,11 +495,13 @@ form_urlencoded = sepBy controlI (char '&')
 -- RFC 2388 - multipart/form data spec (mostly references above)
 --
 
+{-
 -- | Mime boundary characters
 bcharTab :: UArray Word8 Bool
 bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
     where isBChar c = isAlphaNum c || elem c otherBChars
           otherBChars = "'()/+_,-./:=? "
+-}
 
 data Multipart = Multipart {
       mpName :: S
