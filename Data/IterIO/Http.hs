@@ -424,7 +424,22 @@ inumFromChunks = mkInumM $ getchunk
                       skipI crlf
 
 --
--- Form decoding (RFC 2388, RFC 2046)
+-- application/x-www-form-urlencoded
+--
+-- Where is this specified??
+--
+
+--
+-- multipart/form-data decoding, as specified throughout the following:
+--
+-- RFC 2045 - MIME part 1, including Content-Type header grammar
+-- RFC 2046 - MIME part 2, including multipart boundary grammar
+-- RFC 2047 - (splitting up parameters - not implemented yet here)
+-- RFC 2183 - The Content-Disposition header grammar
+-- 
+-- Less useful, but normative:
+--
+-- RFC 2388 - multipart/form data spec (mostly references above)
 --
 
 -- | Mime boundary characters
