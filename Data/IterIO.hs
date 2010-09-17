@@ -3,8 +3,11 @@
 -- exports several other internal modules.  This module's
 -- documentation gives a high-level overview of the iteratee model,
 -- intended more as an introduction than as a reference.  See the
--- "Data.IterIO.Base" and "Data.IterIO.ListLike" modules for more
--- detailed documentation of data structures and functions.
+-- "Data.IterIO.Base", "Data.IterIO.Inum", and "Data.IterIO.ListLike"
+-- modules for more detailed documentation of data structures and
+-- functions.  You may also wish to import "Data.IterIO.Parse", which
+-- includes parsec-like parsing combinators and is not exported by
+-- this default module.
 module Data.IterIO
     (module Data.IterIO.Base
     , module Data.IterIO.Inum
@@ -17,6 +20,7 @@ module Data.IterIO
 import Data.IterIO.Base hiding (null, run -- names that might collide
                                , tidTrace
                                )
+import qualified Data.IterIO.Base as IterIO
 import Data.IterIO.Inum
 import Data.IterIO.ListLike
 
@@ -35,14 +39,17 @@ Enumerators, implemented by the type 'Onum' (short for
 called because they enumerate all data elements (e.g., bytes or
 packets) in some source such as a file or socket.  Hence, an
 enumerator should be viewed as a /source/ outputting chunks of data
-whose type is a @'Monoid'@.
+whose type is a @'Monoid'@.  (Actually, the input type must be of
+class 'ChunkData', which is a @'Monoid'@ that additionally has a
+method 'IterIO.null' to test whether a piece of data is equal to
+'mempty'.)
 
-Conversely, iteratees, implemented by the type 'Iter', should be
-viewed as /sinks/ consuming data.  When executing IO, the library
-/iterates/ over all data elements output by the source, using an
-iteratee to produce a result.  The source may output data in chunks
-whose boundaries do not coincide with logical message units; iteratees
-handle this transparently, simplifying programming.
+Iteratees, implemented by the type 'Iter', should be viewed as /sinks/
+consuming data.  When executing IO, the library /iterates/ over all
+data elements output by the source, using an iteratee to produce a
+result.  The source may output data in chunks whose boundaries do not
+coincide with logical message units; iteratees handle this
+transparently, simplifying programming.
 
 Here is a simple example:
 
@@ -58,30 +65,31 @@ that applies an 'Onum' to an 'Iter', returning the result of the
 'Iter'--in this case the first line of the file named @path@.
 
 An `Iter`'s main purpose may not be to produce a result.  Some 'Iter's
-are primarily useful for their side effects.  For example, 'handleI'
-writes data to a file handle.  Thus, the following function copies the
+are primarily useful for their side effects.  For example, 'stdoutI'
+writes data to standard output; 'handleI' similarly writes output to
+an arbitrary file handle.  Thus, the following function copies the
 contents of a file to standard output:
 
 @
     -- Copy file to standard output
     catFile :: FilePath -> IO ()
-    catFile path = 'enumFile'' path '|$' 'handleI' stdout
+    catFile path = 'enumFile'' path '|$' 'stdoutI'
 @
 
 'enumFile'' is like 'enumFile' above, but type restricted to data in
-the lazy 'ByteString' format, which is more efficient than plain
+the lazy @'ByteString'@ format, which is more efficient than plain
 'String's.  ('enumFile' supports multiple types, but in this example
 there is not enough information for Haskell to choose one of them, so
 we must use 'enumfile'' or use @::@ to specify a type explicitly.)
 Once again, '|$' is used to execute the IO actions, but, this time,
 the return value is just @()@; the interesting action lies in the side
 effects of writing data to standard output while iterating over the
-input with 'handleI'.
+input with 'stdoutI'.
 
 The real power of the iteratee abstraction lies in the fact that
-'Iter's are monad computations.  One 'Iter' may invoke another to make use of the
-first one's results.  Here is an example of a function that returns
-the first two lines of a file:
+'Iter's are monadic computations.  One 'Iter' may invoke another to
+make use of the first one's results.  Here is an example of a function
+that returns the first two lines of a file:
 
 @
     -- | Return first two lines of file
@@ -123,13 +131,13 @@ Both of these actions are hidden by the syntax, making most code much
 easier to read and write.
 
 That explains the iteratee type 'Iter'.  The enumerator type, 'Onum',
-has the same three type arguments.  Thus, the type of 'enumFile' as
-instantiated in the above examples is @'enumFile' :: 'Onum' String IO
+has the same three type arguments.  Thus, the type of 'enumFile', as
+instantiated in the above examples, is @'enumFile' :: 'Onum' String IO
 a@.  Most 'Onum' types are polymorphic in the last argument, so as to
 be able to return whatever type the 'Iter' is returning.  (In fact,
 'enumFile' is polymorphic in the first two arguments, too, so as to
-work with multiple String-like types and any monad in the @'MonadIO'@
-class.)
+work with multiple @String@-like types and any monad in the
+@'MonadIO'@ class.)
 
 Here is an example of an 'Iter' with side effects:
 
@@ -137,9 +145,9 @@ Here is an example of an 'Iter' with side effects:
     liftIOexampleI :: (MonadIO m) => 'Iter' String m ()
     liftIOexampleI = do
       line <- 'lineI'
-      liftIO $ putStrLn $ \"First line is: \" ++ line
+      'liftIO' $ putStrLn $ \"First line is: \" ++ line
       next <- 'stringExactI' 40
-      liftIO $ putStrLn $ \"And the next 40 bytes are: \" ++ next
+      'liftIO' $ putStrLn $ \"And the next 40 bytes are: \" ++ next
 @
 
 Unlike @lines2I@, @liftIOexampleI@ does not return any interesting
