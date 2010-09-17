@@ -556,7 +556,7 @@ match ft = doMatch ft
     where
       doMatch target | LL.null target = return ft
                      | otherwise      = do
-        m <- stringMaxI $ LL.length target
+        m <- takeI $ LL.length target
         if not (LL.null m) && LL.isPrefixOf m target
           then doMatch $ LL.drop (LL.length m) target
           else expectedI (chunkShow m) $ chunkShow target
@@ -577,7 +577,7 @@ stringCase ft = doMatch LL.empty $ ft
                      then False else LL.tail a `prefix` LL.tail b
       doMatch acc target | LL.null target = return acc
                          | otherwise      = do
-        m <- stringMaxI $ LL.length target
+        m <- takeI $ LL.length target
         if not (LL.null m) && m `prefix` target
           then doMatch (LL.append acc m) $ LL.drop (LL.length m) target
           else expectedI (chunkShow m) $ chunkShow target

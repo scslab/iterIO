@@ -269,7 +269,7 @@ lS n | n <= 0 = L.empty
 expectI :: (Monad m) => L.ByteString -> Iter L.ByteString m Bool
 expectI goal | L.null goal = return True
              | otherwise = do
-  actual <- stringMaxI $ fromIntegral L.defaultChunkSize
+  actual <- takeI $ fromIntegral L.defaultChunkSize
   if L.isPrefixOf actual goal
     then expectI $ L.drop (L.length actual) goal
     else return False
@@ -291,7 +291,7 @@ lE n0 = mkInumM $ codec n0
 
 packE :: (Monad m) => Inum L.ByteString L.ByteString m a
 packE = mkInum $ do
-  packet' <- stringExactI $ fromIntegral L.defaultChunkSize
+  packet' <- takeExactI $ fromIntegral L.defaultChunkSize
   let packet = L.fromChunks [S8.concat $ L.toChunks packet']
   return packet
 
@@ -299,7 +299,7 @@ cE :: (Monad m) => Char -> Int -> Onum L.ByteString m a
 cE c len = inumPure $ L8.replicate (fromIntegral len) c
 nI :: (Monad m) => Int -> Iter L.ByteString m Bool
 nI n = do
-  s <- stringMaxI $ fromIntegral n
+  s <- takeI $ fromIntegral n
   case n - (fromIntegral $ L.length s) of
     0            -> return True
     n' | n == n' -> return False
@@ -322,7 +322,7 @@ a4I key len = iter (a4new key) len
       iter a4 n
           | n == 0    = return True
           | otherwise = -- traceShow n $
-              do bytes <- stringMaxI $ fromIntegral n
+              do bytes <- takeI $ fromIntegral n
                  -- liftIO $ putTraceMsg $ "got " ++ show (L.length bytes)
                  if L.length bytes == 0
                    then return False

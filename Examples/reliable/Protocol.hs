@@ -89,7 +89,7 @@ relSend ep fork iter = doSend 0 1
         when (acked == acked') $ liftIO $ readSampleVar (epAck ep)
         doSend acked' next
       doSend acked next = do
-        payload <- stringMaxI 500
+        payload <- takeI 500
         liftIO $ modifyMVar_ (epLFS ep) $ \_ -> do
           when (L.null payload) $ modifyMVar_ (epWEOF ep) (\_ -> return True)
           liftIO $ writeSampleVar (epSnd ep) ()

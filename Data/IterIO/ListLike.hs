@@ -10,7 +10,7 @@ module Data.IterIO.ListLike
     , headLI, safeHeadLI
     , headI, safeHeadI
     , lineI, safeLineI
-    , stringExactI, stringMaxI
+    , takeExactI, takeI
     , handleI, sockDgramI
     , stdoutI
     -- * Control requests
@@ -142,27 +142,25 @@ lineI = do
     Nothing -> throwEOFI "lineI"
     Just line -> return line
 
--- | Return a string that is at most the number of bytes specified in
--- the first arguments, and at least one byte unless EOF is
--- encountered, in which case the empty string is returned.
-stringMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
-              Int
-           -> Iter t m t
-stringMaxI maxlen | maxlen <= 0 = return mempty
-                  | otherwise   = iterF $ \(Chunk s eof) ->
-                                  case LL.splitAt maxlen s of
-                                    (h, t) -> Done h $ Chunk t eof
+-- | Return 'LL.ListLike' data that is at most the number of elements
+-- specified by the first argument, and at least one element unless
+-- EOF is encountered or 0 elements are requested, in which case
+-- 'LL.empty' is returned.
+takeI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
+takeI maxlen | maxlen <= 0 = return mempty
+             | otherwise   = iterF $ \(Chunk s eof) ->
+                             case LL.splitAt maxlen s of
+                               (h, t) -> Done h $ Chunk t eof
 
--- | Return a sring that is exactly len bytes, unless an EOF is
--- encountered in which case a shorter string is returned.
-stringExactI :: (ChunkData t, LL.ListLike t e, Monad m) =>
-                Int
-             -> Iter t m t
-stringExactI len | len <= 0  = return mempty
-                 | otherwise = do
-  t <- stringMaxI len
+-- | Return 'LL.ListLike' data that is exactly some number of
+-- elements, unless an EOF is encountered in which case fewer may be
+-- returned.
+takeExactI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
+takeExactI len | len <= 0  = return mempty
+               | otherwise = do
+  t <- takeI len
   let tlen = LL.length t
-  if tlen >= len then return t else LL.append t `liftM` stringMaxI (len - tlen)
+  if tlen >= len then return t else LL.append t `liftM` takeI (len - tlen)
 
 -- | Puts strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
 -- writes an EOF to the handle.

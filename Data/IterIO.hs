@@ -20,7 +20,6 @@ module Data.IterIO
 import Data.IterIO.Base hiding (null, run -- names that might collide
                                , tidTrace
                                )
-import qualified Data.IterIO.Base as IterIO
 import Data.IterIO.Inum
 import Data.IterIO.ListLike
 
@@ -41,7 +40,7 @@ packets) in some source such as a file or socket.  Hence, an
 enumerator should be viewed as a /source/ outputting chunks of data
 whose type is a @'Monoid'@.  (Actually, the input type must be of
 class 'ChunkData', which is a @'Monoid'@ that additionally has a
-method 'IterIO.null' to test whether a piece of data is equal to
+method @'null'@ to test whether a piece of data is equal to
 'mempty'.)
 
 Iteratees, implemented by the type 'Iter', should be viewed as /sinks/
@@ -146,14 +145,14 @@ Here is an example of an 'Iter' with side effects:
     liftIOexampleI = do
       line <- 'lineI'
       'liftIO' $ putStrLn $ \"First line is: \" ++ line
-      next <- 'stringExactI' 40
+      next <- 'takeExactI' 40
       'liftIO' $ putStrLn $ \"And the next 40 bytes are: \" ++ next
 @
 
 Unlike @lines2I@, @liftIOexampleI@ does not return any interesting
 result, but it uses the @'liftIO'@ monad transformer method to output
 the first line of the file, followed by the next 40 bytes.  The
-'stringExactI' iteratee returns a 'String' (or 'ByteString') with exactly the
+'takeExactI' iteratee returns a 'String' (or 'ByteString') with exactly the
 requested number of bytes, unless an EOF (end-of-file) is encountered.
 
 Of course, the real power of command pipelines is that you can hook
