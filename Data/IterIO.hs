@@ -152,8 +152,9 @@ Here is an example of an 'Iter' with side effects:
 Unlike @lines2I@, @liftIOexampleI@ does not return any interesting
 result, but it uses the @'liftIO'@ monad transformer method to output
 the first line of the file, followed by the next 40 bytes.  The
-'takeExactI' iteratee returns a 'String' (or 'ByteString') with exactly the
-requested number of bytes, unless an EOF (end-of-file) is encountered.
+'takeExactI' iteratee returns a 'String' (or @ByteString@) with
+exactly the requested number of characters or bytes, unless an EOF
+(end-of-file) is encountered.
 
 Of course, the real power of command pipelines is that you can hook
 multiple commands together.  For instance, say you want to know how
@@ -211,9 +212,9 @@ roles.  In the above example, when acting as an iteratee,
 @inumToLines@ consumes data of type @S.ByteString@ (the first type
 argument), accepting one long stream of unstructured bytes.  However,
 as an enumerator, @inumToLines@ produces output of type
-@[S.ByteString]@ (the second type argument)--a /list/ of strings, one
+@[S.ByteString]@ (the second type argument), a /list/ of strings, one
 per line of the file.  In general the type @'Inum' tIn tOut m a@ is an
-iteratee-enumerator taking input type @tin@, producing output type
+iteratee-enumerator taking input type @tIn@, producing output type
 @tOut@, and feeding the output to an iteratee of type @'Iter' tOut m
 a@.
 
@@ -221,22 +222,28 @@ In fact, an 'Onum' is just a special kind of 'Inum' with the void
 input type @()@.  The type @'Onum' t m a@ is just a synonym for
 @'Inum' () t m a@.  Most operations on 'Inum's can be used with
 'Onum's as well, since an 'Onum' /is/ an 'Inum'.  The converse is not
-true, however.  For examply, the '|$' operator requires an 'Onum', as
-it wouldn't know what data to feed to an arbitrary 'Inum'.
+true, however.  For example, the '|$' operator requires an 'Onum', as
+it wouldn't know what data to feed to an arbitrary 'Inum'.  (There is,
+however, a function @run@ in "Data.IterIO.Base", not re-exported by
+this module, than you can use to apply an arbitrary 'Inum' to an
+'Iter' by just feeding the 'Inum' EOF as input.)
 
 Iteratee-enumerators are generally constructed using either 'mkInum'
-or `mkInumM`, and by convention most 'Inum' functions have names
-starting \"@inum@...\".  'mkInum' takes an argument of type @Iter tIn
-m tOut@ that consumes input of type @tIn@ to produce output of type
-@tOut@.  (For @inumToLines@, @tIn@ is @S.ByteString@ and @tOut@ is
+or `mkInumM`, and by convention most 'Inum's have names starting
+\"@inum@...\".  'mkInum' takes an argument of type @Iter tIn m tOut@
+that consumes input of type @tIn@ to produce output of type @tOut@.
+(For @inumToLines@, @tIn@ is @S.ByteString@ and @tOut@ is
 @[S.ByteString]@).  This is fine for simple stateless translation
 functions, but sometimes one would like to keep state and use more
 complex logic in an 'Inum'.  For that, the 'mkInumM' function creates
-an 'Inum' out of a computation in a dedicated 'InumM' monad.  In
-@inumToLines@, we do not need to keep state.  We are happy just to let
-'lineI' throw an exception on EOF, which `mkInum` will catch and
-handle gracefully.  (Throwing exceptions of type 'IterEOF' is the
-standard way of exiting an 'Inum' created by 'mkInum'.)
+an 'Inum' out of a computation in a dedicated 'InumM' monad.  See the
+"Data.IterIO.Inum" documentation for more informaiton on 'mkInumM'.
+In @inumToLines@, we do not need to keep state.  We are happy just to
+let 'lineI' throw an exception on EOF, which `mkInum` will catch and
+handle gracefully.  (Throwing an exception of type 'IterEOF'--either
+implicitly by executing another 'Iter' or explicitly with
+'throwEOFI'--is the standard way to exit an 'Inum' created by
+'mkInum'.)
 
 We similarly define an 'Inum' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),
@@ -314,15 +321,15 @@ alternatively have been implemented as:
 
 In this case, the two are essentially equivalent.  However, for error
 handling purposes, one should fuse together pipeline stages in which
-errors have similar consequences.  Often an 'Inum' failure is less
-serious than an 'Iter' failure.  For example, in the above example, if
-'enumFile' fails because one of the files does not exist, we might
-want to continue processing lines from the next file.  Conversely, if
-@lengthI@ fails or one of the @inumGrep@ stages fails (possibly
-because the regular expression is illegal), there is not much point in
-continuing the program.  This is why the first example fused
-@inumGrep@ to @lengthI@, though this won't matter until we actually
-handle errors (see below).
+errors have similar consequences.  Often an 'Inum' or 'Onum' failure
+is less serious than an 'Iter' failure.  For example, in the above
+example, if 'enumFile' fails because one of the files does not exist,
+we might want to continue processing lines from the next file.
+Conversely, if @lengthI@ fails or one of the @inumGrep@ stages fails
+(possibly because the regular expression is illegal), there is not
+much point in continuing the program.  This is why the first example
+fused @inumGrep@ to @lengthI@, though this won't matter until we
+actually handle errors (see below).
 
 Another alternative would have been to swap the order of concatenation
 and fusing:
@@ -354,7 +361,7 @@ string in a bunch of files and prints all matching lines.  If opening
 or reading a file produces an error, the function should print the
 error message and continue on with the next file.
 
-Error handling is provided by the 'catchI', 'inumCatch' functions,
+Error handling is provided by the 'catchI' and 'inumCatch' functions,
 which are roughly equivalent to the standard library @'catch'@
 function.  There is also a 'throwI' function analogous to @'throwIO'@
 in the standard library.  Because @'catch'@ only works in the IO

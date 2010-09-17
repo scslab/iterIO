@@ -2,3 +2,4 @@ To install required packages:
 
 	cabal update
 	cabal install ListLike zlib HSOpenSSL stringsearch
+	cabal install binary regex-posix xhtml utf8-string
