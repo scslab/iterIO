@@ -4,6 +4,7 @@ module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
+                        , form_urlencoded
                         , Multipart(..), multipartI, inumMultipart
                         -- * For debugging
                         , bcharTab, postReq, mptest
@@ -418,7 +419,7 @@ inumFromChunks = mkInumM $ getchunk
       chunk_ext = do char ';'; osp; token; osp; optional chunk_ext_val
       getchunk = do
         size <- lift $ hexInt <* (osp >> skipMany chunk_ext >> crlf)
-        if size > 0 then ipipe (inumLength size) >> getchunk
+        if size > 0 then ipipe (inumTakeExact size) >> getchunk
                     else lift $ do
                       skipMany (noctl >> crlf)
                       skipI crlf
@@ -457,8 +458,32 @@ inumFromChunks = mkInumM $ getchunk
 -- In practice, browsers seem to encode everything (including "~"),
 -- except for ALPHA, DIGIT, and the four characters:
 --   -._*
+--
+-- Given the confusion, we'll just almost everything except '&' and
+-- '='.
 
+urlencTab :: UArray Word8 Bool
+urlencTab = listArray (0, 127) $ fmap ok ['\0'..'\177']
+    where ok c | c <= ' '       = False
+               | c >= '\177'    = False
+               | c `elem` "+&=" = False
+               | otherwise      = True
 
+controlI :: (Monad m) => Iter L m (S, S)
+controlI = undefined $ urlencTab
+{-
+controlI = do
+  name <- encval
+  value <- (char '=' >> encval) <|> nil
+  return (name, value)
+    where
+      encval = fmap strictify $ many1 $
+               while1I (urlencTab !) <|> (char '+' *> return spc)
+      spc = L8.singleton ' '
+-}
+
+form_urlencoded :: (Monad m) => Iter L m [(S,S)]
+form_urlencoded = sepBy controlI (char '&')
 
 --
 -- multipart/form-data decoding, as specified throughout the following:
@@ -476,9 +501,8 @@ inumFromChunks = mkInumM $ getchunk
 -- | Mime boundary characters
 bcharTab :: UArray Word8 Bool
 bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
-    where
-      isBChar c = isAlphaNum c || elem c otherBChars
-      otherBChars = "'()/+_,-./:=? "
+    where isBChar c = isAlphaNum c || elem c otherBChars
+          otherBChars = "'()/+_,-./:=? "
 
 data Multipart = Multipart {
       mpName :: S
