@@ -59,7 +59,7 @@ import Data.IterIO.Base
 -- | Construct a simple @'Inum' tIn tOut m a@ from a transcoder of
 -- type @'Iter' tIn m tOut@.  The created 'Inum' simply invokes the
 -- transcoder over and over again to get more data.  It finishes when
--- the @'Iter' tOut m a@ being feed by the 'Inum' is no longer active
+-- the @'Iter' tOut m a@ being fed by the 'Inum' is no longer active
 -- or the trancoder @'Iter' tIn m tOut@ throws an exception of class
 -- 'IterEOF'.  If the transcoder throws any other kind of exception,
 -- the whole 'Inum' fails with an 'InumFail' error.
@@ -94,9 +94,9 @@ newtype IterStateT s m a = IterStateT (s -> m (a, s))
 -- special error handling feature, the 'IterStateT' 'Monad' can only be
 -- run when the transformed monad is an @'Iter' t m@.
 --
--- This function could equally well have returned an @'Iter' t m (s,
--- a)@.  However, it returns @'InumR' t t m a@ (equivalent to @'Iter'
--- t m ('Iter' t m a)@) to make it more convenient to inspect the
+-- This function could equally well have returned @'Iter' t m (a, s)@.
+-- However, it returns @'InumR' t t m (a, s)@, equivalent to @'Iter' t
+-- m ('Iter' t m (a, s))@, to make it more convenient to inspect the
 -- result and check for errors.  This is the same trick used by
 -- 'finishI', which @runIterStateT@ uses internally; returning 'InumR'
 -- saves other code from needing to invoke 'finishI' a second time.
@@ -243,7 +243,7 @@ do-block causes the 'Inum' to return the current state of the 'Iter'.
 However, it may be that the 'Inum' has been fused to the target
 'Iter', in which case any left-over residual data fed to but not
 consumed by the target 'Iter' will be discarded.  We may instead want
-to put the data back on the input stream.  The 'ipopresid' function
+to put the data back onto the input stream.  The 'ipopresid' function
 extracts any left-over data from the target 'Iter', while 'iunget'
 places data back in the input stream.  Since here the input stream is
 a list of @L.ByteString@s, we have to place @resid@ in a list.  (After
@@ -279,7 +279,7 @@ data from the target 'Iter' back into the `Inum`'s input stream.
 
 Finally, there is a function 'irepeat' that automatically sets the
 /AutoEOF/ and /AutoDone/ flags and then loops forever on an 'InumM'
-computation.  Using 'irepeat' to simplifying further, we have:
+computation.  Using 'irepeat' to simplify further, we have:
 
 @
 'inumConcat' = 'mkInumM' $ 'withCleanup' ('ipopresid' >>= 'iunget' . (: [])) $
@@ -326,6 +326,17 @@ implementation is:
 inumAddSig = 'inumNop' ``cat`` 'runI' . 'enumFile' \".signature\"
 @
 
+The @.@ between 'runI' and @'enumFile'@ is because 'Inum's are
+functions from 'Iter's to 'Iter's; we want to apply 'runI' to the
+result applying @'enumFile' \".signature\"@ to an 'Iter'.  Spelled
+out, the type of @'enumFile'@ is:
+
+@
+enumFile :: (MonadIO m, ChunkData t, ListLikeIO t e) =>
+            FilePath
+         -> 'Iter' t m a
+         -> 'Iter' () m a ('Iter' t m a)
+@
 
 -}
 
@@ -369,7 +380,7 @@ setCtlHandler :: (ChunkData tIn, Monad m) =>
                   CtlHandler (Iter tIn m) -> InumM tIn tOut m a ()
 setCtlHandler ch = imodify $ \s -> s { insCtl = ch }
 
--- | Set the \"Auto EOF\" flag within an 'InumM' computation.  If this
+-- | Set the /AutoEOF/ flag within an 'InumM' computation.  If this
 -- flag is 'True', handle 'IterEOF' exceptions like a normal but
 -- immediate termination of the 'Inum'.  If this flag is @'False'@
 -- (the default), then 'IterEOF' exceptions must be manually caught or
@@ -377,7 +388,7 @@ setCtlHandler ch = imodify $ \s -> s { insCtl = ch }
 setAutoEOF :: (ChunkData tIn, Monad m) => Bool -> InumM tIn tOut m a ()
 setAutoEOF val = imodify $ \s -> s { insAutoEOF = val }
 
--- | Set the \"Auto Done\" flag within an 'InumM' computation.  When
+-- | Set the /AutoDone/ flag within an 'InumM' computation.  When
 -- @'True'@, the 'Inum' will immediately terminate as soon as the
 -- 'Iter' it is feeding enters a non-active state (i.e., 'Done' or a
 -- failure state).  If this flag is @'False'@ (the default), the
@@ -431,7 +442,7 @@ mkInumAutoM inumm iter0 =
 
 -- | Build an 'Inum' out of an 'InumM' computation.  The 'InumM'
 -- computation can use 'lift' to execute 'Iter' monads and process
--- input of type 'tIn'.  It must then feed output of type 'tOut' to an
+-- input of type @tIn@.  It must then feed output of type @tOut@ to an
 -- output 'Iter' (which is implicitly contained in the monad state),
 -- using the 'ifeed', 'ipipe', and 'irun' functions.
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
@@ -482,13 +493,21 @@ ithrow e = IterStateT $ \s -> IterF $ \c ->
 -- still active and @'True'@ if the iter has finished and the 'Inum'
 -- should also return.  (If the @autoDone@ flag is @'True'@, then
 -- @ifeed@, @ipipe@, and @irun@ will never actually return @'True'@,
--- but instead just exit the 'Inum' immediately.)
+-- but instead just run cleanup functions and exit the 'Inum'
+-- immediately.)
 ifeed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          tOut -> InumM tIn tOut m a Bool
 ifeed = ipipe . inumPure
 
 -- | A variant of 'ifeed' that throws an exception of type 'IterEOF'
--- if the data being fed is 'null'.
+-- if the data being fed is 'null'.  Convenient when reading input
+-- with a function (such as "Data.ListLike"'s @hget@) that returns 0
+-- bytes instead of throwing an EOF exception to indicate end of file.
+-- For instance, the main loop of @'enumFile'@ looks like:
+--
+-- @
+--  'irepeat' $ 'liftIO' ('LL.hGet' h 'defaultChunkSize') >>= 'ifeed1'
+-- @
 ifeed1 :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           tOut -> InumM tIn tOut m a Bool
 ifeed1 dat = if null dat then lift $ throwEOFI "ifeed: null" else ifeed dat
@@ -516,8 +535,9 @@ irun onum = ipipe $ runI . onum
 
 -- | Repeats an action until the 'Iter' is done or an EOF error is
 -- thrown.  (Also stops if a different kind of exception is thrown, in
--- which case the exception is further propagates.)  @irepeat@ sets
--- 'setAutoEOF' and 'setAutoDone' to @'True'@.
+-- which case the exception propagates further and may cause the
+-- 'Inum' to fail.)  @irepeat@ sets both the /AutoEOF/ and
+-- /AutoDone/ flags to @'True'@.
 irepeat :: (ChunkData tIn, Monad m) =>
            InumM tIn tOut m a b -> InumM tIn tOut m a ()
 irepeat action = do
