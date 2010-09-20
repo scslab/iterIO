@@ -149,20 +149,14 @@ instance ChunkData () where
 -- end-of-file condition.  An 'Iter' that receives a @Chunk@ with EOF
 -- 'True' must return a result (or failure); it is an error to demand
 -- more data (return 'IterF') after an EOF.
-data Chunk t = Chunk !t !Bool deriving (Eq)
+data Chunk t = Chunk !t !Bool deriving (Eq, Typeable)
 
 instance (ChunkData t) => Show (Chunk t) where
     showsPrec _ (Chunk t eof) rest =
         chunkShow t ++ if eof then "+EOF" ++ rest else rest
 
--- | Constructor function that builds a chunk containing data and a
--- 'False' EOF flag.
-chunk :: t -> Chunk t
-chunk t = Chunk t False
-
--- | An empty chunk with the EOF flag 'True'.
-chunkEOF :: (Monoid t) => Chunk t
-chunkEOF = Chunk mempty True
+instance Functor Chunk where
+    fmap f (Chunk t eof) = Chunk (f t) eof
 
 instance (ChunkData t) => Monoid (Chunk t) where
     mempty = Chunk mempty False
@@ -191,6 +185,16 @@ instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
     null (Chunk _ True)  = False
     chunkShow = show
+
+-- | Constructor function that builds a chunk containing data and a
+-- 'False' EOF flag.
+chunk :: t -> Chunk t
+chunk t = Chunk t False
+
+-- | An empty chunk with the EOF flag 'True'.
+chunkEOF :: (Monoid t) => Chunk t
+chunkEOF = Chunk mempty True
+
 
 -- | Class of control commands for enclosing enumerators.  The class
 -- binds each control argument type to a unique result type.
