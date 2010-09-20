@@ -2,9 +2,12 @@
 module Main where
 
 -- import Control.Monad.Trans
+import Control.Concurrent
+import Control.Exception (finally)
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Network.Socket as Net
-import qualified System.IO as IO
+import System.IO
+-- import Text.XHtml.Strict
 
 import Data.IterIO
 -- import Data.IterIO.Parse
@@ -23,18 +26,24 @@ myListen pn = do
   Net.listen sock Net.maxListenQueue
   return sock
 
-{-
-testreq :: (MonadIO m) => Iter L m ()
-testreq = do
-  req <- httpreqI
-  liftIO $ print req
--}
+handle_connection :: Handle -> IO ()
+handle_connection h = do
+  req <- enumHandle h |. inumLog "http.log" True |$ httpreqI
+  print req
 
-main :: IO HttpReq
+accept_loop :: QSem -> Net.Socket -> IO ()
+accept_loop sem sock = do
+  (s, addr) <- Net.accept sock
+  print addr
+  h <- Net.socketToHandle s ReadWriteMode
+  _ <- forkIO $ handle_connection h `finally` hClose h
+  accept_loop sem sock
+
+main :: IO ()
 main = Net.withSocketsDo $ do
          sock <- myListen port
-         (s, addr) <- Net.accept sock
-         print addr
-         h <- Net.socketToHandle s IO.ReadWriteMode
+         sem <- newQSem 0
+         accept_loop sem sock
+         waitQSem sem
          Net.sClose sock
-         enumHandle h |. inumLog "http.log" True |$ httpreqI
+
