@@ -4,10 +4,11 @@ module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
+                        , http_fmt_time
                         , urlencodedFormI
                         , Multipart(..), multipartI, inumMultipart
                         -- * For debugging
-                        , postReq, mptest
+                        , dow, postReq, mptest
                         ) where
 
 import Control.Monad
@@ -18,14 +19,16 @@ import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
+import Data.ByteString.Internal (w2c, c2w)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.ByteString.Internal (w2c, c2w)
 -- import Data.Bits
 import Data.Char
 import Data.Int
 import Data.List
+import Data.Time
 import Data.Word
+import System.Locale
 import Text.Printf
 
 import Data.IterIO
@@ -177,6 +180,27 @@ parameter = do
   v <- token <|> quoted_string
   return (k, v)
 
+--
+-- Date/time
+--
+
+http_fmt_time :: UTCTime -> String
+http_fmt_time = formatTime defaultTimeLocale "%a, %_d %b %Y %H:%M:%S GMT"
+
+dow :: (Monad m) => Iter L.ByteString m Int
+dow = mapLI $ flip zip ([1..7] ++ [1..7]) $
+      map L8.pack ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+                  , "Sunday", "Monday", "Tuesday", "Wednesday"
+                  , "Thursday", "Friday", "Saturday", "Sunday"]
+
+{-
+rfc822_time :: (Monad m) => Iter L m UTCTime
+rfc822_time = do
+  str <- foldrMinMaxI 3 3 (:) [] (satisfy $ isAlpha . w2c)
+         <++> string ", "
+         <++> foldrMinMaxI 2 2 (:) [] (satisfy $ isDigit . w2c)
+  undefined
+-}
 
 --
 -- URI parsing (RFC 3986)
@@ -350,12 +374,6 @@ cookie_hdr req = do
   return req { reqCookies = cookies }
     where
       sep = do olws; char ';' <|> char ','
-
-{-
-peekaboo :: (Monad m) => String -> Iter L m ()
-peekaboo str = IterF $ \c@(Chunk t _) ->
-               trace (str ++ ": " ++ L8.unpack t) $ Done () c
--}
 
 content_type_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 content_type_hdr req = do
