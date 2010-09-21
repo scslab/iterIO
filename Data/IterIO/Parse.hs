@@ -29,8 +29,6 @@ import Control.Monad
 import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
-import Data.Map (Map)
-import qualified Data.Map as Map
 import Data.Monoid
 
 import Data.IterIO.Base

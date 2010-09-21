@@ -4,7 +4,7 @@ module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
-                        , http_fmt_time, timeI
+                        , http_fmt_time, dateI
                         , urlencodedFormI
                         , Multipart(..), multipartI, inumMultipart
                         -- * For debugging
@@ -204,6 +204,17 @@ monmap = Map.fromList $ flip zip [1..12] $
 monthI :: (Monad m) => Iter L.ByteString m Int
 monthI = mapI monmap <?> "Month"
 
+timeI :: (Monad m) => Iter L.ByteString m TimeOfDay
+timeI = do
+  hours <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Hours"
+  char ':'
+  minutes <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Minutes"
+  char ':'
+  seconds <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Seconds"
+  when (hours >= 24 || minutes >= 60 || seconds > 62) $
+       throwI $ IterMiscParseErr "timeI: Invalid hours/minutes/seconds"
+  return $ TimeOfDay hours minutes (fromIntegral (seconds :: Int))
+
 rfc822_time :: (Monad m) => Iter L m UTCTime
 rfc822_time = do
   weekdayI
@@ -213,18 +224,14 @@ rfc822_time = do
   spaces
   month <- monthI
   spaces
-  year <- whileMinMaxI 4 8 (isDigit . w2c) >>= readI <?> "Year"
+  year <- whileMinMaxI 4 5 (isDigit . w2c) >>= readI <?> "Year"
   spaces
-  hours <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Hours"
-  char ':'
-  minutes <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Minutes"
-  char ':'
-  seconds <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Seconds"
+  tod <- timeI
   spaces
   string "GMT"
   return $ localTimeToUTC utc LocalTime {
                 localDay = fromGregorian year month mday
-              , localTimeOfDay = TimeOfDay hours minutes (fromIntegral seconds)
+              , localTimeOfDay = tod
               }
 
 rfc850_time :: (Monad m) => Iter L m UTCTime
@@ -239,16 +246,12 @@ rfc850_time = do
   year <- do y2 <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Year"
              return $ if y2 < 70 then y2 + 2000 else y2 + 1900
   spaces
-  hours <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Hours"
-  char ':'
-  minutes <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Minutes"
-  char ':'
-  seconds <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Seconds"
+  tod <- timeI
   spaces
   string "GMT"
   return $ localTimeToUTC utc LocalTime {
                 localDay = fromGregorian year month mday
-              , localTimeOfDay = TimeOfDay hours minutes (fromIntegral seconds)
+              , localTimeOfDay = tod
               }
 
 asctime_time :: (Monad m) => Iter L m UTCTime
@@ -259,20 +262,16 @@ asctime_time = do
   spaces
   mday <- whileMinMaxI 1 2 (isDigit . w2c) >>= readI <?> "Day of Month"
   spaces
-  hours <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Hours"
-  char ':'
-  minutes <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Minutes"
-  char ':'
-  seconds <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Seconds"
+  tod <- timeI
   spaces
-  year <- whileMinMaxI 4 8 (isDigit . w2c) >>= readI <?> "Year"
+  year <- whileMinMaxI 4 5 (isDigit . w2c) >>= readI <?> "Year"
   return $ localTimeToUTC utc LocalTime {
                 localDay = fromGregorian year month mday
-              , localTimeOfDay = TimeOfDay hours minutes (fromIntegral seconds)
+              , localTimeOfDay = tod
               }
 
-timeI :: (Monad m) => Iter L m UTCTime
-timeI = rfc822_time <|> rfc850_time <|> asctime_time <?> "HTTP date/time"
+dateI :: (Monad m) => Iter L m UTCTime
+dateI = rfc822_time <|> rfc850_time <|> asctime_time <?> "HTTP date/time"
 
 --
 -- URI parsing (RFC 3986)

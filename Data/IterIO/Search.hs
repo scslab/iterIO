@@ -14,7 +14,6 @@ import Data.Monoid
 
 import Data.IterIO.Base
 import Data.IterIO.Inum
-import Data.IterIO.Parse
 
 -- | Feeds input to an Iteratee until some boundary string is found.
 inumStopString :: (Monad m) =>
@@ -51,11 +50,11 @@ longestCommonPrefix a0 = cmp 0 a0
     where
       cmp n a b | LL.null a || LL.null b = LL.take n a0
       cmp n a b | LL.head a == LL.head b = cmp (n + 1) (LL.tail a) (LL.tail b)
-      cmp n a _                          = LL.take n a0
+      cmp n _ _                          = LL.take n a0
 
 findLongestPrefix :: (LL.ListLike t e, Ord t, Eq e) =>
                      Map t a -> t -> Maybe (t, a)
-findLongestPrefix mp t = maybe ckprefix (\v -> Just (t, v)) ma
+findLongestPrefix mp t = maybe ckprefix (\v1 -> Just (t, v1)) ma
     where
       (ltmap, ma, _) = Map.splitLookup t mp
       (k, v) = Map.findMax ltmap
