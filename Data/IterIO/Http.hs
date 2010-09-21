@@ -4,11 +4,11 @@ module Data.IterIO.Http (HttpReq(..)
                         , httpreqI
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
-                        , http_fmt_time
+                        , http_fmt_time, timeI
                         , urlencodedFormI
                         , Multipart(..), multipartI, inumMultipart
                         -- * For debugging
-                        , dow, postReq, mptest
+                        , postReq, mptest
                         ) where
 
 import Control.Monad
@@ -187,20 +187,92 @@ parameter = do
 http_fmt_time :: UTCTime -> String
 http_fmt_time = formatTime defaultTimeLocale "%a, %_d %b %Y %H:%M:%S GMT"
 
-dow :: (Monad m) => Iter L.ByteString m Int
-dow = mapLI $ flip zip ([1..7] ++ [1..7]) $
-      map L8.pack ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
-                  , "Sunday", "Monday", "Tuesday", "Wednesday"
-                  , "Thursday", "Friday", "Saturday", "Sunday"]
+dowmap :: Map L Int
+dowmap = Map.fromList $ flip zip ([0..6] ++ [0..6]) $
+         map L8.pack ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+                     , "Sunday", "Monday", "Tuesday", "Wednesday"
+                     , "Thursday", "Friday", "Saturday", "Sunday"]
 
-{-
+weekdayI :: (Monad m) => Iter L.ByteString m Int
+weekdayI = mapI dowmap <?> "Day of Week"
+
+monmap :: Map L Int
+monmap = Map.fromList $ flip zip [1..12] $
+         map L8.pack ["Jan", "Feb", "Mar", "Apr", "May", "Jun"
+                     , "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+monthI :: (Monad m) => Iter L.ByteString m Int
+monthI = mapI monmap <?> "Month"
+
 rfc822_time :: (Monad m) => Iter L m UTCTime
 rfc822_time = do
-  str <- foldrMinMaxI 3 3 (:) [] (satisfy $ isAlpha . w2c)
-         <++> string ", "
-         <++> foldrMinMaxI 2 2 (:) [] (satisfy $ isDigit . w2c)
-  undefined
--}
+  weekdayI
+  char ','
+  spaces
+  mday <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Day of Month"
+  spaces
+  month <- monthI
+  spaces
+  year <- whileMinMaxI 4 8 (isDigit . w2c) >>= readI <?> "Year"
+  spaces
+  hours <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Hours"
+  char ':'
+  minutes <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Minutes"
+  char ':'
+  seconds <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Seconds"
+  spaces
+  string "GMT"
+  return $ localTimeToUTC utc LocalTime {
+                localDay = fromGregorian year month mday
+              , localTimeOfDay = TimeOfDay hours minutes (fromIntegral seconds)
+              }
+
+rfc850_time :: (Monad m) => Iter L m UTCTime
+rfc850_time = do
+  weekdayI
+  char ','
+  spaces
+  mday <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Day of Month"
+  char '-'
+  month <- monthI
+  char '-'
+  year <- do y2 <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Year"
+             return $ if y2 < 70 then y2 + 2000 else y2 + 1900
+  spaces
+  hours <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Hours"
+  char ':'
+  minutes <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Minutes"
+  char ':'
+  seconds <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Seconds"
+  spaces
+  string "GMT"
+  return $ localTimeToUTC utc LocalTime {
+                localDay = fromGregorian year month mday
+              , localTimeOfDay = TimeOfDay hours minutes (fromIntegral seconds)
+              }
+
+asctime_time :: (Monad m) => Iter L m UTCTime
+asctime_time = do
+  weekdayI
+  spaces
+  month <- monthI
+  spaces
+  mday <- whileMinMaxI 1 2 (isDigit . w2c) >>= readI <?> "Day of Month"
+  spaces
+  hours <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Hours"
+  char ':'
+  minutes <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Minutes"
+  char ':'
+  seconds <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Seconds"
+  spaces
+  year <- whileMinMaxI 4 8 (isDigit . w2c) >>= readI <?> "Year"
+  return $ localTimeToUTC utc LocalTime {
+                localDay = fromGregorian year month mday
+              , localTimeOfDay = TimeOfDay hours minutes (fromIntegral seconds)
+              }
+
+timeI :: (Monad m) => Iter L m UTCTime
+timeI = rfc822_time <|> rfc850_time <|> asctime_time <?> "HTTP date/time"
 
 --
 -- URI parsing (RFC 3986)

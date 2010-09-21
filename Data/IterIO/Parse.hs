@@ -12,7 +12,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , whileI, while1I, whileMaxI, whileMinMaxI
                          , whileStateI
                          , concatI, concat1I, concatMinMaxI
-                         , readI, mapI, mapLI, eofI
+                         , readI, eofI
                          -- * Applicative combinators
                          , (<$>), (<$), ($>), (>$>), Applicative(..), (<**>)
                          , (<++>), (<:>), nil
@@ -428,27 +428,6 @@ readI s' = let s = LL.toString s'
                 [a] -> return a
                 []  -> throwI $ IterMiscParseErr $ "readI can't parse: " ++ s
                 _   -> throwI $ IterMiscParseErr $ "readI ambiguous: " ++ s
-
-mapI :: (ChunkData t, LL.ListLike t e, Ord t, Eq e, Monad m) =>
-        Map t a -> Iter t m a
-mapI mp | Map.null mp = throwI $ IterMiscParseErr "mapI: no match"
-        | otherwise = do
-  Chunk t eof <- chunkI
-  let (ltmap, ma, gtmap) = Map.splitLookup t mp
-      failure = throwI $ IterExpected (chunkShow t) $
-                map chunkShow $ Map.keys mp
-      maybemore = not eof && t `LL.isPrefixOf` fst (Map.findMin gtmap)
-      tryma = maybe (trymax ltmap) return ma
-      trymax m | Map.null m = failure
-               | otherwise = case Map.deleteFindMax m of
-                               ((k, v), _) | k `LL.isPrefixOf` t ->
-                                   Done v $ Chunk (LL.drop (LL.length k) t) eof
-                               (_, m') -> trymax m'
-   in if maybemore then (ungetI t >> mapI gtmap) <|> tryma else tryma
-
-mapLI :: (ChunkData t, LL.ListLike t e, Ord t, Eq e, Monad m) =>
-         [(t, a)] -> Iter t m a
-mapLI = mapI . Map.fromList
 
 -- | Ensures the input is at the end-of-file marker, or else throws an
 -- exception.
