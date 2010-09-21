@@ -1,7 +1,9 @@
 
 module TM where
 
+import Prelude hiding (catch)
 import Control.Concurrent
+import Control.Exception
 import Control.Monad.Reader
 import Data.Word
 import Network.Socket
@@ -32,6 +34,9 @@ data TestConfig = TestConfig { tcTarget :: [FilePath]
 type TM = ReaderT TestConfig IO
 
 forkTM :: TM a -> TM ThreadId
-forkTM m = ReaderT $ \r -> do
-             forkIO $ runReaderT m r >> return ()
+forkTM m = ReaderT $ \r ->
+           if (tcQuiet r)
+           then forkIO $ (runReaderT m r >> return ())
+                    `catch` \(SomeException _) -> return ()
+           else forkIO (runReaderT m r >> return ())
     
