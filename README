@@ -1,5 +1,10 @@
-To install required packages:
+
+To build this package, install the Haskell platform
+(http://hackage.haskell.org/platform/), then run the following
+commands to install required packages:
 
 	cabal update
 	cabal install ListLike zlib HSOpenSSL stringsearch
 	cabal install binary regex-posix xhtml utf8-string
+
+Then run "make" or "gmake" to build the example programs.
