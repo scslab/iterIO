@@ -296,6 +296,10 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
 
     fail msg = IterFail $ toException $ ErrorCall msg
 
+instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
+    mzero = throwI $ IterMiscParseErr "mzero"
+    mplus a b = ifParse a return b
+
 instance (ChunkData t) => MonadTrans (Iter t) where
     lift m = IterM $ m >>= return . return
 
