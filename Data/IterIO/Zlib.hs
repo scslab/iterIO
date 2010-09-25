@@ -207,6 +207,8 @@ zExec flush = do
     _ | otherwise               -> return r
 
 
+-- | The most general zlib 'Inum', which can take any 'ZState' created
+-- by 'deflateInit2' or 'inflateInit2'.
 inumZState :: (MonadIO m) =>
               ZState
            -> Inum L.ByteString L.ByteString m a
