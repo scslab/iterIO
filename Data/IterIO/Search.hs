@@ -27,8 +27,7 @@ inumStopString spat = mkInumM $ nextChunk L8.empty
       nextChunk old = do
         (Chunk t eof) <- lift chunkI
         case search $ L8.append old t of
-          (a, b) | not (L8.null b) -> do lift $ Done () (chunk $ b)
-                                         ifeed a
+          (a, b) | not (L8.null b) -> iunget b >> ifeed a
           (a, _) | eof             -> ifeed a
           (a, _)                   -> checkEnd a
       checkEnd t = let tlen = L8.length t
