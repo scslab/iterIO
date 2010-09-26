@@ -65,7 +65,8 @@ Library
   Exposed-modules:
     Data.IterIO, Data.IterIO.Base, Data.IterIO.Inum,
     Data.IterIO.ListLike, Data.IterIO.Parse, Data.IterIO.Extra,
-    Data.IterIO.Search, Data.IterIO.Zlib, Data.IterIO.Http
+    Data.IterIO.Search, Data.IterIO.Zlib, Data.IterIO.Http,
+    Data.IterIO.Trans
   Other-modules:
     Data.IterIO.ZlibInt
   Extensions:

@@ -343,7 +343,7 @@ instance (ChunkData t, MonadIO m) => MonadFix (Iter t m) where
 -- Internal utility functions
 --
 
-getIterError                 :: Iter t m a -> SomeException
+getIterError :: Iter t m a -> SomeException
 getIterError (IterFail e)   = e
 getIterError (InumFail e _) = e
 getIterError (IterM _)      = error "getIterError: no error (in IterM state)"

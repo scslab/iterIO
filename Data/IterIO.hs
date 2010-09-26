@@ -12,6 +12,7 @@ module Data.IterIO
     (module Data.IterIO.Base
     , module Data.IterIO.Inum
     , module Data.IterIO.ListLike
+    , module Data.IterIO.Trans
     -- * Overview
     -- $Overview
     ) where
@@ -22,6 +23,7 @@ import Data.IterIO.Base hiding (null, run -- names that might collide
                                )
 import Data.IterIO.Inum
 import Data.IterIO.ListLike
+import Data.IterIO.Trans
 
 {- $Overview
 
