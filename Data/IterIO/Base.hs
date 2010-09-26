@@ -67,7 +67,7 @@ module Data.IterIO.Base
     , CtlCmd
     , Iter(..), iterF
     , isIterActive, iterShows, iterShow
-    , Inum, InumR, Onum, OnumR
+    , Inum, Onum
     -- * Execution, concatenation and fusing operators
     , run, runI, (|$), (.|$), cat, (|.), (.|)
     -- * Exception and error functions
@@ -364,13 +364,7 @@ isIterActive _           = False
 -- Enumerator types
 --
 
--- | Expanding the type alias 'InumR', this is equivalent to:
---
--- @
---type Inum tIn tOut m a = 'Iter' tOut m a -> 'Iter' tIn m ('Iter' tOut m a)
--- @
---
--- The type of an /iterator-enumerator/, which transcodes data from
+-- | The type of an /iterator-enumerator/, which transcodes data from
 -- some input type @tIn@ to some output type @tOut@.  An @Inum@ acts
 -- as an 'Iter' when consuming data, then acts as an enumerator when
 -- feeding transcoded data to another 'Iter'.
@@ -379,7 +373,7 @@ isIterActive _           = False
 -- 'Iter's to 'Iter's, where an @Inum@'s input and output types are
 -- different.  A simpler alternative to @Inum@ might have been:
 --
--- >type Inum' tIn tOut m a = Iter tOut m a -> Iter tIn m a
+-- > type Inum' tIn tOut m a = Iter tOut m a -> Iter tIn m a
 --
 -- In fact, given an 'Inum' object @inum@, it is possible to construct
 -- a function of type @Inum'@ with @(inum '.|')@.  But sometimes one
@@ -404,11 +398,7 @@ isIterActive _           = False
 -- hides most of the error handling details.  Most @Inum@s are
 -- polymorphic in the last type, @a@, in order to work with iteratees
 -- returning any type.
-type Inum tIn tOut m a = Iter tOut m a -> InumR tIn tOut m a
-
--- | The result of running an 'Inum' is an 'Iter' containing another
--- 'Iter'.
-type InumR tIn tOut m a = Iter tIn m (Iter tOut m a)
+type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (Iter tOut m a)
 
 -- | An @Onum t m a@ is just an 'Inum' in which the input is
 -- @()@--i.e., @'Inum' () t m a@--so that there is no meaningful input
@@ -429,9 +419,6 @@ type InumR tIn tOut m a = Iter tIn m (Iter tOut m a)
 -- that for an @Onum@ the input type is @()@, so executing 'Iter's to
 -- consume input will be of little use.
 type Onum t m a = Inum () t m a
-
--- | The result of running an 'Onum'.
-type OnumR t m a = InumR () t m a
 
 
 --
@@ -843,7 +830,9 @@ handlerBI = flip catchBI
 -- > inumBad = mkInum' $ fail "inumBad"
 -- > 
 -- > skipError :: (ChunkData tOut, MonadIO m) =>
--- >              SomeException -> InumR tOut tIn m a -> InumR tOut tIn m a
+-- >              SomeException
+-- >           -> Iter tOut m (Iter tIn m a)
+-- >           -> Iter tOut m (Iter tIn m a)
 -- > skipError e iter = do
 -- >   liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
 -- >   resumeI iter
@@ -888,7 +877,7 @@ handlerBI = flip catchBI
 inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
               Inum tIn tOut m a
            -- ^ 'Inum' that might throw an exception
-           -> (e -> InumR tIn tOut m a -> InumR tIn tOut m a)
+           -> (e -> Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a))
            -- ^ Exception handler
            -> Inum tIn tOut m a
 inumCatch enum handler = finishI . enum >=> check
@@ -899,7 +888,7 @@ inumCatch enum handler = finishI . enum >=> check
 
 -- | 'inumCatch' with the argument order switched.
 inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
-               (e -> InumR tIn tOut m a -> InumR tIn tOut m a)
+               (e -> Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a))
             -- ^ Exception handler
             -> Inum tIn tOut m a
             -- ^ 'Inum' that might throw an exception
@@ -910,14 +899,14 @@ inumHandler = flip inumCatch
 -- processing of the 'Iter' by the next enumerator in a 'cat'ed
 -- series.  See 'inumCatch' for an example.
 resumeI :: (ChunkData tIn, Monad m) =>
-           InumR tIn tOut m a -> InumR tIn tOut m a
+           Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a)
 resumeI (InumFail _ iter) = return iter
 resumeI iter              = iter
 
 -- | Like 'resumeI', but if the 'Iter' is resumable, also prints an
 -- error message to standard error before running it.
 verboseResumeI :: (ChunkData tIn, MonadIO m) =>
-                  InumR tIn tOut m a -> InumR tIn tOut m a
+                  Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a)
 verboseResumeI (InumFail err iter) = do
   prog <- liftIO $ getProgName
   liftIO $ hPutStrLn stderr $ prog ++ ": " ++ show err
@@ -1294,7 +1283,7 @@ infixl 1 `inumBind`
 -- error preserving property that allows 'inumCatch' and 'resumeI' to
 -- work properly around fused 'Inum's.)
 joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-         InumR tIn tOut m a
+         Iter tIn m (Iter tOut m a)
       -> Iter tIn m a
 joinI (Done i c)     = runI i `inumBind` flip Done c
 joinI (IterFail e)   = IterFail e

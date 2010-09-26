@@ -78,8 +78,8 @@ grep re files
     | otherwise  = foldr1 cat (map enumLines files) |$ inumGrep re .| linesOutI
     where
       enumLines file = inumCatch (enumFile file |. inumToLines) handler
-      handler :: IOError -> OnumR [S.ByteString] IO a
-              -> OnumR [S.ByteString] IO a
+      handler :: IOError -> Iter () IO (Iter [S.ByteString] IO a)
+              -> Iter () IO (Iter [S.ByteString] IO a)
       handler e iter = do
         liftIO (hPutStrLn stderr $ show e)
         if isDoesNotExistError e
@@ -138,7 +138,9 @@ catchTest2 = myEnum |. inumNop |$ fail "bad Iter"
         return $ return ()
 
 skipError :: (ChunkData tOut, MonadIO m) =>
-             SomeException -> InumR tOut tIn m a -> InumR tOut tIn m a
+             SomeException
+          -> Iter tOut m (Iter tIn m a)
+          -> Iter tOut m (Iter tIn m a)
 skipError e iter = do
   liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
   resumeI iter

@@ -101,7 +101,8 @@ newtype IterStateT s m a = IterStateT (s -> m (a, s))
 -- 'finishI', which @runIterStateT@ uses internally; returning 'InumR'
 -- saves other code from needing to invoke 'finishI' a second time.
 runIterStateT :: (Monad m, ChunkData t) =>
-                 IterStateT s (Iter t m) a -> s -> InumR t t m (a, s)
+                 IterStateT s (Iter t m) a -> s
+              -> Iter t m (Iter t m (a, s))
 runIterStateT (IterStateT isf) s = finishI (isf s) >>= return . check
     where check (IterFail e) = InumFail e (error "runIterStateT", s)
           check iter         = iter
@@ -457,7 +458,7 @@ runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          -- ^ Monadic computation defining the 'Inum'.
          -> InumState tIn tOut m a
          -- ^ State to run on
-         -> InumR tIn tOut m a
+         -> Iter tIn m (Iter tOut m a)
 runInumM inumm state0 = do
   result1 <- runIterStateT inumm state0 >>= convertFail
   let state1 = (getState result1) { insAutoDone = False, insCleaning = True }
