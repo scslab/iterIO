@@ -15,6 +15,7 @@ module Data.IterIO.Http (HttpReq(..)
                         ) where
 
 import Control.Monad
+import Control.Monad.Identity
 import Control.Monad.Trans
 import Data.Array.Unboxed
 import Data.Bits
@@ -370,26 +371,43 @@ uri = absUri
       path = do (p, q) <- ensureI (== eord '/') *> pathI
                 return (S.empty, S.empty, Nothing, p, q)
 
+-- | Turn a path into a list of components
+path2list :: S -> [S]
+path2list path = runIdentity $ inumPure path |$
+                 slash [] `catchI` \(IterNoParse _) _ -> return []
+    where
+      slash acc = while1I (eord '/' ==) \/ eofI *> return (reverse acc) $
+                  const $ comp acc
+      comp acc  = do n <- while1I (eord '/' /=)
+                     case () of
+                       () | n == S8.pack "." -> slash acc
+                       () | n == S8.pack ".." ->
+                              if null acc then slash [] else slash $ tail acc
+                       () -> slash $ n:acc
 
 --
 -- HTTP request and header parsing
 --
 
 data HttpReq = HttpReq {
-      reqMethod :: S
-    , reqPath :: S
-    , reqQuery :: S
-    , reqHost :: S
-    , reqPort :: Maybe Int
-    , reqVers :: (Int, Int)
-    , reqHeaders :: [(S, S)]
-    , reqCookies :: [(S, S)]
-    , reqContentType :: Maybe (S, [(S,S)])
+      reqMethod :: !S
+    , reqPath :: !S
+    , reqPathLst :: ![S]
+    , reqPathCtx :: ![S]
+    , reqQuery :: !S
+    , reqHost :: !S
+    , reqPort :: !(Maybe Int)
+    , reqVers :: !(Int, Int)
+    , reqHeaders :: ![(S, S)]
+    , reqCookies :: ![(S, S)]
+    , reqContentType :: !(Maybe (S, [(S,S)]))
     } deriving (Show)
 
 defaultHttpReq :: HttpReq
 defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqPath = S.empty
+                         , reqPathLst = []
+                         , reqPathCtx = []
                          , reqQuery = S.empty
                          , reqHost = S.empty
                          , reqPort = Nothing
@@ -422,6 +440,7 @@ request_line = do
   return defaultHttpReq {
                  reqMethod = method
                , reqPath = path
+               , reqPathLst = path2list path
                , reqQuery = query
                , reqHost = host
                , reqPort = mport
