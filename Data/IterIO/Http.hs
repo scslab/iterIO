@@ -6,9 +6,12 @@ module Data.IterIO.Http (HttpReq(..)
                         , comment, qvalue
                         , http_fmt_time, dateI
                         , urlencodedFormI
+                        , foldUrlencoded
                         , Multipart(..), multipartI, inumMultipart
+                        , foldMultipart
+                        , foldForm
                         -- * For debugging
-                        , postReq, mptest
+                        , postReq, encReq, mptest
                         ) where
 
 import Control.Monad
@@ -548,8 +551,11 @@ inumFromChunks = mkInumM $ getchunk
 -- except for ALPHA, DIGIT, and the four characters:
 --   -._*
 --
--- Given the confusion, we'll just almost everything except '&' and
--- '='.
+-- Given the confusion, we'll just accept almost everything except '&'
+-- and '='.
+
+urlencoded :: S
+urlencoded = S8.pack "application/x-www-form-urlencoded"
 
 urlencTab :: UArray Word8 Bool
 urlencTab = listArray (0, 127) $ fmap ok ['\0'..'\177']
@@ -564,12 +570,23 @@ controlI = flip (<?>) "form control NAME=VALUE" $ do
   value <- (char '=' >> encval) <|> nil
   return (name, value)
     where
-      encval = liftM strictify $ concat1I $
+      encval = liftM strictify $ concatI $
                someI (percent_decode (urlencTab !))
                <|> L8.singleton ' ' <$ char '+'
 
 urlencodedFormI :: (Monad m) => Iter L m [(S,S)]
 urlencodedFormI = sepBy controlI (char '&')
+
+foldUrlencoded :: (Monad m) =>
+                  HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
+foldUrlencoded req z f =
+    controlI \/ return z $ \(k, v) ->
+    inumPure (L.fromChunks [v]) .|
+             f z defaultMultipart { mpName = k } `inumBind` \a ->
+    foldUrlencoded req a f
+
+encReq :: L
+encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
 
 --
 -- multipart/form-data decoding, as specified throughout the following:
@@ -592,15 +609,25 @@ bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
           otherBChars = "'()/+_,-./:=? "
 -}
 
+multipart :: S
+multipart = S8.pack "multipart/form-data"
+
 data Multipart = Multipart {
-      mpName :: S
-    , mpParams :: [(S, S)]
-    , mpHeaders :: [(S, S)]
+      mpName :: !S
+    , mpParams :: ![(S, S)]
+    , mpHeaders :: ![(S, S)]
     } deriving (Show)
+
+defaultMultipart :: Multipart
+defaultMultipart = Multipart {
+                     mpName = S.empty
+                   , mpParams = []
+                   , mpHeaders = []
+                   }
 
 reqBoundary :: HttpReq -> Maybe S
 reqBoundary req = case reqContentType req of
-                    Just (typ, parms) | typ == S8.pack "multipart/form-data" ->
+                    Just (typ, parms) | typ == multipart ->
                                           lookup (S8.pack "boundary") parms
                     _ -> Nothing
 
@@ -638,7 +665,17 @@ inumMultipart req iter = flip mkInumM (iter <* nullI) $ do
     where
       bstr = case reqBoundary req of
                Just b  -> return $ S8.pack "\r\n--" `S8.append` b
-               Nothing -> lift $ throwI $ IterMiscParseErr "inumPart: no parts"
+               Nothing -> lift $ throwI $
+                          IterMiscParseErr "inumMultipart: no parts"
+
+foldMultipart :: (Monad m) =>
+                 HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
+foldMultipart req z f = multipartI req >>= doPart
+    where
+      doPart Nothing = return z
+      doPart (Just mp) =
+          inumMultipart req .| (f z mp <* nullI) `inumBind` \a ->
+          foldMultipart req a f
 
 mptest :: IO ()
 mptest = inumPure postReq |$ (httpreqI >>= getHead)
@@ -649,6 +686,11 @@ mptest = inumPure postReq |$ (httpreqI >>= getHead)
           Nothing -> return ()
           Just mp -> do liftIO $ print mp
                         (inumMultipart req ) .| stdoutI
+                        (inumMultipart req ) .| nullI
+                        (inumMultipart req ) .| nullI
+                        (inumMultipart req ) .| nullI
+                        (inumMultipart req ) .| nullI
+                        crlf
                         liftIO $ putStr "\n\n"
                         getHead req
                    
@@ -687,51 +729,14 @@ postReq = L8.pack
  \\r\n\
  \-----------------------------28986267117678495841915281966--\n"
 
+--
+-- Fold either type of form
+--
 
-{-
--}
-
-
-
-
-{-
-
-lineChar :: (Monad m) => Iter L m Word8
-lineChar = satisfy (\c -> c /= eord '\r' && c /= eord '\n')
-
-linesI :: (Monad m) => Iter L8.ByteString m [L8.ByteString]
-linesI = many1 lineChar `sepBy` crlf
-
-put :: L8.ByteString -> IO ()
-put = Prelude.putStrLn . show . L8.unpack
-
-enumHdr :: (Monad m) => Onum L8.ByteString m a
-enumHdr = inumPure $ L.append header
-          $ L.cycle $ L8.pack "And some extra crap\r\n"
-    where
-      header = L8.pack $ "\
-        \GET /blah/blah/blah?really HTTP/1.1\r\n\
-        \Host: localhost:8000\r\n\
-        \User-Agent: Mozilla/5.0 (X11; U; Linux x86_64; en_US; rv:1.9.2.8) Gecko/20100813 Gentoo Firefox/3.6.8\r\n\
-        \Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
-        \Accept-Language: en-us,en;q=0.5\r\n\
-        \Accept-Encoding: gzip,deflate\r\n\
-        \Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n\
-        \Keep-Alive: 115\r\n\
-        \Connection: keep-alive\r\n\
-        \Cache-Control: max-age=0\r\n\r\n"
-
-          
-
-
-
-
-main :: IO ()
--- main = enumHdr |$ hdr >>= mapM_ L8.putStrLn
-main = enumHandle stdin |$
-       inumToChunks
-        .| inumLog "chunks.log" True 
-        .| inumFromChunks
-        .| handleI stdout
-           
--}
+foldForm :: (Monad m) =>
+            HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
+foldForm req = case reqContentType req of
+                 Just (mt, _) | mt == urlencoded -> foldUrlencoded req
+                 Just (mt, _) | mt == multipart  -> foldMultipart req
+                 _ -> \_ _ -> throwI $ IterMiscParseErr $
+                      "foldForm: invalid Content-Type"

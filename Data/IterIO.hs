@@ -12,6 +12,7 @@ module Data.IterIO
     (module Data.IterIO.Base
     , module Data.IterIO.Inum
     , module Data.IterIO.ListLike
+    , module Data.IterIO.Trans
     -- * Overview
     -- $Overview
     ) where
@@ -22,6 +23,7 @@ import Data.IterIO.Base hiding (null, run -- names that might collide
                                )
 import Data.IterIO.Inum
 import Data.IterIO.ListLike
+import Data.IterIO.Trans
 
 {- $Overview
 
@@ -382,8 +384,9 @@ Here is the @grep@ code.  We will analyze it below.
         | otherwise  = foldr1 'cat' (map enumLines files) '|$' inumGrep re '.|' linesOutI
         where
           enumLines file = 'inumCatch' ('enumFile' file '|.' inumToLines) handler
-          handler :: 'IOError' -> 'OnumR' ['S.ByteString'] IO a
-                  -> 'OnumR' ['S.ByteString'] IO a
+          handler :: 'IOError'
+                  -> 'Iter' () IO ('Iter' ['S.ByteString'] IO a)
+                  -> 'Iter' () IO ('Iter' ['S.ByteString'] IO a)
           handler e iter = do
             liftIO (hPutStrLn stderr $ show e)
             'resumeI' iter
@@ -415,16 +418,16 @@ explicitly, for instance with:
 The second argument to @handler@, @iter@, is the failing state, which
 contains more information than just the exception.  In the case of an
 'Inum' failure, it contains the state of the 'Iter' that the 'Inum'
-was feeding when it failed.  The type of the 'iter' is 'OnumR', which
-is an alias for the result type of an 'Onum'.  The function 'resumeI'
-extracts and returns an @'Iter' [S.ByteString] IO a@ from this failed
-'OnumR'.  Thus, the next enumerator in a concatenated series can
-continue feeding it input.  If, instead of resuming, you want to
-re-throw the error, it suffices to re-execute the failing 'OnumR' to
-propagate the error.  For instance, suppose we want to continue
-executing @grep@ when a named file does not exist, but if some other
-error happens, we want to re-throw the exception to abort the whole
-program.  This could be achieved as follows:
+was feeding when it failed.  The type of the 'iter' is the result type
+of an 'Onum'.  The function 'resumeI' extracts and returns an @'Iter'
+[S.ByteString] IO a@ from this failed result.  Thus, the next
+enumerator in a concatenated series can continue feeding it input.
+If, instead of resuming, you want to re-throw the error, it suffices
+to re-execute the failing 'OnumR' to propagate the error.  For
+instance, suppose we want to continue executing @grep@ when a named
+file does not exist, but if some other error happens, we want to
+re-throw the exception to abort the whole program.  This could be
+achieved as follows:
 
 >          handler e iter = do
 >            if isDoesNotExistError e
