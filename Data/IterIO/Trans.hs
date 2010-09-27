@@ -132,8 +132,13 @@ runWriterTI = doW mempty
                   lift . runWriterT >=> \(iter, w') -> doW (mappend w w') iter
 
 --
--- Below this line, we use FlexibleInstances and UndecidableInstances
+-- Below this line, we use FlexibleInstances and UndecidableInstances,
+-- but only because this is required by mtl.
 --
+
+instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
+    callCC f = IterM $ (callCC $ \cc -> return $ f (cont cc))
+        where cont cc a = do IterF $ \c -> IterM $ cc (Done a c)
 
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where
