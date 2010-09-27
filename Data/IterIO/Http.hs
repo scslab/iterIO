@@ -712,8 +712,22 @@ mptest = inumPure postReq |$ (httpreqI >>= getHead)
                         crlf
                         liftIO $ putStr "\n\n"
                         getHead req
-                   
 
+mptest' :: IO ()
+mptest' = inumPure postReq |$ (httpreqI >>= getParts 0)
+    where
+      getParts n req = do
+        mmp <- multipartI req
+        case mmp of
+          Nothing -> return ()
+          Just mp -> do liftIO $ do
+                          putStrLn $ "### Part " ++ show n
+                          print mp
+                          putStrLn ""
+                        (inumMultipart req) .| stdoutI
+                        liftIO $ putStr "\n\n"
+                        getParts (n+1) req
+ 
 
 postReq :: L
 postReq = L8.pack
@@ -759,3 +773,17 @@ foldForm req = case reqContentType req of
                  Just (mt, _) | mt == multipart  -> foldMultipart req
                  _ -> \_ _ -> throwI $ IterMiscParseErr $
                       "foldForm: invalid Content-Type"
+
+formTest :: IO ()
+formTest = inumPure postReq |$ handleReq
+ where
+  handleReq = do
+    req <- httpreqI
+    parts <- foldForm req [] getPart
+    liftIO $ putStrLn $ "### Summary\n" ++ show parts
+  getPart result mp = do
+    liftIO $ do putStrLn $ "### Part " ++ show (length result); print mp; putStrLn ""
+    stdoutI
+    liftIO $ putStr "\n\n"
+    return (mp:result)
+
