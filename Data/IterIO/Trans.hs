@@ -56,18 +56,26 @@ adaptIter f mf = adapt
       adapt (IterFail e)   = IterFail e
       adapt (InumFail e a) = InumFail e (f a)
 
+-- | Adapt monadic computations of an 'Iter' from one monad to
+-- another.  This only works when the values are converted straight
+-- through.  For more complex scenarios, you need 'adaptIter'.
+adaptIterM :: (ChunkData t, Monad m1, Monad m2) =>
+              (m1 (Iter t m1 a) -> m2 (Iter t m1 a))
+           -> Iter t m1 a -> Iter t m2 a
+adaptIterM f = adapt
+    where adapt = adaptIter id $ lift . f >=> adapt
 
 -- | Run an @'Iter' s m@ computation from witin the @'Iter' s (t m)@
 -- monad, where @t@ is a 'MonadTrans'.
-liftI :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
-         Iter s m a -> Iter s (t m) a
-liftI = adaptIter id $ lift . lift >=> liftI
+liftIterM :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
+             Iter s m a -> Iter s (t m) a
+liftIterM = adaptIterM lift
 
 -- | Turn a computation of type @'Iter' t ('ContT' ('Iter' t m a) m)
 -- a@ into one of type @'Iter' t m a@.  Note the return value of the
 -- continuation is of type @'Iter' t m a@, not @a@, so that you can
 -- return residual data.
-runContTI :: (Monad m, ChunkData t) =>
+runContTI :: forall t m a. (ChunkData t, Monad m) =>
              Iter t (ContT (Iter t m a) m) a -> Iter t m a
 runContTI = adaptIter id $ \m -> IterM $ runContT m (return . runContTI)
 
@@ -93,8 +101,7 @@ runListTI = adaptIter (: []) $
 -- @'Iter' t m@ monad.
 runReaderTI :: (ChunkData t, Monad m) =>
                Iter t (ReaderT r m) a -> r -> Iter t m a
-runReaderTI m0 r = adaptIter id adapt m0
-    where adapt m = lift (runReaderT m r) >>= flip runReaderTI r
+runReaderTI m r = adaptIterM (flip runReaderT r) m
 
 -- | Run an @'Iter' t ('RWST' r w s m)@ computation from within the
 -- @'Iter' t m@ monad.
@@ -128,15 +135,38 @@ runWriterTI = doW mempty
 -- Below this line, we use FlexibleInstances and UndecidableInstances
 --
 
+instance (Error e, MonadError e m, ChunkData t) =>
+    MonadError e (Iter t m) where
+        throwError = lift . throwError
 
-instance (Error e, MonadError e m, ChunkData t) => MonadError e (Iter t m) where
-    throwError = IterM . throwError
+        catchError (IterM m) h = IterM $ do
+            r <- (liftM Right m) `catchError` (return . Left . h)
+            case r of
+              Right iter -> return $ catchError iter h
+              Left iter  -> return iter
+        catchError iter h
+            | isIterActive iter = inumFC passCtl iter >>= flip catchError h
+            | otherwise         = iter
 
-    catchError (IterM m) h = IterM $ do
-        r <- (liftM Right m) `catchError` (return . Left . h)
-        case r of
-          Right iter -> return $ catchError iter h
-          Left iter  -> return iter
-    catchError iter h
-        | isIterActive iter = inumFC passCtl iter >>= flip catchError h
-        | otherwise         = iter
+instance (MonadReader r m, ChunkData t) => MonadReader r (Iter t m) where
+    ask = lift ask
+    local f = adaptIterM $ local f
+
+instance (MonadState s m, ChunkData t) => MonadState s (Iter t m) where
+    get = lift get
+    put = lift . put
+
+instance (Monoid w, MonadWriter w m, ChunkData t) =>
+    MonadWriter w (Iter t m) where
+        tell = lift . tell
+        listen = adapt mempty
+            where adapt w = adaptIter (\a -> (a, w)) $
+                            lift . listen >=> \(iter, w) -> adapt w iter
+        pass m = do
+          ((a, f), w) <- adapt mempty m
+          tell (f w)
+          return a
+            where
+              adapt w = adaptIter (\af -> (af, w)) $
+                        lift . censor (const mempty) . listen >=> \(i, w') ->
+                        adapt (mappend w w') i
