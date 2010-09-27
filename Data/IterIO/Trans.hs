@@ -1,6 +1,5 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 -- These extensions are only for MTL stuff where it is required
 {-# LANGUAGE FlexibleInstances #-}
@@ -19,6 +18,9 @@ import Control.Monad.Reader
 import Control.Monad.RWS.Strict
 import Control.Monad.State.Strict
 import Control.Monad.Writer.Strict
+import qualified Control.Monad.RWS.Lazy as Lazy
+import qualified Control.Monad.State.Lazy as Lazy
+import qualified Control.Monad.Writer.Lazy as Lazy
 
 import Data.IterIO.Base
 
@@ -75,7 +77,7 @@ liftIterM = adaptIterM lift
 -- a@ into one of type @'Iter' t m a@.  Note the return value of the
 -- continuation is of type @'Iter' t m a@, not @a@, so that you can
 -- return residual data.
-runContTI :: forall t m a. (ChunkData t, Monad m) =>
+runContTI :: (ChunkData t, Monad m) =>
              Iter t (ContT (Iter t m a) m) a -> Iter t m a
 runContTI = adaptIter id $ \m -> IterM $ runContT m (return . runContTI)
 
@@ -115,6 +117,20 @@ runRWSI iter0 r s0 = doRWS mempty s0 iter0
                       IterM $ runRWST m r s >>= \(iter, s', w') ->
                       return $ doRWS (mappend w w') s' iter
 
+-- | Run an @'Iter' t ('Lazy.RWST' r w s m)@ computation from within
+-- the @'Iter' t m@ monad.  Just like 'runRWSI', execpt this function
+-- is for /Lazy/ 'Lazy.RWST' rather than strict 'RWST'.
+runRWSLI :: (ChunkData t, Monoid w, Monad m) =>
+           Iter t (Lazy.RWST r w s m) a
+         -- ^ Computation to transform
+        -> r                       -- ^ Reader State
+        -> s                       -- ^ Mutable State
+        -> Iter t m (a, s, w)      -- ^ Returns result, mutable state, writer
+runRWSLI iter0 r s0 = doRWS mempty s0 iter0
+    where doRWS w s = adaptIter (\a -> (a, s, w)) $ \m ->
+                      IterM $ Lazy.runRWST m r s >>= \ ~(iter, s', w') ->
+                      return $ doRWS (mappend w w') s' iter
+
 -- | Run an @'Iter' t ('StateT' m)@ computation from within the
 -- @'Iter' t m@ monad.
 runStateTI :: (ChunkData t, Monad m) =>
@@ -123,6 +139,15 @@ runStateTI iter0 s0 = adaptIter (flip (,) s0) adapt iter0
     where adapt m = IterM $ runStateT m s0 >>= \(iter, s) ->
                     return $ runStateTI iter s
 
+-- | Run an @'Iter' t ('Lazy.StateT' m)@ computation from within the
+-- @'Iter' t m@ monad.  Just like 'runStateTI', except this function
+-- works on /Lazy/ 'Lazy.StateT' rather than strict 'StateT'.
+runStateTLI :: (ChunkData t, Monad m) =>
+              Iter t (Lazy.StateT s m) a -> s -> Iter t m (a, s)
+runStateTLI iter0 s0 = adaptIter (flip (,) s0) adapt iter0
+    where adapt m = IterM $ Lazy.runStateT m s0 >>= \ ~(iter, s) ->
+                    return $ runStateTLI iter s
+
 -- | Run an @'Iter' t ('WriterT' w m)@ computation from within the
 -- @'Iter' t m@ monad.
 runWriterTI :: (ChunkData t, Monoid w, Monad m) =>
@@ -130,6 +155,16 @@ runWriterTI :: (ChunkData t, Monoid w, Monad m) =>
 runWriterTI = doW mempty
     where doW w = adaptIter (\a -> (a, w)) $
                   lift . runWriterT >=> \(iter, w') -> doW (mappend w w') iter
+
+-- | Run an @'Iter' t ('Lazy.WriterT' w m)@ computation from within
+-- the @'Iter' t m@ monad.  This is the same as 'runWriterT' but for
+-- the /Lazy/ 'Lazy.WriterT', rather than the strict one.
+runWriterTLI :: (ChunkData t, Monoid w, Monad m) =>
+                Iter t (Lazy.WriterT w m) a -> Iter t m (a, w)
+runWriterTLI = doW mempty
+    where doW w = adaptIter (\a -> (a, w)) $
+                  lift . Lazy.runWriterT >=> \ ~(iter, w') ->
+                  doW (mappend w w') iter
 
 --
 -- Below this line, we use FlexibleInstances and UndecidableInstances,
@@ -143,7 +178,6 @@ instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where
         throwError = lift . throwError
-
         catchError (IterM m) h = IterM $ do
             r <- (liftM Right m) `catchError` (return . Left . h)
             case r of
@@ -166,7 +200,8 @@ instance (Monoid w, MonadWriter w m, ChunkData t) =>
         tell = lift . tell
         listen = adapt mempty
             where adapt w = adaptIter (\a -> (a, w)) $
-                            lift . listen >=> \(iter, w) -> adapt w iter
+                            lift . listen >=> \(iter, w') ->
+                            adapt (mappend w w') iter
         pass m = do
           ((a, f), w) <- adapt mempty m
           tell (f w)
