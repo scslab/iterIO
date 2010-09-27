@@ -11,7 +11,7 @@ module Data.IterIO.Http (HttpReq(..)
                         , foldMultipart
                         , foldForm
                         -- * For debugging
-                        , postReq, encReq, mptest
+                        , postReq, encReq, mptest, mptest', formTestMultipart, formTestUrlencoded
                         ) where
 
 import Control.Monad
@@ -716,6 +716,7 @@ mptest = inumPure postReq |$ (httpreqI >>= getHead)
 mptest' :: IO ()
 mptest' = inumPure postReq |$ (httpreqI >>= getParts 0)
     where
+      getParts :: (MonadIO m) => Integer -> HttpReq -> Iter L m ()
       getParts n req = do
         mmp <- multipartI req
         case mmp of
@@ -762,6 +763,23 @@ postReq = L8.pack
  \\r\n\
  \-----------------------------28986267117678495841915281966--\n"
 
+postReqUrlencoded :: L
+postReqUrlencoded = L8.pack
+ "POST /testSubmit HTTP/1.1\n\
+ \Host: localhost:8000\n\
+ \User-Agent: Mozilla/5.0 (X11; U; Linux i686 (x86_64); en-US; rv:1.9.2.8) Gecko/20100722 Firefox/3.6.8\n\
+ \Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\n\
+ \Accept-Language: en-us,en;q=0.5\n\
+ \Accept-Encoding: gzip,deflate\n\
+ \Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\n\
+ \Keep-Alive: 115\n\
+ \Connection: keep-alive\n\
+ \Content-Type: application/x-www-form-urlencoded\n\
+ \Content-Length: 11\n\
+ \\n\
+ \p1=v1&p2=v2"
+
+
 --
 -- Fold either type of form
 --
@@ -774,8 +792,8 @@ foldForm req = case reqContentType req of
                  _ -> \_ _ -> throwI $ IterMiscParseErr $
                       "foldForm: invalid Content-Type"
 
-formTest :: IO ()
-formTest = inumPure postReq |$ handleReq
+formTest :: L -> IO ()
+formTest b = inumPure b |$ handleReq
  where
   handleReq = do
     req <- httpreqI
@@ -786,4 +804,10 @@ formTest = inumPure postReq |$ handleReq
     stdoutI
     liftIO $ putStr "\n\n"
     return (mp:result)
+
+formTestMultipart :: IO ()
+formTestMultipart = formTest postReq
+
+formTestUrlencoded :: IO ()
+formTestUrlencoded = formTest postReqUrlencoded
 
