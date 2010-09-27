@@ -390,23 +390,26 @@ path2list path = runIdentity $ inumPure path |$
 --
 
 data HttpReq = HttpReq {
-      reqMethod :: !S
-    , reqPath :: !S
-    , reqPathLst :: ![S]
-    , reqPathCtx :: ![S]
-    , reqQuery :: !S
-    , reqHost :: !S
-    , reqPort :: !(Maybe Int)
-    , reqVers :: !(Int, Int)
-    , reqHeaders :: ![(S, S)]
-    , reqCookies :: ![(S, S)]
-    , reqContentType :: !(Maybe (S, [(S,S)]))
+      reqMethod :: !S           -- ^ Method (e.g., GET, POST, ...)
+    , reqPath :: !S             -- ^ Path from URL
+    , reqPathLst :: ![S]        -- ^ List of filenames in path
+    , reqPathParms :: ![S]      -- ^ Can be used to save parameters from path
+    , reqPathCtx :: ![S]        -- ^ Can be used to store popped filenames
+    , reqQuery :: !S            -- ^ Part of URL after ?
+    , reqHost :: !S             -- ^ Host header (or from reqline if has absUri)
+    , reqPort :: !(Maybe Int)   -- ^ Port if supplied in Host header
+    , reqVers :: !(Int, Int)    -- ^ HTTP version number from reqline
+    , reqHeaders :: ![(S, S)]   -- ^ Headers, with field names lowercased
+    , reqCookies :: ![(S, S)]   -- ^ Cookies
+    , reqContentType :: !(Maybe (S, [(S,S)])) -- ^ Content-Type + parms
+    , reqContentLength :: !(Maybe Word64)     -- ^ Content-Length header
     } deriving (Show)
 
 defaultHttpReq :: HttpReq
 defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqPath = S.empty
                          , reqPathLst = []
+                         , reqPathParms = []
                          , reqPathCtx = []
                          , reqQuery = S.empty
                          , reqHost = S.empty
@@ -415,6 +418,7 @@ defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqHeaders = []
                          , reqCookies = []
                          , reqContentType = Nothing
+                         , reqContentLength = Nothing
                          }
 
 hTTPvers :: (Monad m) => Iter L m (Int, Int)
@@ -454,6 +458,7 @@ request_headers = Map.fromList $
       ("Host", host_hdr)
     , ("Cookie", cookie_hdr)
     , ("Content-Type", content_type_hdr)
+    , ("Content-Length", content_length_hdr)
     ]
 
 host_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
@@ -473,6 +478,11 @@ content_type_hdr req = do
   typ <- token <++> char '/' <:> token
   parms <- many $ olws >> char ';' >> parameter
   return req { reqContentType = Just (typ, parms) }
+
+content_length_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+content_length_hdr req = do
+  len <- olws >> (while1I (isDigit . w2c) >>= readI) <* olws
+  return req { reqContentLength = Just len }
 
 hdr_field_val :: (Monad m) => Iter L m (S, S)
 hdr_field_val = do
