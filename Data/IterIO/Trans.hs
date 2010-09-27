@@ -45,7 +45,7 @@ import Data.IterIO.Base
 -- state, @s'@, to ensure that the result will be paired with the
 -- appropriate state.
 adaptIter :: (ChunkData t, Monad m1, Monad m2) =>
-             (a -> b)           -- ^ How to adapt return value
+             (a -> b)                          -- ^ How to adapt return value
           -> (m1 (Iter t m1 a) -> Iter t m2 b) -- ^ How to adapt computations
           -> Iter t m1 a                       -- ^ Input computation
           -> Iter t m2 b                       -- ^ Output computation
@@ -178,14 +178,12 @@ instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where
         throwError = lift . throwError
-        catchError (IterM m) h = IterM $ do
-            r <- (liftM Right m) `catchError` (return . Left . h)
-            case r of
-              Right iter -> return $ catchError iter h
-              Left iter  -> return iter
-        catchError iter h
-            | isIterActive iter = inumFC passCtl iter >>= flip catchError h
-            | otherwise         = iter
+        catchError m0 h = adaptIter id (IterM . runm) m0
+            where runm m = do
+                    r <- catchError (liftM Right m) (return . Left . h)
+                    case r of
+                      Right iter -> return $ catchError iter h
+                      Left iter  -> return iter
 
 instance (MonadReader r m, ChunkData t) => MonadReader r (Iter t m) where
     ask = lift ask
