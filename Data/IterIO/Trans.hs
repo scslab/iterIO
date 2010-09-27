@@ -27,9 +27,9 @@ import Data.IterIO.Base
 -- | Adapt an 'Iter' from one monad to another.  Requires two
 -- functions, one adapting the result to a new type (if required), and
 -- a second adapting monadic computations from one monad to the other.
--- For example, 'liftI' is implemented as:
+-- For example, 'liftIterM' is implemented as:
 --
--- > liftI = adaptIter id $ lift . lift >=> liftI
+-- > liftIterM = adaptIter id $ lift . lift >=> liftIterM
 --
 -- Note that in general the coputation adapter must invoke itself
 -- recursively.  @adaptIter@ is designed this way because the result
