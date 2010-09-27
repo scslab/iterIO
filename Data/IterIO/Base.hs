@@ -83,7 +83,7 @@ module Data.IterIO.Base
     -- * Low-level Iter-manipulation functions
     , feedI, finishI, joinI, inumBind
     -- * Some basic Inums
-    , inumPure, inumF, inumMC, inumLazy, inumRepeat, inumNop
+    , inumPure, inumF, inumC, inumFC, inumMC, inumLazy, inumRepeat, inumNop
     -- * Control functions
     , ctlI, safeCtlI
     , CtlHandler, CtlArg(..), CtlRes(..)
@@ -1323,12 +1323,23 @@ inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 -- other hand, @inumNop' .| iter@ discards any residual data.  For
 -- example, @inumNop' .| ('Done' () ('chunk' \"abcde\"))@ becomes
 -- @'Done' () ('chunk' \"\")@
-inumF :: (ChunkData t, Monad m) => Inum t t m a
+inumF :: (ChunkData t, Monad m1, Monad m2) =>
+         Iter t m1 a -> Iter t m2 (Iter t m1 a)
 inumF iter@(IterF _)           = iterF dochunk
     where dochunk (Chunk t True) = return $ feedI iter (chunk t)
           dochunk c              = inumF $ feedI iter c
 inumF (Done a c@(Chunk _ eof)) = Done (Done a (Chunk mempty eof)) c
 inumF iter                     = return iter
+
+-- | An inum that processes 'IterC' requests with a 'CtlHandler' and
+-- simply returns the 'Iter' as soon as it enters any state other than
+-- 'IterC'.
+inumC :: (ChunkData tIn, ChunkData tOut, Monad mIn, Monad mOut) =>
+         CtlHandler (Iter tIn mIn)
+      -> Iter tOut mOut a -> Iter tIn mIn (Iter tOut mOut a)
+inumC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
+                              \(CtlRes cres) -> inumC ch $ fr $ cast cres
+inumC _ iter = return iter
 
 -- | An 'Inum' that only processes 'IterM' and 'IterC' requests and
 -- returns the 'Iter' as soon as it requests input (via 'IterF'),
@@ -1360,10 +1371,18 @@ inumF iter                     = return iter
 -- comparable.
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           CtlHandler (Iter tIn m) -> Inum tIn tOut m a
-inumMC ch (IterM m) = IterM $ inumMC ch `liftM` m
-inumMC ch iter@(IterC a fr) = catchOrI (ch $ CtlArg a) (flip InumFail iter) $
-                              \(CtlRes cres) -> inumMC ch $ fr $ cast cres
-inumMC _ iter = return iter
+inumMC ch (IterM m)        = IterM $ inumMC ch `liftM` m
+inumMC ch iter@(IterC _ _) = inumC ch iter `inumBind` inumMC ch
+inumMC _ iter              = return iter
+
+-- | An 'Inum' that processes an 'Iter' so long as it is the 'IterF'
+-- or 'IterC' states, then returns it.
+inumFC :: (ChunkData t, Monad m1, Monad m2) =>
+          CtlHandler (Iter t m1)
+       -> Iter t m2 a -> Iter t m1 (Iter t m2 a)
+inumFC ch iter@(IterF _)   = inumF iter `inumBind` inumFC ch
+inumFC ch iter@(IterC _ _) = inumC ch iter `inumBind` inumFC ch
+inumFC _ iter              = return iter
 
 -- | Runs an 'Inum' only if the 'Iter' is still active.  Otherwise
 -- just returns the 'Iter'.  See an example at 'cat'.

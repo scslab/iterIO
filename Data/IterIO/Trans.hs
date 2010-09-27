@@ -2,6 +2,12 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
+-- These extensions are only for MTL stuff where it is required
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+
+
 -- | Various helper functions and instances to make 'Iter's work with
 -- 'MonadTrans' instances.
 module Data.IterIO.Trans where
@@ -117,3 +123,20 @@ runWriterTI :: (ChunkData t, Monoid w, Monad m) =>
 runWriterTI = doW mempty
     where doW w = adaptIter (\a -> (a, w)) $
                   lift . runWriterT >=> \(iter, w') -> doW (mappend w w') iter
+
+--
+-- Below this line, we use FlexibleInstances and UndecidableInstances
+--
+
+
+instance (Error e, MonadError e m, ChunkData t) => MonadError e (Iter t m) where
+    throwError = IterM . throwError
+
+    catchError (IterM m) h = IterM $ do
+        r <- (liftM Right m) `catchError` (return . Left . h)
+        case r of
+          Right iter -> return $ catchError iter h
+          Left iter  -> return iter
+    catchError iter h
+        | isIterActive iter = inumFC passCtl iter >>= flip catchError h
+        | otherwise         = iter
