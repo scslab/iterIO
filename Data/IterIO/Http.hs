@@ -11,7 +11,8 @@ module Data.IterIO.Http (HttpReq(..)
                         , foldMultipart
                         , foldForm
                         -- * For debugging
-                        , postReq, encReq, mptest, mptest', formTestMultipart, formTestUrlencoded
+                        , postReq, encReq, mptest, mptest'
+                        , formTestMultipart, formTestUrlencoded
                         ) where
 
 import Control.Monad
@@ -612,7 +613,7 @@ foldUrlencoded req z f =
     controlI \/ return z $ \(k, v) ->
     inumPure (L.fromChunks [v]) .|
              f z defaultMultipart { mpName = k } `inumBind` \a ->
-    foldUrlencoded req a f
+    char '&' \/ return a $ \_ -> foldUrlencoded req a f
 
 encReq :: L
 encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
@@ -821,3 +822,13 @@ formTestMultipart = formTest postReq
 formTestUrlencoded :: IO ()
 formTestUrlencoded = formTest postReqUrlencoded
 
+{-
+dumpCtl :: () -> Multipart -> Iter L IO ()
+dumpCtl () mp = do
+  liftIO $ S.putStr (mpName mp) >> putStrLn ":"
+  stdoutI
+  liftIO $ putStrLn "\n"
+
+x :: L
+x = L8.pack "p1=v1&p2=v2"
+-}
