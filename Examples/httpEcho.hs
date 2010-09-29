@@ -55,6 +55,7 @@ handleRequest h = do
                    "echo-file" -> echoFile req h >> return ()
                    "gzip-file" -> gzipFile req h >> return ()
                    "gzip" -> inumGzipResponse .| handleI h  -- process the input raw, not form-encoded
+                   "submit" -> echo req
                    _ -> error "Unrecognized action"
         _ -> echo req
     _ -> error "Unrecognized method"
@@ -99,7 +100,7 @@ parmsI req = foldForm req getPart []
     return ((mp,front,backLen):parts)
 
 withParm :: (MonadIO m) => String -> HttpReq -> Iter L m a -> Iter L m (Maybe a)
-withParm pName req iter = foldForm req Nothing handlePart
+withParm pName req iter = foldForm req handlePart Nothing
  where
   handlePart result part =
     if mpName part == S.pack pName
