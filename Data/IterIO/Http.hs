@@ -516,7 +516,7 @@ httpreqI = do
 
 
 --
--- Cunk encoding and decoding (RFC 2616)
+-- Chunk encoding and decoding (RFC 2616)
 --
 
 -- | HTTP Chunk encoder
