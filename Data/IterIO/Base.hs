@@ -476,7 +476,7 @@ infixr 2 |$
 -- coarser-grained parse unit.  For example:
 --
 -- >     rawcommand <- lineI
--- >     command <- inumPure rawcommand .| parseCommandI
+-- >     command <- inumPure rawcommand .|$ parseCommandI
 -- >     return Request { cmd = command, rawcmd = rawcommand }
 --
 -- @.|$@ has the same fixity as @|$@, namely:
