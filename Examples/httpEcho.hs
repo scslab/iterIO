@@ -1,4 +1,3 @@
--- {-# LANGUAGE OverloadedStrings #-}
 
 module Main (main) where
 
@@ -9,6 +8,7 @@ import           Control.Exception (finally)
 import qualified Data.ByteString.Char8 as S
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.ByteString.Lazy.UTF8 as U
+import           Data.List (intersperse)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Network.Socket as Net
@@ -38,9 +38,10 @@ handleRequest h = do
       case reqPathLst req of
         [] -> echo req
         (x:_) -> case S.unpack x of
-                  "form" -> ok $ formPage Nothing
-                  "form-urlencoded" -> ok $ formPage (Just urlencoded)
-                  "form-multipart" -> ok $ formPage (Just multipart)
+                  "query" -> ok $ formPage "GET" Nothing
+                  "form" -> ok $ formPage "POST" Nothing
+                  "form-urlencoded" -> ok $ formPage "POST" (Just urlencoded)
+                  "form-multipart" -> ok $ formPage "POST" (Just multipart)
                   "slow" -> do liftIO $ threadDelay $ 5 * 1000 * 1000
                                echo req
                   _ -> echo req
@@ -48,31 +49,13 @@ handleRequest h = do
     _ -> error $ "Unrecognized method"
  where
   ok html = inumPure (html2L html) .| handleI h
-  echo = request2Html >=> (ok . page "Request")
+  echo req = parmsI req >>= ok . page "Request" . request2Html req
 
+type Parms = [(Multipart, L, Int)]
 
---
--- Html rendering
---
-
-request2Html :: (Monad m) => HttpReq -> Iter L m Html
-request2Html req = do
-  parms <- foldParms [] getPart
-  return $ toHtml << [ header2Html req +++ parms2Html parms]
+parmsI :: (Monad m) => HttpReq -> Iter L m Parms
+parmsI req = foldParms [] getPart
  where
-  parms2Html parms =
-    if null parms
-      then noHtml
-      else thediv << [ h3 << "Parameters"
-                     , ulist << (map ((li <<) . parm2Html) parms)
-                     ]
-  parm2Html (mp,front,backLen) = toHtml
-    [ strong << (S.unpack (mpName mp) ++ ": ")
-    , thespan << L.unpack front
-    , if backLen > 0
-        then emphasize << ("... (" ++ show (fromIntegral (L.length front) + backLen) ++ " bytes)")
-        else noHtml
-    ]
   getPart parts mp = do
     front <- takeExactI 50
     backLen <- countI
@@ -80,6 +63,39 @@ request2Html req = do
   foldParms = case reqContentType req of
                 Nothing -> foldQuery req
                 _ -> foldForm req
+
+
+--
+-- Html rendering
+--
+
+request2Html :: HttpReq -> Parms -> Html
+request2Html req parms = toHtml
+  [ header2Html req
+  , parms2Html parms
+  , thediv << (intersperse (toHtml " | ") $ map toHtml
+                [ hotlink "/query" << "GET"
+                , hotlink "/form" << "POST (default encoding)"
+                , hotlink "/form-urlencoded" << "POST (urlencoded)"
+                , hotlink "/form-multipart" << "POST (multipart)"
+                ])
+  ]
+
+parms2Html :: Parms -> Html
+parms2Html parms =
+  if null parms
+    then noHtml
+    else thediv << [ h3 << "Parameters"
+                   , ulist << (map ((li <<) . parm2Html) parms)
+                   ]
+ where
+  parm2Html (mp,front,backLen) = toHtml
+    [ strong << (S.unpack (mpName mp) ++ ": ")
+    , thespan << L.unpack front
+    , if backLen > 0
+        then emphasize << ("... (" ++ show (fromIntegral (L.length front) + backLen) ++ " bytes)")
+        else noHtml
+    ]
 
 header2Html :: HttpReq -> Html
 header2Html r = toHtml [ requestLine, headers, cookies ]
@@ -109,22 +125,26 @@ header2Html r = toHtml [ requestLine, headers, cookies ]
                       ]
 
 
-formPage :: Maybe S -> Html
-formPage encM = page t $ toHtml
+formPage :: String -> Maybe S -> Html
+formPage meth encM = page t $ toHtml
   [ h1 << t
-  , paragraph << maybe "It will be submitted with the browser's default Content-Type."
+  , paragraph << maybe "It will be submitted with the browser's default Content-Type (likely urlencoded)."
                        (("It will be submitted with Content-Type: " ++) . S.unpack)
                        encM
-  , form ! ([ action "/submit", method "POST" ]
+  , form ! ([ action "/submit", method meth ]
             ++ maybe [] ((:[]) . enctype . S.unpack) encM) <<
-      [ textfield "data1", br
-      , textfield "data2", br
-      , afile "file1", br
-      , afile "file2", br
-      , submit "what" "Go"
-      ]
+      ([ text "data1"
+       , text "data2"
+       ]
+       ++ (if meth == "POST" && encM == Just multipart
+            then [file "file1", file "file2"]
+            else [])
+       ++ [ paragraph << submit "what" meth ]
+       )
   ]
  where
+  text n = paragraph << [ strong << (n ++ ": "), textfield n ]
+  file n = paragraph << [ strong << (n ++ ": "), afile n ]
   t = "Please complete this form"
 
 page :: String -> Html -> Html
