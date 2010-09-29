@@ -128,9 +128,11 @@ header2Html r = toHtml [ requestLine, headers, cookies ]
 formPage :: String -> Maybe S -> Html
 formPage meth encM = page t $ toHtml
   [ h1 << t
-  , paragraph << maybe "It will be submitted with the browser's default Content-Type (likely urlencoded)."
-                       (("It will be submitted with Content-Type: " ++) . S.unpack)
-                       encM
+  , paragraph << if meth == "GET"
+                   then "It will be submitted as a query in the HTTP request-line."
+                   else maybe "It will be submitted with the browser's default Content-Type (likely urlencoded)."
+                              (("It will be submitted with Content-Type: " ++) . S.unpack)
+                              encM
   , form ! ([ action "/submit", method meth ]
             ++ maybe [] ((:[]) . enctype . S.unpack) encM) <<
       ([ text "data1"
