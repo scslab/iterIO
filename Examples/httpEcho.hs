@@ -54,15 +54,12 @@ handleRequest h = do
 type Parms = [(Multipart, L, Int)]
 
 parmsI :: (Monad m) => HttpReq -> Iter L m Parms
-parmsI req = foldParms [] getPart
+parmsI req = foldForm req getPart []
  where
   getPart parts mp = do
     front <- takeExactI 50
     backLen <- countI
     return ((mp,front,backLen):parts)
-  foldParms = case reqContentType req of
-                Nothing -> foldQuery req
-                _ -> foldForm req
 
 
 --

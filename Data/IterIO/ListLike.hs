@@ -313,8 +313,9 @@ inumTakeExact = mkInumM . loop
             _ <- ifeed1 h       -- Keep feeding even if Done
             loop $ n - LL.length h
 
--- | Feed some number of bytes to an 'Iter', or feed fewer if an EOF
--- is encountered.
+-- | Feed some number of list elements (bytes in the case of
+-- 'L.ByteString's) to an 'Iter', or feed fewer if an EOF is
+-- encountered.
 inumTake :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
 inumTake n = mkInumM $ setAutoEOF True >> ipipe (inumTakeExact n)
 
