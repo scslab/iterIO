@@ -91,15 +91,12 @@ inumGzipResponse = mkInumAutoM $ do
 type Parms = [(Multipart, L, Int)]
 
 parmsI :: (Monad m) => HttpReq -> Iter L m Parms
-parmsI req = foldParms [] getPart
+parmsI req = foldForm req getPart []
  where
   getPart parts mp = do
     front <- takeExactI 50
     backLen <- countI
     return ((mp,front,backLen):parts)
-  foldParms = case reqContentType req of
-                Nothing -> foldQuery req
-                _ -> foldForm req
 
 withParm :: (MonadIO m) => String -> HttpReq -> Iter L m a -> Iter L m (Maybe a)
 withParm pName req iter = foldForm req Nothing handlePart

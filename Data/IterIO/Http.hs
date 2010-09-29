@@ -401,7 +401,7 @@ data HttpReq = HttpReq {
     , reqHeaders :: ![(S, S)]   -- ^ Headers, with field names lowercased
     , reqCookies :: ![(S, S)]   -- ^ Cookies
     , reqContentType :: !(Maybe (S, [(S,S)])) -- ^ Content-Type + parms
-    , reqContentLength :: !(Maybe Word64)     -- ^ Content-Length header
+    , reqContentLength :: !(Maybe Int)        -- ^ Content-Length header
     } deriving (Show)
 
 defaultHttpReq :: HttpReq
@@ -605,17 +605,24 @@ controlI = flip (<?>) "form control NAME=VALUE" $ do
 urlencodedFormI :: (Monad m) => Iter L m [(S,S)]
 urlencodedFormI = sepBy controlI (char '&')
 
-foldUrlencoded :: (Monad m) =>
-                  HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
-foldUrlencoded req z f =
+foldControls :: (Monad m) => (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+foldControls f z =
     controlI \/ return z $ \(k, v) ->
     inumPure (L.fromChunks [v]) .|
              f z defaultMultipart { mpName = k } `inumBind` \a ->
-    char '&' \/ return a $ \_ -> foldUrlencoded req a f
+    char '&' \/ return a $ \_ -> foldControls f a
+
+foldUrlencoded :: (Monad m) =>
+                  HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+foldUrlencoded req f z =
+    case reqContentLength req of
+      Just len -> inumTakeExact len .| foldControls f z
+      Nothing  -> throwI $ IterMiscParseErr $
+                  "foldUrlencoded: Missing Content-legth"
 
 foldQuery :: (Monad m) =>
-             HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
-foldQuery req z f = inumPure (L.fromChunks [reqQuery req]) .| foldUrlencoded req z f
+             HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+foldQuery req f z = inumPure (L.fromChunks [reqQuery req]) .| foldControls f z
 
 encReq :: L
 encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
@@ -701,13 +708,13 @@ inumMultipart req iter = flip mkInumM (iter <* nullI) $ do
                           IterMiscParseErr "inumMultipart: no parts"
 
 foldMultipart :: (Monad m) =>
-                 HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
-foldMultipart req z f = multipartI req >>= doPart
+                 HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+foldMultipart req f z = multipartI req >>= doPart
     where
       doPart Nothing = return z
       doPart (Just mp) =
           inumMultipart req .| (f z mp <* nullI) `inumBind` \a ->
-          foldMultipart req a f
+          foldMultipart req f a
 
 mptest :: IO ()
 mptest = inumPure postReq |$ (httpreqI >>= getHead)
@@ -798,7 +805,7 @@ postReqUrlencoded = L8.pack
 --
 
 foldForm :: (Monad m) =>
-            HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
+            HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
 foldForm req = case reqContentType req of
                  Nothing -> foldQuery req
                  Just (mt, _) | mt == urlencoded -> foldUrlencoded req
@@ -811,7 +818,7 @@ formTest b = inumPure b |$ handleReq
  where
   handleReq = do
     req <- httpreqI
-    parts <- foldForm req [] getPart
+    parts <- foldForm req getPart []
     liftIO $ putStrLn $ "### Summary\n" ++ show parts
   getPart result mp = do
     liftIO $ do putStrLn $ "### Part " ++ show (length result); print mp; putStrLn ""
