@@ -30,8 +30,9 @@ port = 8000
 -- Request handler
 --
 
-handleRequest' :: (MonadIO m) => HttpReq -> Iter L m Html
-handleRequest' req = do
+handleRequest :: (MonadIO m) => IO.Handle -> Iter L m ()
+handleRequest h = do
+  req <- httpreqI
   case S.unpack $ reqMethod req of
     "GET" ->
       case reqPathLst req of
@@ -46,8 +47,9 @@ handleRequest' req = do
     "POST" -> echo req
     _ -> error $ "Unrecognized method"
  where
-  ok = return
+  ok html = inumPure (html2L html) .| handleI h
   echo = request2Html >=> (ok . page "Request")
+
 
 --
 -- Html rendering
@@ -130,29 +132,6 @@ page pageTitle contents =
   thehtml << [ header << thetitle << pageTitle
              , body << contents
              ]
-
-
---
--- Handler for HTML responses
---
-
-handleRequest :: (MonadIO m) => IO.Handle -> Iter L m ()
-handleRequest h = do
-  req <- httpreqI
-  html <- handleRequest' req
-  -- nullI -- consume any remaining input
-  inumPure (html2L html) .| handleI h
-
-html2L :: Html -> L
-html2L h = L.append (headersL xhtmlHeaders)
-                    (U.fromString $ showHtml h)
-
-xhtmlHeaders :: [String]
-xhtmlHeaders = ["HTTP/1.1 200 OK", "Content-type: text/html"]
-
-headersL :: [String] -> L
-headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
- where crlf = L.pack ['\r', '\n']
 
 
 --
@@ -242,7 +221,6 @@ inumTee = mkInumAutoM . loop
       loop iter = do
         buf <- lift dataI
         iter' <- lift $ inumPure buf iter
-        -- iter' <- lift $ inumMC passCtl $ feedI iter $ chunk buf
         _ <- ifeed buf
         loop iter'
 -}
@@ -268,4 +246,15 @@ urlencoded = S.pack "application/x-www-form-urlencoded"
 
 multipart :: S
 multipart = S.pack "multipart/form-data"
+
+html2L :: Html -> L
+html2L h = L.append (headersL xhtmlHeaders)
+                    (U.fromString $ showHtml h)
+
+xhtmlHeaders :: [String]
+xhtmlHeaders = ["HTTP/1.1 200 OK", "Content-type: text/html"]
+
+headersL :: [String] -> L
+headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
+ where crlf = L.pack ['\r', '\n']
 
