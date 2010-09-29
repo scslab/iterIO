@@ -6,10 +6,8 @@ module Data.IterIO.Http (HttpReq(..)
                         , comment, qvalue
                         , http_fmt_time, dateI
                         , urlencodedFormI
-                        , foldUrlencoded
                         , Multipart(..), multipartI, inumMultipart
-                        , foldMultipart
-                        , foldForm
+                        , foldForm, foldUrlencoded, foldMultipart, foldQuery
                         -- * For debugging
                         , postReq, encReq, mptest, mptest'
                         , formTestMultipart, formTestUrlencoded
@@ -615,6 +613,10 @@ foldUrlencoded req z f =
              f z defaultMultipart { mpName = k } `inumBind` \a ->
     char '&' \/ return a $ \_ -> foldUrlencoded req a f
 
+foldQuery :: (Monad m) =>
+             HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
+foldQuery req z f = inumPure (L.fromChunks [reqQuery req]) .| foldUrlencoded req z f
+
 encReq :: L
 encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
 
@@ -798,6 +800,7 @@ postReqUrlencoded = L8.pack
 foldForm :: (Monad m) =>
             HttpReq -> a -> (a -> Multipart -> Iter L m a) -> Iter L m a
 foldForm req = case reqContentType req of
+                 Nothing -> foldQuery req
                  Just (mt, _) | mt == urlencoded -> foldUrlencoded req
                  Just (mt, _) | mt == multipart  -> foldMultipart req
                  _ -> \_ _ -> throwI $ IterMiscParseErr $
