@@ -521,14 +521,17 @@ httpreqI = do
 
 -- | HTTP Chunk encoder
 inumToChunks :: (Monad m) => Inum L L m a
-inumToChunks = mkInum $ do
-        Chunk s eof <- chunkI
+inumToChunks = mkInumM loop
+    where
+      loop = do
+        Chunk s eof <- lift chunkI
         let len       = L8.length s
             chunksize = L8.pack $ printf "%x\r\n" len
             trailer   = if eof && len > 0
                         then L8.pack "\r\n0\r\n\r\n"
                         else L8.pack "\r\n"
-        return $ L8.concat [chunksize, s, trailer]
+        ifeed $ L8.concat [chunksize, s, trailer]
+        unless eof loop
 
 -- | HTTP Chunk decoder
 inumFromChunks :: (Monad m) => Inum L L m a
