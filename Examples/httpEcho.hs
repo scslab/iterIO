@@ -280,6 +280,7 @@ handleConnection s = do
      -- |. stderrLog (L.pack "< ")
      -- |$ req2Html .| html2L .| handleI h
      |$ handleRequest h
+  IO.hClose h
 
 
 ---
