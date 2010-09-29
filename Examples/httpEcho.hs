@@ -1,6 +1,7 @@
 
 module Main (main) where
 
+import           Control.Applicative ((<$>))
 import           Control.Monad
 import           Control.Monad.Trans
 import           Control.Concurrent
@@ -17,6 +18,7 @@ import           Text.XHtml.Strict hiding (p)
 
 import           Data.IterIO
 import           Data.IterIO.Http
+import           Data.IterIO.Zlib
 import qualified Data.ListLike as LL
 
 type L = L.ByteString
@@ -42,14 +44,49 @@ handleRequest h = do
                   "form" -> ok $ formPage "POST" Nothing
                   "form-urlencoded" -> ok $ formPage "POST" (Just urlencoded)
                   "form-multipart" -> ok $ formPage "POST" (Just multipart)
+                  "echo-file" -> ok $ echoFilePage
+                  "gzip-file" -> ok $ gzipFilePage
                   "slow" -> do liftIO $ threadDelay $ 5 * 1000 * 1000
                                echo req
                   _ -> echo req
-    "POST" -> echo req
-    _ -> error $ "Unrecognized method"
+    "POST" ->
+      case reqPathLst req of
+        (x:_) -> case S.unpack x of
+                   "echo-file" -> echoFile req h >> return ()
+                   "gzip-file" -> gzipFile req h >> return ()
+                   "gzip" -> inumGzipResponse .| handleI h  -- process the input raw, not form-encoded
+                   _ -> error "Unrecognized action"
+        _ -> echo req
+    _ -> error "Unrecognized method"
  where
   ok html = inumPure (html2L html) .| handleI h
   echo req = parmsI req >>= ok . page "Request" . request2Html req
+
+
+--
+-- Services for uploaded files
+--
+
+echoFile :: (MonadIO m) => HttpReq -> IO.Handle -> Iter L m (Maybe ())
+echoFile req h = withParm "input" req $ inumEchoResponse .| handleI h
+
+inumEchoResponse :: (MonadIO m) => Inum L L m a
+inumEchoResponse = mkInumAutoM $ do
+  _ <- ifeed $ headersL echoHeaders
+  ipipe inumToChunks
+
+gzipFile :: (MonadIO m) => HttpReq -> IO.Handle -> Iter L m (Maybe ())
+gzipFile req h = withParm "input" req $ inumGzipResponse .| handleI h
+
+inumGzipResponse :: (MonadIO m) => Inum L L m a
+inumGzipResponse = mkInumAutoM $ do
+  _ <- ifeed $ headersL gzipHeaders
+  ipipe (inumGzip |. inumToChunks)
+
+
+--
+-- Form processing
+--
 
 type Parms = [(Multipart, L, Int)]
 
@@ -64,6 +101,18 @@ parmsI req = foldParms [] getPart
                 Nothing -> foldQuery req
                 _ -> foldForm req
 
+withParm :: (MonadIO m) => String -> HttpReq -> Iter L m a -> Iter L m (Maybe a)
+withParm pName req iter = foldForm req Nothing handlePart
+ where
+  handlePart result part =
+    if mpName part == S.pack pName
+      then Just <$> iter
+      else nullI >> return result
+
+{-
+mapForm :: (Monad m) => HttpReq -> (Multipart -> Iter L m a) -> Iter L m ()
+mapForm req f = foldForm req () (\_ part -> f part >> return ())
+-}
 
 --
 -- Html rendering
@@ -78,6 +127,8 @@ request2Html req parms = toHtml
                 , hotlink "/form" << "POST (default encoding)"
                 , hotlink "/form-urlencoded" << "POST (urlencoded)"
                 , hotlink "/form-multipart" << "POST (multipart)"
+                , hotlink "/echo-file" << "Echo file"
+                , hotlink "/gzip-file" << "Gzip file"
                 ])
   ]
 
@@ -148,6 +199,30 @@ formPage meth encM = page t $ toHtml
   text n = paragraph << [ strong << (n ++ ": "), textfield n ]
   file n = paragraph << [ strong << (n ++ ": "), afile n ]
   t = "Please complete this form"
+
+echoFilePage :: Html
+echoFilePage = page t $ toHtml
+  [ h1 << t
+  , form ! [ action "/echo-file", method "POST", enctype (S.unpack multipart) ] <<
+      [ paragraph << "Please select a file to echo.  The server will send it right back to you."
+      , afile "input"
+      , submit "what" "Echo"
+      ]
+  ]
+ where
+  t = "Echo a file"
+
+gzipFilePage :: Html
+gzipFilePage = page t $ toHtml
+  [ h1 << t
+  , form ! [ action "/gzip-file", method "POST", enctype (S.unpack multipart) ] <<
+      [ paragraph << "Please select a file to gzip:"
+      , afile "input"
+      , submit "what" "Gzip"
+      ]
+  ]
+ where
+  t = "Gzip a file"
 
 page :: String -> Html -> Html
 page pageTitle contents =
@@ -274,7 +349,13 @@ html2L h = L.append (headersL xhtmlHeaders)
                     (U.fromString $ showHtml h)
 
 xhtmlHeaders :: [String]
-xhtmlHeaders = ["HTTP/1.1 200 OK", "Content-type: text/html"]
+xhtmlHeaders = ["HTTP/1.1 200 OK", "Content-Type: text/html"]
+
+gzipHeaders :: [String]
+gzipHeaders = ["HTTP/1.1 200 OK", "Content-Type: application/x-gzip", "Transfer-Encoding: chunked"]
+
+echoHeaders :: [String]
+echoHeaders = ["HTTP/1.1 200 OK", "Content-Type: application/octet-stream", "Transfer-Encoding: chunked"]
 
 headersL :: [String] -> L
 headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
