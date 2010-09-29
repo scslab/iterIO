@@ -2,6 +2,7 @@
 *.o
 *_hsc.[ch]
 *~
+*.sw?
 /Data/IterIO/ZlibInt.hs
 /Examples/fgrep
 /Examples/httpEcho
