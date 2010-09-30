@@ -15,9 +15,11 @@ module Data.IterIO.Inum
     (-- * Simple Enumerator construction function
      -- $mkInumIntro
      mkInum
+{-
     -- * IterStateT monad
     , IterStateT(..), runIterStateT
     , iget, igets, iput, imodify
+-}
     -- * Enumerator construction monad
     -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM

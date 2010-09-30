@@ -7,9 +7,20 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 
--- | Various helper functions and instances to make 'Iter's work with
--- 'MonadTrans' instances.
-module Data.IterIO.Trans where
+-- | Various helper functions and instances for using 'Iter's of
+-- different Monads together in the same pipeline.
+module Data.IterIO.Trans (-- * Iter-specific state monad transformer
+                          IterStateT(..), runIterStateT
+                         , iget, igets, iput, imodify
+                          -- * Functions for building Iter monad adapters
+                         , adaptIter, adaptIterM
+                         -- * Adapters for Iters of mtl transformers
+                         , liftIterM, liftIterIO
+                         , runContTI, runErrorTI, runListTI, runReaderTI
+                         , runRWSI, runRWSLI, runStateTI, runStateTLI
+                         , runWriterTI, runWriterTLI
+                         )
+    where
 
 import Control.Monad.Cont
 import Control.Monad.Error
@@ -23,6 +34,64 @@ import qualified Control.Monad.State.Lazy as Lazy
 import qualified Control.Monad.Writer.Lazy as Lazy
 
 import Data.IterIO.Base
+
+-- | @IterStateT@ is a variant of the 'StateT' monad transformer
+-- specifically designed for use inside 'Iter's.  The difference
+-- between 'IterStateT' and 'StateT' is that thr 'runIterStateT'
+-- function returns an 'Iter' instead of just the result--somewhat
+-- analogously to the way the 'finishI' function returns an 'Iter'.
+-- The advantage of this approach is that you can extract the state
+-- even if an 'IterFail' or 'InumFail' condition occurs.
+newtype IterStateT s m a = IterStateT (s -> m (a, s))
+
+instance (Monad m) => Monad (IterStateT s m) where
+    return a = IterStateT $ \s -> return (a, s)
+    (IterStateT mf) >>= k = IterStateT $ \s ->
+                            do (a, s') <- mf s
+                               let (IterStateT kf) = k a
+                               kf s'
+
+instance MonadTrans (IterStateT s) where
+    lift m = IterStateT $ \s -> m >>= \a -> return (a, s)
+
+instance (MonadIO m) => MonadIO (IterStateT s m) where
+    liftIO = lift . liftIO
+
+-- | Runs an @'IterStateT' s m@ computation on some state @s@.
+runIterStateT :: (ChunkData t, Monad m) => 
+                 Iter t (IterStateT s m) a -> s -> Iter t m (Iter t m a, s)
+runIterStateT iter0 s0 = adapt iter0
+    where
+      adapt iter@(IterF _)         = IterF $ adapt . feedI iter
+      adapt (IterM (IterStateT f)) = lift (f s0) >>= uncurry runIterStateT
+      adapt (IterC a fr)           = IterC a $ adapt . fr
+      adapt (Done a c)             = return (Done a c, s0)
+      adapt (IterFail e)           = return (IterFail e, s0)
+      adapt (InumFail e a)         = return (InumFail e a, s0)
+
+-- | Returns the state in the 'IterStateT' monad.  Analogous to
+-- @'get'@ for @'StateT'@.
+iget :: (Monad m) => IterStateT s m s
+iget = IterStateT $ \s -> return (s, s)
+
+-- | Returns a particular field of the state in the 'IterStateT'
+-- monad.  Analogous to @'gets'@ for @'StateT'@.
+igets :: (Monad m) => (s -> a) -> IterStateT s m a
+igets f = IterStateT $ \s -> return (f s, s)
+
+-- | Sets the state in the 'IterStateT' monad.  Analogous to @'put'@
+-- for @'StateT'@.
+iput :: (Monad m) => s -> IterStateT s m ()
+iput s = IterStateT $ \_ -> return ((), s)
+
+-- | Modifies the state in the 'IterStateT' monad.  Analogous to
+-- @'modify'@ for @'StateT'@.
+imodify :: (Monad m) => (s -> s) -> IterStateT s m ()
+imodify f = IterStateT $ \s -> return ((), f s)
+
+--
+-- Adapter utility functions
+--
 
 -- | Adapt an 'Iter' from one monad to another.  Requires two
 -- functions, one adapting the result to a new type (if required), and
@@ -90,6 +159,10 @@ liftIterM = adaptIterM lift
 liftIterIO :: (ChunkData t, MonadIO m) =>
               Iter t IO a -> Iter t m a
 liftIterIO = adaptIterM liftIO
+
+--
+-- mtl runner functions
+--
 
 -- | Turn a computation of type @'Iter' t ('ContT' ('Iter' t m a) m)
 -- a@ into one of type @'Iter' t m a@.  Note the return value of the
@@ -224,3 +297,33 @@ instance (Monoid w, MonadWriter w m, ChunkData t) =>
               adapt w = adaptIter (\af -> (af, w)) $
                         lift . censor (const mempty) . listen >=> \(i, w') ->
                         adapt (mappend w w') i
+
+--
+-- and instances for IterStateT (which are identical to StateT)
+--
+
+unIterStateT :: IterStateT s m a -> (s -> m (a, s))
+unIterStateT (IterStateT f) = f
+
+instance (MonadCont m) => MonadCont (IterStateT s m) where
+    callCC f = IterStateT $ \s -> callCC $ \c ->
+               unIterStateT (f (\a -> IterStateT $ \s' -> c (a, s'))) s
+
+instance (MonadError e m) => MonadError e (IterStateT s m) where
+    throwError = lift . throwError
+    catchError m h = IterStateT $ \s ->
+                     unIterStateT m s `catchError` \e ->
+                     unIterStateT (h e) s
+
+instance (MonadReader r m) => MonadReader r (IterStateT s m) where
+    ask = lift ask
+    local f m = IterStateT $ \s -> local f (unIterStateT m s)
+
+instance (MonadWriter w m) => MonadWriter w (IterStateT s m) where
+    tell = lift . tell
+    listen m = IterStateT $ \s -> do
+                 ((a, s'), w) <- listen (unIterStateT m s)
+                 return ((a, w), s')
+    pass   m = IterStateT $ \s -> pass $ do
+                 ((a, f), s') <- unIterStateT m s
+                 return ((a, s'), f)
