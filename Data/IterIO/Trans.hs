@@ -73,6 +73,12 @@ liftIterM :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
              Iter s m a -> Iter s (t m) a
 liftIterM = adaptIterM lift
 
+-- | Run an @'Iter' t IO@ computation from within an @'Iter' t m@
+-- monad where @m@ is in class 'MonadIO'.
+liftIterIO :: (ChunkData t, MonadIO m) =>
+              Iter t IO a -> Iter t m a
+liftIterIO = adaptIterM liftIO
+
 -- | Turn a computation of type @'Iter' t ('ContT' ('Iter' t m a) m)
 -- a@ into one of type @'Iter' t m a@.  Note the return value of the
 -- continuation is of type @'Iter' t m a@, not @a@, so that you can
