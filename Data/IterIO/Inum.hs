@@ -94,31 +94,29 @@ function given previously for 'mkInum' at <#1>:
 inumConcat :: (Monad m) => 'Inum' [L.ByteString] L.ByteString m a
 inumConcat = 'mkInumM' loop
     where loop = do
-            'Chunk' t eof <- 'lift' 'chunkI'
+            'Chunk' t eof <- 'chunkI'
             done <- 'ifeed' $ L.concat t
             if not (eof || done)
               then loop
               else do resid <- 'ipopresid'
-                      'iunget' [resid]
+                      'ungetI' [resid]
 @
 
 There are several points to note about this function.  It reads data
 in 'Chunk's using 'chunkI', rather than just inputting data with
-'dataI'.  Because we are in the @'InumM' tIn tOut m a@ monad and not
-the @'Iter' t m@ monad, we must use 'lift' to invoke an 'Iter'
-computation such as 'chunkI'.  The choice of 'chunkI' rather than
-'dataI' allows @inumConcat@ to see the @eof@ flag and know when there
-is no more input.  It also avoids throwing an 'IterEOF' exception on
-end of file, as 'dataI' would; such an exception would cause the
-'Inum' to fail.
+'dataI'.  The choice of 'chunkI' rather than 'dataI' allows
+@inumConcat@ to see the @eof@ flag and know when there is no more
+input.  'chunkI' also avoids throwing an 'IterEOF' exception on end of
+file, as 'dataI' would; such an exception would cause the 'Inum' to
+fail.
 
 As previously mentioned, data is fed to the target 'Iter', which here
 is of type @'Iter' L.ByteString m a@, using 'ifeed'.  'ifeed' returns
 a 'Bool' that is @'True'@ when the 'Iter' is no longer active.  This
 brings us to another point--there is no implicit looping or
 repetition.  We explicitly loop via a tail-recursive call to @loop@ so
-long as the @eof@ flag is clear and 'ifeed' returned @'False'@ because
-the target 'Iter' has not finished.
+long as the @eof@ flag is clear and 'ifeed' returned @'False'@
+indicating the target 'Iter' has not finished.
 
 What happens when @eof@ or @done@ is set?  One possibility is to do
 nothing.  This is often correct.  Falling off the end of the 'InumM'
@@ -127,7 +125,7 @@ However, it may be that the 'Inum' has been fused to the target
 'Iter', in which case any left-over residual data fed to but not
 consumed by the target 'Iter' will be discarded.  We may instead want
 to put the data back onto the input stream.  The 'ipopresid' function
-extracts any left-over data from the target 'Iter', while 'iunget'
+extracts any left-over data from the target 'Iter', while 'ungetI'
 places data back in the input stream.  Since here the input stream is
 a list of @L.ByteString@s, we have to place @resid@ in a list.  (After
 doing this, the list element boundaries may be different, but all the
@@ -147,11 +145,10 @@ once by the 'mkInumAutoM' function, which yields the following simpler
 implementation of @inumConcat@:
 
 @
-inumConcat = 'mkInumAutoM' $ do
-  'addCleanup' $ 'ipopresid' >>= 'iunget' . (: [])
-  loop
+inumConcat = 'mkInumAutoM' $ do 'addCleanup' $ 'ipopresid' >>= 'ungetI' . (: [])
+                              loop
     where loop = do
-            t <- 'lift' 'dataI'    -- AutoEOF flag will handle IterEOF err
+            t <- 'dataI'         -- AutoEOF flag will handle IterEOF err
             'ifeed' $ L.concat t -- AutoDone flag will catch True result
             loop
 @
@@ -165,8 +162,8 @@ Finally, there is a function 'irepeat' that automatically sets the
 computation.  Using 'irepeat' to simplify further, we have:
 
 @
-'inumConcat' = 'mkInumM' $ 'withCleanup' ('ipopresid' >>= 'iunget' . (: [])) $
-             'irepeat' $ 'lift' 'dataI' >>= 'ifeed' . L.concat
+'inumConcat' = 'mkInumM' $ 'withCleanup' ('ipopresid' >>= 'ungetI' . (: [])) $
+             'irepeat' $ 'dataI' >>= 'ifeed' . L.concat
 @
 
 'withCleanup', demonstrated here, is a variant of 'addCleanup' that is
