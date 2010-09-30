@@ -27,25 +27,31 @@ import Data.IterIO.Base
 -- | Adapt an 'Iter' from one monad to another.  Requires two
 -- functions, one adapting the result to a new type (if required), and
 -- a second adapting monadic computations from one monad to the other.
--- For example, 'liftIterM' is implemented as:
+-- For example, 'liftIterM' could be implemented as:
 --
+-- > liftIterM :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
+-- >              Iter s m a -> Iter s (t m) a
 -- > liftIterM = adaptIter id $ lift . lift >=> liftIterM
 --
 -- Note that in general the coputation adapter must invoke itself
 -- recursively.  @adaptIter@ is designed this way because the result
--- adapter function may need to change.  An example is 'runListTI',
--- implemented as follows:
+-- adapter function may need to change.  An example is 'runStateTI',
+-- which could be implemented as follows:
 --
--- > runStateTI s = adaptIter (flip (,) s) $ \m ->
--- >                IterM $ runStateT m s >>= \(i, s') ->
--- >                return $ runStateTI s' i
+-- > runStateTI :: (ChunkData t, Monad m) =>
+-- >               Iter t (StateT s m) a -> s -> Iter t m (a, s)
+-- > runStateTI iter s = adaptIter adaptResult adaptComputation iter
+-- >     where adaptResult a = (a, s)
+-- >           adaptComputation m = do (iter', s') <- lift (runStateT m s)
+-- >                                   runStateTI iter' s'
 --
 -- Here, after executing 'runStateT', the state may be modified.
 -- Thus, 'runStateTI' invokes itself recursively with the modified
--- state, @s'@, to ensure that the result will be paired with the
--- appropriate state.
+-- state, @s'@, to ensure that subsequent 'IterM' computations will be
+-- run on the latest state, and that eventually the result @a@ will be
+-- paired with the newest state.
 adaptIter :: (ChunkData t, Monad m1, Monad m2) =>
-             (a -> b)                          -- ^ How to adapt return value
+             (a -> b)                          -- ^ How to adapt result values
           -> (m1 (Iter t m1 a) -> Iter t m2 b) -- ^ How to adapt computations
           -> Iter t m1 a                       -- ^ Input computation
           -> Iter t m2 b                       -- ^ Output computation
@@ -61,9 +67,15 @@ adaptIter f mf = adapt
 -- | Adapt monadic computations of an 'Iter' from one monad to
 -- another.  This only works when the values are converted straight
 -- through.  For more complex scenarios, you need 'adaptIter'.
+--
+-- As an example, the 'liftIterIO' function is implemented as follows:
+--
+-- > liftIterIO :: (ChunkData t, MonadIO m) => Iter t IO a -> Iter t m a
+-- > liftIterIO = adaptIterM liftIO
 adaptIterM :: (ChunkData t, Monad m1, Monad m2) =>
-              (m1 (Iter t m1 a) -> m2 (Iter t m1 a))
-           -> Iter t m1 a -> Iter t m2 a
+              (m1 (Iter t m1 a) -> m2 (Iter t m1 a)) -- ^ Conversion function
+           -> Iter t m1 a       -- ^ 'Iter' of input monad
+           -> Iter t m2 a       -- ^ Returns 'Iter' of output monad
 adaptIterM f = adapt
     where adapt = adaptIter id $ lift . f >=> adapt
 
@@ -141,18 +153,16 @@ runRWSLI iter0 r s0 = doRWS mempty s0 iter0
 -- @'Iter' t m@ monad.
 runStateTI :: (ChunkData t, Monad m) =>
               Iter t (StateT s m) a -> s -> Iter t m (a, s)
-runStateTI iter0 s0 = adaptIter (flip (,) s0) adapt iter0
-    where adapt m = IterM $ runStateT m s0 >>= \(iter, s) ->
-                    return $ runStateTI iter s
+runStateTI iter0 s0 = adaptIter (\a -> (a, s0)) adapt iter0
+    where adapt m = lift (runStateT m s0) >>= uncurry runStateTI
 
 -- | Run an @'Iter' t ('Lazy.StateT' m)@ computation from within the
 -- @'Iter' t m@ monad.  Just like 'runStateTI', except this function
 -- works on /Lazy/ 'Lazy.StateT' rather than strict 'StateT'.
 runStateTLI :: (ChunkData t, Monad m) =>
               Iter t (Lazy.StateT s m) a -> s -> Iter t m (a, s)
-runStateTLI iter0 s0 = adaptIter (flip (,) s0) adapt iter0
-    where adapt m = IterM $ Lazy.runStateT m s0 >>= \ ~(iter, s) ->
-                    return $ runStateTLI iter s
+runStateTLI iter0 s0 = adaptIter (\a -> (a, s0)) adapt iter0
+    where adapt m = lift (Lazy.runStateT m s0) >>= uncurry runStateTLI
 
 -- | Run an @'Iter' t ('WriterT' w m)@ computation from within the
 -- @'Iter' t m@ monad.
