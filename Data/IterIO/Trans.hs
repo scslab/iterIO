@@ -37,19 +37,20 @@ import Data.IterIO.Base
 
 -- | @IterStateT@ is a variant of the 'StateT' monad transformer
 -- specifically designed for use inside 'Iter's.  The difference
--- between 'IterStateT' and 'StateT' is that thr 'runIterStateT'
--- function returns an 'Iter' instead of just the result--somewhat
--- analogously to the way the 'finishI' function returns an 'Iter'.
--- The advantage of this approach is that you can extract the state
--- even if an 'IterFail' or 'InumFail' condition occurs.
+-- between 'IterStateT' and 'StateT' is that the 'runIterStateT'
+-- function returns an 'Iter' instead of just the result, which is
+-- somewhat analogous to the way 'finishI' returns an 'Iter' inside an
+-- 'Iter' so you can inspect its state.  The advantage of this
+-- approach is that you can recover the state even if an 'IterFail' or
+-- 'InumFail' condition occurs.
 newtype IterStateT s m a = IterStateT (s -> m (a, s))
 
 instance (Monad m) => Monad (IterStateT s m) where
     return a = IterStateT $ \s -> return (a, s)
-    (IterStateT mf) >>= k = IterStateT $ \s ->
-                            do (a, s') <- mf s
-                               let (IterStateT kf) = k a
-                               kf s'
+    (IterStateT mf) >>= k = IterStateT $ \s -> do (a, s') <- mf s
+                                                  let (IterStateT kf) = k a
+                                                  kf s'
+    fail = IterStateT . const . fail
 
 instance MonadTrans (IterStateT s) where
     lift m = IterStateT $ \s -> m >>= \a -> return (a, s)
@@ -60,34 +61,34 @@ instance (MonadIO m) => MonadIO (IterStateT s m) where
 -- | Runs an @'IterStateT' s m@ computation on some state @s@.
 runIterStateT :: (ChunkData t, Monad m) => 
                  Iter t (IterStateT s m) a -> s -> Iter t m (Iter t m a, s)
-runIterStateT iter0 s0 = adapt iter0
+runIterStateT iter0 s = adapt iter0
     where
       adapt iter@(IterF _)         = IterF $ adapt . feedI iter
-      adapt (IterM (IterStateT f)) = lift (f s0) >>= uncurry runIterStateT
+      adapt (IterM (IterStateT f)) = lift (f s) >>= uncurry runIterStateT
       adapt (IterC a fr)           = IterC a $ adapt . fr
-      adapt (Done a c)             = return (Done a c, s0)
-      adapt (IterFail e)           = return (IterFail e, s0)
-      adapt (InumFail e a)         = return (InumFail e a, s0)
+      adapt (Done a c)             = return (Done a c, s)
+      adapt (IterFail e)           = return (IterFail e, s)
+      adapt (InumFail e a)         = return (InumFail e a, s)
 
--- | Returns the state in the 'IterStateT' monad.  Analogous to
--- @'get'@ for @'StateT'@.
-iget :: (Monad m) => IterStateT s m s
-iget = IterStateT $ \s -> return (s, s)
+-- | Returns the state in an @'Iter' t ('IterStateT' s m)@ monad.
+-- Analogous to @'get'@ for a @'StateT' s m@ monad.
+iget :: (ChunkData t, Monad m) => Iter t (IterStateT s m) s
+iget = lift $ IterStateT $ \s -> return (s, s)
 
--- | Returns a particular field of the state in the 'IterStateT'
--- monad.  Analogous to @'gets'@ for @'StateT'@.
-igets :: (Monad m) => (s -> a) -> IterStateT s m a
-igets f = IterStateT $ \s -> return (f s, s)
+-- | Returns a particular field of the 'IterStateT' state, analogous
+-- to @'gets'@ for @'StateT'@.
+igets :: (ChunkData t, Monad m) => (s -> a) -> Iter t (IterStateT s m) a
+igets f = liftM f iget
 
--- | Sets the state in the 'IterStateT' monad.  Analogous to @'put'@
--- for @'StateT'@.
-iput :: (Monad m) => s -> IterStateT s m ()
-iput s = IterStateT $ \_ -> return ((), s)
+-- | Sets the 'IterStateT' state.  Analogous to @'put'@ for
+-- @'StateT'@.
+iput :: (ChunkData t, Monad m) => s -> Iter t (IterStateT s m) ()
+iput s = lift $ IterStateT $ \_ -> return ((), s)
 
--- | Modifies the state in the 'IterStateT' monad.  Analogous to
--- @'modify'@ for @'StateT'@.
-imodify :: (Monad m) => (s -> s) -> IterStateT s m ()
-imodify f = IterStateT $ \s -> return ((), f s)
+-- | Modifies the 'IterStateT' state.  Analogous to @'modify'@ for
+-- @'StateT'@.
+imodify :: (ChunkData t, Monad m) => (s -> s) -> Iter t (IterStateT s m) ()
+imodify f = lift $ IterStateT $ \s -> return ((), f s)
 
 --
 -- Adapter utility functions
