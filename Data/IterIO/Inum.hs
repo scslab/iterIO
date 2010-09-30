@@ -242,13 +242,18 @@ defaultInumState = InumState {
                    }
 
 -- | A monad in which to define the actions of an @'Inum' tIn tOut m
--- a@.  Note @InumM tIn tOut m a@ is a 'Monad' of kind @* -> *@.  @a@
--- is the (almost always parametric) return type of the 'Inum'.  A
+-- a@.  Note @InumM tIn tOut m a@ is a 'Monad' of kind @* -> *@, where
+-- @a@ is the (almost always parametric) return type of the 'Inum'.  A
 -- fifth type argument is required for monadic computations of kind
 -- @*@, e.g.:
 --
 -- > seven :: InumM tIn tOut m a Int
 -- > seven = return 7
+--
+-- Another important thing to note about the 'InumM' monad, as
+-- described in the documentation for 'mkInumM', is that you must call
+-- 'lift' twice execute actions in monad @m@, and you must use the
+-- 'liftIterM' function to execute actions in monad @'Iter' t m a@.
 type InumM tIn tOut m a = Iter tIn (IterStateT (InumState tIn tOut m a) m)
 
 data InumDone = InumDone deriving (Show, Typeable)
@@ -350,11 +355,23 @@ mkInumAutoM inumm iter0 =
                                     }
 
 
--- | Build an 'Inum' out of an 'InumM' computation.  The 'InumM'
--- computation can use 'lift' to execute 'Iter' monads and process
--- input of type @tIn@.  It must then feed output of type @tOut@ to an
--- output 'Iter' (which is implicitly contained in the monad state),
--- using the 'ifeed', 'ipipe', and 'irun' functions.
+-- | Build an 'Inum' out of an 'InumM' computation.  If you run
+-- 'mkInumM' inside the @'Iter' tIn m@ monad (i.e., to create an
+-- enumerator of type @'Inum' tIn tOut m a@), then the 'InumM'
+-- computation will be in a Monad of type @'Iter' t tm@ where @tm@ is
+-- a transformed version of @m@.  This has the following two
+-- consequences:
+--
+--  - If you wish to execute actions in monad @m@ from within your
+--    'InumM' computation, you will have to apply 'lift' twice (as in
+--    @'lift' $ 'lift' action_in_m@) rather than just once.
+--
+--  - If you need to execute actions in the @'Iter' t m@ monad, you
+--    will have to lift them with the 'liftIterM' function.
+--
+-- The 'InumM' computation you construct must feed output of type
+-- @tOut@ to an output 'Iter' (which is implicitly contained in the
+-- monad state), using the 'ifeed', 'ipipe', and 'irun' functions.
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
            InumM tIn tOut m a b -> Inum tIn tOut m a
 mkInumM inumm iter0 =
