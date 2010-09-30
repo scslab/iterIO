@@ -1,39 +1,33 @@
-
 module Main (main) where
 
-import           Control.Applicative ((<$>))
-import           Control.Monad
+import           Control.Concurrent (threadDelay)
 import           Control.Monad.Trans
-import           Control.Concurrent
-import           Control.Exception (finally)
 import qualified Data.ByteString.Char8 as S
 import qualified Data.ByteString.Lazy.Char8 as L
-import qualified Data.ByteString.Lazy.UTF8 as U
-import           Data.List (intersperse)
-import           Data.Map (Map)
-import qualified Data.Map as Map
-import qualified Network.Socket as Net
-import qualified System.IO as IO
-import           Text.XHtml.Strict hiding (p)
-
 import           Data.IterIO
 import           Data.IterIO.Http
 import           Data.IterIO.Zlib
+import           Data.List (intersperse)
 import qualified Data.ListLike as LL
+import qualified System.IO as IO
+import           Text.XHtml.Strict hiding (p)
+
+import Server
+import Message
 
 type L = L.ByteString
 type S = S.ByteString
 
 
-port :: Net.PortNumber
-port = 8000
+main :: IO ()
+main = server 8000 handleRequest
 
 --
 -- Request handler
 --
 
-handleRequest :: (MonadIO m) => IO.Handle -> Iter L m ()
-handleRequest h = do
+handleRequest :: IO.Handle -> IO ()
+handleRequest h = enumHandle' h |$ do
   req <- httpreqI
   case S.unpack $ reqMethod req of
     "GET" ->
@@ -84,9 +78,15 @@ inumGzipResponse = mkInumAutoM $ do
   _ <- ifeed $ headersL gzipHeaders
   ipipe (inumGzip |. inumToChunks)
 
+gzipHeaders :: [String]
+gzipHeaders = ["HTTP/1.1 200 OK", "Content-Type: application/x-gzip", "Transfer-Encoding: chunked"]
+
+echoHeaders :: [String]
+echoHeaders = ["HTTP/1.1 200 OK", "Content-Type: application/octet-stream", "Transfer-Encoding: chunked"]
+
 
 --
--- Form processing
+-- Form handling
 --
 
 type Parms = [(Multipart, L, Int)]
@@ -99,18 +99,6 @@ parmsI req = foldForm req getPart []
     backLen <- countI
     return ((mp,front,backLen):parts)
 
-withParm :: (MonadIO m) => String -> HttpReq -> Iter L m a -> Iter L m (Maybe a)
-withParm pName req iter = foldForm req handlePart Nothing
- where
-  handlePart result part =
-    if mpName part == S.pack pName
-      then Just <$> iter
-      else nullI >> return result
-
-{-
-mapForm :: (Monad m) => HttpReq -> (Multipart -> Iter L m a) -> Iter L m ()
-mapForm req f = foldForm req () (\_ part -> f part >> return ())
--}
 
 --
 -- Html rendering
@@ -228,61 +216,9 @@ page pageTitle contents =
              , body << contents
              ]
 
-
 --
--- Server
+-- Utilities
 --
-
-data Connection = Connection { cxTid :: ThreadId }
-type Connections = MVar (Map ThreadId Connection)
-data Event = CxDone ThreadId
-           | CxNote ThreadId String
-type Events = Chan Event
-
-main :: IO ()
-main = Net.withSocketsDo $ do
-  listener <- myListen port
-  connections <- newMVar Map.empty
-  events <- newChan
-  _ <- forkIO $ forever $ acceptConnection listener connections events
-  forever $ handleEvent connections events
-
-acceptConnection :: Net.Socket -> Connections -> Events -> IO ()
-acceptConnection listener connections events = do
-  (s, addr) <- Net.accept listener
-  c <- spawnConnection s addr events
-  modifyMVar_ connections $ return . Map.insert (cxTid c) c
-
-handleEvent :: Connections -> Events -> IO ()
-handleEvent connections events = do
-  event <- readChan events
-  case event of
-    CxNote tid msg ->
-      warn $ show tid ++ ": " ++ msg
-    CxDone tid -> do
-      modifyMVar_ connections $ return . Map.delete tid
-      warn $ show tid ++ " FINISHED"
-
-spawnConnection :: Net.Socket -> Net.SockAddr -> Events -> IO Connection
-spawnConnection s addr events = do
-  tid <- forkIO $ do
-            tid <- myThreadId
-            handleConnection s `finally` writeChan events (CxDone tid)
-  writeChan events $
-    CxNote tid $ "Handling connection from " ++ show addr
-  return $ Connection tid
-
-handleConnection :: Net.Socket -> IO ()
-handleConnection s = do
-  h <- Net.socketToHandle s IO.ReadWriteMode
-  IO.hSetBuffering h IO.NoBuffering
-  enumHandle' h |$ handleRequest h
-  IO.hClose h
-
-
----
---- Iteratee helpers
----
 
 countI :: (Monad m, ChunkData t, LL.ListLike t e) =>
           Iter t m Int
@@ -294,66 +230,4 @@ countI = more 0
       then return n
       else do buf <- dataI
               more (n + LL.length buf)
-
-{-
-stderrLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e, Eq t, Enum e, Eq e) =>
-             t -> Inum t t m a
-stderrLog prefix = inumTee $ handleLogI IO.stderr prefix
-
-handleLogI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e, Eq t, Enum e, Eq e) =>
-              IO.Handle -> t -> Iter t m ()
-handleLogI h prefix = forever $ do
-  line <- lineI
-  liftIO $ LL.hPutStr h prefix
-  liftIO $ LL.hPutStrLn h line
-
-inumTee :: (Monad m, ChunkData t) =>
-           Iter t m () -> Inum t t m a
-inumTee = mkInumAutoM . loop
-    where
-      loop iter = do
-        buf <- lift dataI
-        iter' <- lift $ inumPure buf iter
-        _ <- ifeed buf
-        loop iter'
--}
-
-
---
--- Utilities
---
-
-warn :: String -> IO ()
-warn msg = IO.hPutStrLn IO.stderr msg
-
-myListen :: Net.PortNumber -> IO Net.Socket
-myListen pn = do
-  sock <- Net.socket Net.AF_INET Net.Stream Net.defaultProtocol
-  Net.setSocketOption sock Net.ReuseAddr 1
-  Net.bindSocket sock (Net.SockAddrInet pn Net.iNADDR_ANY)
-  Net.listen sock Net.maxListenQueue
-  return sock
-
-urlencoded :: S
-urlencoded = S.pack "application/x-www-form-urlencoded"
-
-multipart :: S
-multipart = S.pack "multipart/form-data"
-
-html2L :: Html -> L
-html2L h = L.append (headersL xhtmlHeaders)
-                    (U.fromString $ showHtml h)
-
-xhtmlHeaders :: [String]
-xhtmlHeaders = ["HTTP/1.1 200 OK", "Content-Type: text/html"]
-
-gzipHeaders :: [String]
-gzipHeaders = ["HTTP/1.1 200 OK", "Content-Type: application/x-gzip", "Transfer-Encoding: chunked"]
-
-echoHeaders :: [String]
-echoHeaders = ["HTTP/1.1 200 OK", "Content-Type: application/octet-stream", "Transfer-Encoding: chunked"]
-
-headersL :: [String] -> L
-headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
- where crlf = L.pack ['\r', '\n']
 
