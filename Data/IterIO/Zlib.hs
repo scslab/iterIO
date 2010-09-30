@@ -215,9 +215,9 @@ inumZState :: (MonadIO m) =>
 inumZState = mkInumM . loop
     where
       loop zs0 = do
-        (Chunk dat eof) <- lift chunkI
+        (Chunk dat eof) <- chunkI
         ((r, rest), zs) <- liftIO (runStateT (runz eof dat) zs0)
-        iunget rest
+        ungetI rest
         done <- ifeed $ zOut zs L.empty
         unless (done || eof || r == z_STREAM_END) $ loop zs { zOut = id }
 

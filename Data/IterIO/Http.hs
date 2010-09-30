@@ -524,7 +524,7 @@ inumToChunks :: (Monad m) => Inum L L m a
 inumToChunks = mkInumM loop
     where
       loop = do
-        Chunk s eof <- lift chunkI
+        Chunk s eof <- chunkI
         let len       = L8.length s
             chunksize = L8.pack $ printf "%x\r\n" len
             trailer   = if eof && len > 0
@@ -541,9 +541,9 @@ inumFromChunks = mkInumM $ getchunk
       chunk_ext_val = do char '='; osp; token <|> quoted_string; osp
       chunk_ext = do char ';'; osp; token; osp; optional chunk_ext_val
       getchunk = do
-        size <- lift $ hexInt <* (osp >> skipMany chunk_ext >> crlf)
+        size <- hexInt <* (osp >> skipMany chunk_ext >> crlf)
         if size > 0 then ipipe (inumTakeExact size) >> getchunk
-                    else lift $ do
+                    else do
                       skipMany (noctl >> crlf)
                       skipI crlf
 
@@ -703,12 +703,11 @@ inumMultipart :: (Monad m) => HttpReq -> Inum L L m a
 inumMultipart req iter = flip mkInumM (iter <* nullI) $ do
   b <- bstr
   ipipe $ inumStopString b
-  lift $ (crlf <?> chunkShow b)
+  (crlf <?> chunkShow b)
     where
       bstr = case reqBoundary req of
                Just b  -> return $ S8.pack "\r\n--" `S8.append` b
-               Nothing -> lift $ throwI $
-                          IterMiscParseErr "inumMultipart: no parts"
+               Nothing -> throwI $ IterMiscParseErr "inumMultipart: no parts"
 
 foldMultipart :: (Monad m) =>
                  HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a

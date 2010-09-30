@@ -41,11 +41,11 @@ dropper dropProb = mkInum $ do
   return $ if dropit then [] else [packet]
 
 reorderer :: Float -> NetSim a
-reorderer prob = mkInumAutoM $ lift headLI >>= oldOrNew
+reorderer prob = mkInumAutoM $ headLI >>= oldOrNew
   where
     oldOrNew old = do
-      new <- lift headLI
-      b <- lift $ rndBoolI prob
+      new <- headLI
+      b <- liftIterM $ rndBoolI prob
       if b then ifeed [old] >> oldOrNew new
            else ifeed [new] >> oldOrNew old
 
@@ -110,15 +110,15 @@ leqtime (TOD as aps) (TOD bs bps) =
 excessive :: NetSim a
 excessive = mkInumM $ doit [] Nothing
     where
-      holdtime :: InumM [L.ByteString] [L.ByteString] TM a ClockTime
-      holdtime = do to <- lift $ lift $ asks tcTimeout
+      -- holdtime :: InumM [L.ByteString] [L.ByteString] TM a ClockTime
+      holdtime = do to <- lift $ asks tcTimeout
                     let ms = to `div` 2
                     return $ TOD (fromIntegral $ ms `div` 1000)
                                  (fromIntegral $ (ms `mod` 1000 * 1000000))
       -- doit :: [L.ByteString] -> (Maybe ClockTime)
       --      -> InumM [L.ByteString] [L.ByteString] TM a ()
       doit pkts' mtime = do
-        pkt <- lift headLI
+        pkt <- headLI
         let pkts = pkt:pkts'
         now <- liftIO getClockTime
         time <- case mtime of
@@ -128,5 +128,5 @@ excessive = mkInumM $ doit [] Nothing
         if (now `subtime` time) `leqtime` ht
           then doit pkts (Just time)
           else if length pkts > 6
-               then lift nullI  -- Kill connection
+               then nullI  -- Kill connection
                else do ifeed (reverse pkts) >> ipipe inumNop >> return ()

@@ -71,7 +71,7 @@ module Data.IterIO.Base
     -- * Execution, concatenation and fusing operators
     , run, runI, (|$), (.|$), cat, (|.), (.|)
     -- * Exception and error functions
-    , IterNoParse(..), IterEOF(..), isIterEOF
+    , IterNoParse(..), IterEOF(..), mkIterEOF, isIterEOF
     , IterExpected(..), IterMiscParseErr(..)
     , throwI, throwEOFI
     , tryI, tryBI, catchI, catchOrI, catchBI, handlerI, handlerBI
@@ -610,11 +610,13 @@ instance Exception IterEOF where
     toException = noParseToException
     fromException = noParseFromException
 
+-- | Make an 'IterEOF' from a String.
+mkIterEOF :: String -> IterEOF
+mkIterEOF loc = IterEOF $ mkIOError eofErrorType loc Nothing Nothing
+
 -- | True if and only if an exception is of type 'IterEOF'.
 isIterEOF :: SomeException -> Bool
-isIterEOF err = case fromException err of
-                  Just (IterEOF _) -> True
-                  Nothing          -> False
+isIterEOF err = maybe False (\(IterEOF _) -> True) $ fromException err
 
 -- | Iteratee expected particular input and did not receive it.
 data IterExpected = IterExpected {
@@ -658,7 +660,7 @@ throwI e = IterFail $ toException e
 -- monad, the exception will be rethrown by 'run' (and hence '|$') as
 -- an 'IOError' of type EOF.
 throwEOFI :: String -> Iter t m a
-throwEOFI loc = throwI $ IterEOF $ mkIOError eofErrorType loc Nothing Nothing
+throwEOFI = throwI . mkIterEOF
 
 -- | Internal function used by 'tryI' and 'tryBI' when re-propagating
 -- exceptions that don't match the requested exception type.  (To make

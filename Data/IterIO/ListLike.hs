@@ -236,7 +236,7 @@ enumDgram :: (MonadIO m, SendRecvString t) =>
           -> Onum [t] m a
 enumDgram sock = mkInumM $ irepeat $ do
   (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
-  if r < 0 then lift $ throwEOFI "enumDgram" else ifeed [msg]
+  if r < 0 then throwEOFI "enumDgram" else ifeed [msg]
 
 
 -- | Read datagrams from a socket and feed a list of (Bytestring,
@@ -246,7 +246,7 @@ enumDgramFrom :: (MonadIO m, SendRecvString t) =>
               -> Onum [(t, SockAddr)] m a
 enumDgramFrom sock = mkInumM $ irepeat $ do
   (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
-  if r < 0 then lift $ throwEOFI "enumDgramFrom" else ifeed [(msg, addr)]
+  if r < 0 then throwEOFI "enumDgramFrom" else ifeed [(msg, addr)]
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.
@@ -307,9 +307,9 @@ inumTakeExact :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
 inumTakeExact = mkInumM . loop
     where loop n | n <= 0    = return ()
                  | otherwise = do
-            t <- lift dataI
+            t <- dataI
             let (h, r) = LL.splitAt n t
-            iunget r
+            ungetI r
             _ <- ifeed1 h       -- Keep feeding even if Done
             loop $ n - LL.length h
 
@@ -338,7 +338,7 @@ inumLog path trunc = mkInumM $ do
 -- file name.  Does not close the handle when done.
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle -> Inum t t m a
-inumhLog h = mkInumM $ do addCleanup (ipopresid >>= iunget)
-                          irepeat $ do buf <- lift dataI
+inumhLog h = mkInumM $ do addCleanup (ipopresid >>= ungetI)
+                          irepeat $ do buf <- dataI
                                        liftIO $ LL.hPutStr h buf
                                        ifeed buf

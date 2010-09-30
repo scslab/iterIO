@@ -3,7 +3,6 @@ module Data.IterIO.Search (inumStopString
                           , mapI, mapLI
                           ) where
 
-import Control.Monad.Trans
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.ByteString.Lazy.Search as Search
@@ -25,9 +24,9 @@ inumStopString spat = mkInumM $ nextChunk L8.empty
       plen = toEnum $ S8.length spat
       search = Search.breakOn spat
       nextChunk old = do
-        (Chunk t eof) <- lift chunkI
+        (Chunk t eof) <- chunkI
         case search $ L8.append old t of
-          (a, b) | not (L8.null b) -> iunget b >> ifeed a
+          (a, b) | not (L8.null b) -> ungetI b >> ifeed a
           (a, _) | eof             -> ifeed a
           (a, _)                   -> checkEnd a
       checkEnd t = let tlen = L8.length t
