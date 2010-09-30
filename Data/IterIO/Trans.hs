@@ -179,7 +179,7 @@ runWriterTLI = doW mempty
 
 instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
     callCC f = IterM $ (callCC $ \cc -> return $ f (cont cc))
-        where cont cc a = do IterF $ \c -> IterM $ cc (Done a c)
+        where cont cc a = IterF $ \c -> IterM $ cc (Done a c)
 
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where
