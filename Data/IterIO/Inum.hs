@@ -217,7 +217,7 @@ inumAddSig = 'inumNop' ``cat`` 'runI' . 'enumFile' \".signature\"
 
 The @.@ between 'runI' and @'enumFile'@ is because 'Inum's are
 functions from 'Iter's to 'Iter's; we want to apply 'runI' to the
-result applying @'enumFile' \".signature\"@ to an 'Iter'.  Spelled
+result of applying @'enumFile' \".signature\"@ to an 'Iter'.  Spelled
 out, the type of @'enumFile'@ is:
 
 @
@@ -261,7 +261,7 @@ defaultInumState = InumState {
 --
 -- Another important thing to note about the 'InumM' monad, as
 -- described in the documentation for 'mkInumM', is that you must call
--- 'lift' twice execute actions in monad @m@, and you must use the
+-- @'lift'@ twice execute actions in monad @m@, and you must use the
 -- 'liftIterM' function to execute actions in monad @'Iter' t m a@.
 type InumM tIn tOut m a = Iter tIn (IterStateT (InumState tIn tOut m a) m)
 
@@ -372,14 +372,14 @@ mkInumAutoM inumm iter0 =
 -- consequences:
 --
 --  - If you wish to execute actions in monad @m@ from within your
---    'InumM' computation, you will have to apply 'lift' twice (as in
---    @'lift' $ 'lift' action_in_m@) rather than just once.
+--    'InumM' computation, you will have to apply @'lift'@ twice (as
+--    in @'lift' $ 'lift' action_in_m@) rather than just once.
 --
 --  - If you need to execute actions in the @'Iter' t m@ monad, you
 --    will have to lift them with the 'liftIterM' function.
 --
--- The 'InumM' computation you construct must feed output of type
--- @tOut@ to an output 'Iter' (which is implicitly contained in the
+-- The 'InumM' computation you construct can feed output of type
+-- @tOut@ to the target 'Iter' (which is implicitly contained in the
 -- monad state), using the 'ifeed', 'ipipe', and 'irun' functions.
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
            InumM tIn tOut m a b -> Inum tIn tOut m a
