@@ -1226,7 +1226,7 @@ feedI err _                     = err
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
 -- 'IterF', 'IterM', or 'IterC' states), then 'return's the 'Iter'
 -- much like an 'Inum'.  This function looks a lot like 'inumNop', but
--- is actually not real 'Inum' because, upon receiving an EOF,
+-- is actually not a real 'Inum' because, upon receiving an EOF,
 -- @finishI@ feeds the EOF to the 'Iter'.  'Inum's are supposed to
 -- return 'Iter's upon receiving EOF, but are not supposed to feed the
 -- EOF to the 'Iter', as this breaks functions like 'cat'.
