@@ -81,13 +81,20 @@ mkInum codec = loop
 {- $mkInumMIntro
 
 Complex 'Inum's that need state and non-trivial control flow can be
-constructed using the 'mkInumM' function.  'mkInumM' creates an 'Inum'
-out of a computation in the 'InumM' monad.  'InumM' is a 'MonadTrans'
-around 'Iter'.  Thus, you can consume input by applying 'lift' to any
-'Iter' of the same input type and monad.
+constructed using the 'mkInumM' function to produce an 'Inum' out of a
+computation in the 'InumM' monad.  The 'InumM' monad implicitly keeps
+track of the state of the 'Iter' to which the 'Inum' is feeding data,
+which we call the \"target 'Iter'\".
 
-The 'InumM' monad implicitly keeps track of the state of the 'Iter'
-being fed by the enumerator, which we call the \"target 'Iter'\".
+'InumM' is an 'Iter' monad, and so can consume input by invoking
+ordinary 'Iter' actions.  However, to keep track of the state of the
+target 'Iter', 'InumM' wraps its inner monadic type with an
+'IterStateT' transformer.  Specifically, when creating an enumerator
+of type @'Inum' tIn tOut m a@, the 'InumM' action is of a type like
+@'Iter' tIn ('IterStateT' (InumStateT ...) m) ()@.  That means that to
+execute actions of type @'Iter' tIn m a@ that are not polymorphic in
+@m@, you have to transform them with the 'liftIterM' function.
+
 Output can be fed to the target 'Iter' by means of the 'ifeed'
 function.  As an example, here is another version of the @inumConcat@
 function given previously for 'mkInum' at <#1>:
