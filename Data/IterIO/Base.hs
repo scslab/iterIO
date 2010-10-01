@@ -556,17 +556,28 @@ cat :: (ChunkData tIn, Monad m) =>
 cat a b iter = a iter `inumBind` b
 infixr 3 `cat`
 
--- | Fuse two 'Inum's when the inner type of the first 'Inum' is the
--- same as the outer type of the second.  More specifically, if
--- @inum1@ transcodes type @tIn@ to @tMid@ and @inum2@ transcodes
--- @tMid@ to @tOut@, then @inum1 |. inum2@ produces a new 'Inum' that
--- transcodes @tIn@ to @tOut@.  Has fixity:
+-- | Fuse two 'Inum's when the output type of the first 'Inum' is the
+-- same as the input type of the second.  More specifically, if
+-- @inum1@ transcodes type @tIn@ to @tOut@ and @inum2@ transcodes
+-- @tOut@ to something else, then @inum1 |. inum2@ produces a new
+-- 'Inum' that transcodes from @tIn@ to the output type of @inum2@.
+--
+-- Note that while ordinarily type @a@ in this signature will be equal
+-- to @'Inum' tOut tOther m b@, strictly speaking, the second argument
+-- (@inum2@ above) does not actually need to be an 'Inum'; it might,
+-- for instance, translate between monads as well as transcoding
+-- types.
+--
+-- Has fixity:
 --
 -- > infixl 4 |.
-(|.) :: (ChunkData tIn, ChunkData tMid, ChunkData tOut, Monad m) => 
-         Inum tIn tMid m (Iter tOut m a) -- ^
-      -> Inum tMid tOut m a
-      -> Inum tIn tOut m a
+(|.) :: (ChunkData tIn, ChunkData tOut, Monad m) => 
+        Inum tIn tOut m a
+     -- ^ 'Inum' translating from @tIn@ to @tOut@.
+     -> (a -> Iter tOut m a)
+     -- ^ 'Inum' translating from @tOut@ to something else.
+     -> a -> Iter tIn m a
+     -- ^ Returns an 'Inum' translating from @tIn@ to something else.
 (|.) outer inner iter = joinI $ outer $ inner iter
 infixl 4 |.
 
@@ -1467,7 +1478,7 @@ data CtlArg = forall carg cres. (CtlCmd carg cres) => CtlArg !carg
 data CtlRes = forall cres. (Typeable cres) => CtlRes cres
 
 -- | A control request handler maps control requests to 'Iter's.
-type CtlHandler m = CtlArg -> (m CtlRes)
+type CtlHandler m = CtlArg -> m CtlRes
 
 -- | A control request handler that ignores the request argument and
 -- always fails immediately (thereby not passing the control request
