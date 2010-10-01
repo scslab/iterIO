@@ -372,7 +372,7 @@ uri = absUri
 
 -- | Turn a path into a list of components
 path2list :: S -> [S]
-path2list path = runIdentity $ inumPure path |$
+path2list path = runIdentity $ enumPure path |$
                  slash [] `catchI` \(IterNoParse _) _ -> return []
     where
       slash acc = while1I (eord '/' ==) \/ eofI *> return (reverse acc) $
@@ -498,7 +498,7 @@ any_hdr req = do
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
   case Map.lookup field request_headers of
     Nothing -> return req'
-    Just f  -> inumPure (L.fromChunks [val]) .|$
+    Just f  -> enumPure (L.fromChunks [val]) .|$
                (f req' <* (optional spaces >> eofI)
                       <?> (S8.unpack field ++ " header"))
 
@@ -611,7 +611,7 @@ urlencodedFormI = sepBy controlI (char '&')
 foldControls :: (Monad m) => (a -> Multipart -> Iter L m a) -> a -> Iter L m a
 foldControls f z =
     controlI \/ return z $ \(k, v) ->
-    inumPure (L.fromChunks [v]) .|
+    enumPure (L.fromChunks [v]) .|
              f z defaultMultipart { mpName = k } `inumBind` \a ->
     char '&' \/ return a $ \_ -> foldControls f a
 
@@ -625,7 +625,7 @@ foldUrlencoded req f z =
 
 foldQuery :: (Monad m) =>
              HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
-foldQuery req f z = inumPure (L.fromChunks [reqQuery req]) .| foldControls f z
+foldQuery req f z = enumPure (L.fromChunks [reqQuery req]) .| foldControls f z
 
 encReq :: L
 encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
@@ -687,8 +687,8 @@ multipartI req = case reqBoundary req of
       if done then return Nothing else Just <$> parsepart
     parsepart = do
       cdhdr@(field, val) <- hdr_field_val
-      inumPure field .|$ stringCase "Content-Disposition"
-      parms <- inumPure (L.fromChunks [val]) .|$
+      enumPure field .|$ stringCase "Content-Disposition"
+      parms <- enumPure (L.fromChunks [val]) .|$
                sepBy (parameter <|> (token >>= \t -> return (t, S.empty)))
                      (olws >> char ';')
       hdrs <- many hdr_field_val
@@ -719,7 +719,7 @@ foldMultipart req f z = multipartI req >>= doPart
           foldMultipart req f a
 
 mptest :: IO ()
-mptest = inumPure postReq |$ (httpreqI >>= getHead)
+mptest = enumPure postReq |$ (httpreqI >>= getHead)
     where
       getHead req = do
         mmp <- multipartI req
@@ -736,7 +736,7 @@ mptest = inumPure postReq |$ (httpreqI >>= getHead)
                         getHead req
 
 mptest' :: IO ()
-mptest' = inumPure postReq |$ (httpreqI >>= getParts 0)
+mptest' = enumPure postReq |$ (httpreqI >>= getParts 0)
     where
       getParts :: (MonadIO m) => Integer -> HttpReq -> Iter L m ()
       getParts n req = do
@@ -816,7 +816,7 @@ foldForm req = case reqContentType req of
                       "foldForm: invalid Content-Type"
 
 formTest :: L -> IO ()
-formTest b = inumPure b |$ handleReq
+formTest b = enumPure b |$ handleReq
  where
   handleReq = do
     req <- httpreqI

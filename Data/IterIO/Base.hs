@@ -39,7 +39,7 @@
      which is just an 'Inum' with the void input type @()@.  Outer
      enumerators are sources of data.  Rather than transcode input
      data, they produce data from monadic actions (or from pure data
-     in the case of 'inumPure').  The type 'Onum' represents outer
+     in the case of 'enumPure').  The type 'Onum' represents outer
      enumerators and is a synonym for 'Inum' with an input type of
      @()@.
 
@@ -83,7 +83,7 @@ module Data.IterIO.Base
     -- * Low-level Iter-manipulation functions
     , feedI, finishI, joinI, inumBind
     -- * Some basic Inums
-    , inumPure, inumF, inumC, inumFC, inumMC, inumLazy, inumRepeat, inumNop
+    , enumPure, inumF, inumC, inumFC, inumMC, inumLazy, inumRepeat, inumNop
     -- * Control functions
     , ctlI, safeCtlI
     , CtlHandler, CtlArg(..), CtlRes(..)
@@ -405,7 +405,7 @@ type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (Iter tOut m a)
 -- data to transcode.  Such an enumerator is called an
 -- /outer enumerator/, because it must produce the data it feeds to
 -- 'Iter's by either executing actions in monad @m@, or from its own
--- internal pure state (as for 'inumPure').
+-- internal pure state (as for 'enumPure').
 --
 -- Under no circumstances should an @Onum@ ever feed a chunk with the
 -- EOF bit set to its 'Iter' argument.  When the @Onum@ runs out of
@@ -471,12 +471,12 @@ infixr 2 |$
 
 -- | @.|$@ is a variant of '|$' that allows you to apply an 'Onum'
 -- from within an 'Iter' monad.  This is often useful in conjuction
--- with 'inumPure', if you want to parse at some coarse-granularity
+-- with 'enumPure', if you want to parse at some coarse-granularity
 -- (such as lines), and then re-parse the contents of some
 -- coarser-grained parse unit.  For example:
 --
 -- >     rawcommand <- lineI
--- >     command <- inumPure rawcommand .|$ parseCommandI
+-- >     command <- enumPure rawcommand .|$ parseCommandI
 -- >     return Request { cmd = command, rawcmd = rawcommand }
 --
 -- @.|$@ has the same fixity as @|$@, namely:
@@ -494,17 +494,17 @@ infixr 2 |$
 -- > -- Catches exception, because .|$ propagates failure through the outer
 -- > -- Iter Monad, where it can still be caught.
 -- > apply1 :: IO String
--- > apply1 = inumPure "test1" |$ iter `catchI` handler
+-- > apply1 = enumPure "test1" |$ iter `catchI` handler
 -- >     where
--- >       iter = inumPure "test2" .|$ fail "error"
+-- >       iter = enumPure "test2" .|$ fail "error"
 -- >       handler (SomeException _) _ = return "caught error"
 -- > 
 -- > -- Does not catch error.  |$ turns the Iter failure into a language-
 -- > -- level exception, which can only be caught in the IO Monad.
 -- > apply2 :: IO String
--- > apply2 = inumPure "test1" |$ iter `catchI` handler
+-- > apply2 = enumPure "test1" |$ iter `catchI` handler
 -- >     where
--- >       iter = lift (inumPure "test2" |$ fail "error")
+-- >       iter = lift (enumPure "test2" |$ fail "error")
 -- >       handler (SomeException _) _ = return "caught error"
 -- > 
 -- > -- Catches the exception, because liftIO uses the IO catch function to
@@ -512,9 +512,9 @@ infixr 2 |$
 -- > -- contrast, lift works in any Monad, so cannot do this in apply2.)
 -- > -- This example illustrates how liftIO is not equivalent to lift.
 -- > apply3 :: IO String
--- > apply3 = inumPure "test1" |$ iter `catchI` handler
+-- > apply3 = enumPure "test1" |$ iter `catchI` handler
 -- >     where
--- >       iter = liftIO (inumPure "test2" |$ fail "error")
+-- >       iter = liftIO (enumPure "test2" |$ fail "error")
 -- >       handler (SomeException _) _ = return "caught error"
 (.|$) :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Onum tOut m a -> Iter tOut m a -> Iter tIn m a
@@ -853,16 +853,16 @@ handlerBI = flip catchBI
 -- > -- Throws an exception, because inumBad was fused outside the argument
 -- > -- to inumCatch.
 -- > test1 :: IO ()
--- > test1 = inumCatch (inumPure "test") skipError |. inumBad |$ nullI
+-- > test1 = inumCatch (enumPure "test") skipError |. inumBad |$ nullI
 -- > 
 -- > -- Does not throw an exception, because inumBad fused within the
 -- > -- argument to enumCatch.
 -- > test2 :: IO ()
--- > test2 = inumCatch (inumPure "test" |. inumBad) skipError |$ nullI
+-- > test2 = inumCatch (enumPure "test" |. inumBad) skipError |$ nullI
 -- > 
 -- > -- Again no exception, because inumCatch is wrapped around inumBad.
 -- > test3 :: IO ()
--- > test3 = inumPure "test" |. (inumCatch inumBad skipError) |$ nullI
+-- > test3 = enumPure "test" |. (inumCatch inumBad skipError) |$ nullI
 --
 -- Note that @\`inumCatch\`@ has the default infix precedence (@infixl
 -- 9 \`inumcatch\`@), which binds more tightly than any concatenation
@@ -1174,8 +1174,8 @@ ungetI = Done () . chunk
 -- For instance, you could say:
 --
 -- @
---    a' <- 'inumPure' t a
---    b' <- 'inumPure' t b
+--    a' <- 'enumPure' t a
+--    b' <- 'enumPure' t b
 -- @
 --
 -- or:
@@ -1308,9 +1308,9 @@ joinI iter           = finishI iter >>= joinI
 --
 
 -- | An 'Inum' that will feed pure data to 'Iter's.
-inumPure :: (Monad m, ChunkData tIn, ChunkData tOut) =>
+enumPure :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             tOut -> Inum tIn tOut m a
-inumPure t iter = inumMC passCtl $ feedI iter $ chunk t
+enumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 
 -- | An 'Inum' that passes data straight through to an 'Iter' in the
 -- 'IterF' state and returns the 'Iter' as soon as it enters any

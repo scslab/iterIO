@@ -60,7 +60,7 @@ handleRequest h = do
         _ -> echo req
     _ -> error "Unrecognized method"
  where
-  ok html = inumPure (html2L html) .| handleI h
+  ok html = enumPure (html2L html) .| handleI h
   echo req = parmsI req >>= ok . page "Request" . request2Html req
 
 
@@ -316,7 +316,7 @@ inumTee = mkInumAutoM . loop
     where
       loop iter = do
         buf <- lift dataI
-        iter' <- lift $ inumPure buf iter
+        iter' <- lift $ enumPure buf iter
         _ <- ifeed buf
         loop iter'
 -}

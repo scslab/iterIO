@@ -124,12 +124,12 @@ type of 'lineI' in the above example is @'Iter' String m String@.  The
 @lines2I@ function executes 'lineI' twice using monadic @do@ syntax to
 bind the results to @line1@ and @line2@.  The monadic bind operator
 hides the details of IO chunk boundaries.  If, for instance, 'lineI'
-needs more input because a newline character has not yet been
-read, 'lineI' returns to the containing enumerator asking for more
-data.  If the first 'lineI' receives more than a line of input, it
-simply passes the unused input on to the next invocation of 'lineI'.
-Both of these actions are hidden by the syntax, making most code much
-easier to read and write.
+needs more input because a newline character has not yet been read,
+'lineI' returns to the containing enumerator asking for more data.  If
+the first 'lineI' receives more than a line of input, it simply passes
+the residual input to the next invocation of 'lineI'.  Both of these
+actions are hidden by the syntax, making most code much easier to read
+and write.
 
 That explains the iteratee type 'Iter'.  The enumerator type, 'Onum',
 has the same three type arguments.  Thus, the type of 'enumFile', as
@@ -225,27 +225,27 @@ input type @()@.  The type @'Onum' t m a@ is just a synonym for
 @'Inum' () t m a@.  Most operations on 'Inum's can be used with
 'Onum's as well, since an 'Onum' /is/ an 'Inum'.  The converse is not
 true, however.  For example, the '|$' operator requires an 'Onum', as
-it wouldn't know what data to feed to an arbitrary 'Inum'.  (There is,
-however, a function @run@ in "Data.IterIO.Base", not re-exported by
-this module, than you can use to apply an arbitrary 'Inum' to an
-'Iter' by just feeding the 'Inum' EOF as input.)
+it wouldn't know what data to feed to an arbitrary 'Inum'.  (If you
+need it, however, there is a function @run@, hidden by this module but
+exported by "Data.IterIO.Base", that executes an iteratee computation
+of arbitrary input type by feeding EOF as input.)
 
 Iteratee-enumerators are generally constructed using either 'mkInum'
 or `mkInumM`, and by convention most 'Inum's have names starting
-\"@inum@...\".  'mkInum' takes an argument of type @Iter tIn m tOut@
-that consumes input of type @tIn@ to produce output of type @tOut@.
-(For @inumToLines@, @tIn@ is @S.ByteString@ and @tOut@ is
-@[S.ByteString]@).  This is fine for simple stateless translation
-functions, but sometimes one would like to keep state and use more
-complex logic in an 'Inum'.  For that, the 'mkInumM' function creates
-an 'Inum' out of a computation in a dedicated 'InumM' monad.  See the
-"Data.IterIO.Inum" documentation for more informaiton on 'mkInumM'.
-In @inumToLines@, we do not need to keep state.  We are happy just to
-let 'lineI' throw an exception on EOF, which `mkInum` will catch and
-handle gracefully.  (Throwing an exception of type 'IterEOF'--either
-implicitly by executing another 'Iter' or explicitly with
-'throwEOFI'--is the standard way to exit an 'Inum' created by
-'mkInum'.)
+\"@inum@...\", except that 'Onum' names start \"@enum...@\".  'mkInum'
+takes an argument of type @Iter tIn m tOut@ that consumes input of
+type @tIn@ to produce output of type @tOut@.  (For @inumToLines@,
+@tIn@ is @S.ByteString@ and @tOut@ is @[S.ByteString]@).  This is fine
+for simple stateless translation functions, but sometimes one would
+like to keep state and use more complex logic in an 'Inum'.  For that,
+the 'mkInumM' function creates an 'Inum' out of a computation in a
+dedicated 'InumM' monad.  See the "Data.IterIO.Inum" documentation for
+more informaiton on 'mkInumM'.  In @inumToLines@, we do not need to
+keep state.  We are happy just to let 'lineI' throw an exception on
+EOF, which `mkInum` will catch and handle gracefully.  (Throwing an
+exception of type 'IterEOF'--either implicitly by executing another
+'Iter' or explicitly with 'throwEOFI'--is the standard way to exit an
+'Inum' created by 'mkInum'.)
 
 We similarly define an 'Inum' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),

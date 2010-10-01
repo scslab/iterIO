@@ -231,6 +231,7 @@ enumFile :: (MonadIO m, ChunkData t, ListLikeIO t e) =>
 
 -}
 
+-- | Internal data structure for the 'InumM' monad's state.
 data InumState tIn tOut m a = InumState {
       insAutoEOF :: !Bool
     , insAutoDone :: !Bool
@@ -327,7 +328,7 @@ withCleanup clean action = do
   return b
 
 -- | Convert an 'InumM' computation into an 'Inum', given some
--- 'InumState' to run on.
+-- @'InumState'@ to run on.
 runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
             InumM tIn tOut m a b
          -- ^ Monadic computation defining the 'Inum'.
@@ -407,7 +408,7 @@ ithrow e = do
 -- immediately.)
 ifeed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          tOut -> InumM tIn tOut m a Bool
-ifeed = ipipe . inumPure
+ifeed = ipipe . enumPure
 
 -- | A variant of 'ifeed' that throws an exception of type 'IterEOF'
 -- if the data being fed is 'null'.  Convenient when reading input
