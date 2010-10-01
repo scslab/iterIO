@@ -232,7 +232,7 @@ enumFile :: (MonadIO m, ChunkData t, ListLikeIO t e) =>
 data InumState tIn tOut m a = InumState {
       insAutoEOF :: !Bool
     , insAutoDone :: !Bool
-    , insCtl :: !(CtlHandler (InumM tIn tOut m a))
+    , insCtl :: !(CtlHandler (Iter tIn m))
     , insIter :: !(Iter tOut m a)
     , insRemain :: !(Chunk tIn)
     , insCleanup :: !(InumM tIn tOut m a ())
@@ -271,7 +271,7 @@ instance Exception InumDone
 -- | Set the control handler an 'Inum' should use from within an
 -- 'InumM' computation.  (The default is 'passCtl'.)
 setCtlHandler :: (ChunkData tIn, Monad m) =>
-                 CtlHandler (InumM tIn tOut m a)
+                 CtlHandler (Iter tIn m)
               -> InumM tIn tOut m a ()
 setCtlHandler ch = imodify $ \s -> s { insCtl = ch }
 
@@ -427,7 +427,7 @@ ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
 ipipe inum = do
   s <- iget
-  iter <- (inumRepeat (inumMC (insCtl s) `cat` inumF)) |. (liftIterM . inum) $
+  iter <- liftIterM $ inumRepeat (inumMC (insCtl s) `cat` inumF) |. inum $
           insIter s
   iput s { insIter = iter }
   let done = not $ isIterActive iter
