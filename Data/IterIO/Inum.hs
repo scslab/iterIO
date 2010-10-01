@@ -45,6 +45,8 @@ import Data.IterIO.Trans
 -- could implement an 'Inum' called @inumConcat@ to do this as
 -- follows:
 --
+-- #mkInumExample#
+--
 -- @
 --iterConcat :: (Monad m) => 'Iter' [L.ByteString] m L.ByteString
 --iterConcat = L.concat ``liftM`` 'dataI'
@@ -97,7 +99,7 @@ execute actions of type @'Iter' tIn m a@ that are not polymorphic in
 
 Output can be fed to the target 'Iter' by means of the 'ifeed'
 function.  As an example, here is another version of the @inumConcat@
-function given previously for 'mkInum' at <#1>:
+function given previously for 'mkInum' at <#mkInumExample>:
 
 @
 inumConcat :: (Monad m) => 'Inum' [L.ByteString] L.ByteString m a
@@ -139,8 +141,8 @@ places data back in the input stream.  Since here the input stream is
 a list of @L.ByteString@s, we have to place @resid@ in a list.  (After
 doing this, the list element boundaries may be different, but all the
 input bytes will be there.)  Note that the version of @inumConcat@
-implemented with 'mkInum' at <#1> does not have this input-restoring
-feature.
+implemented with 'mkInum' at <#mkInumExample> does not have this
+input-restoring feature.
 
 The code above looks much clumsier than the version based on 'mkInum',
 but several of these steps can be made implicit.  There is an

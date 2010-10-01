@@ -559,11 +559,11 @@ infixr 3 `cat`
 -- | Fuse two 'Inum's when the output type of the first 'Inum' is the
 -- same as the input type of the second.  More specifically, if
 -- @inum1@ transcodes type @tIn@ to @tOut@ and @inum2@ transcodes
--- @tOut@ to something else, then @inum1 |. inum2@ produces a new
--- 'Inum' that transcodes from @tIn@ to the output type of @inum2@.
+-- @tOut@ to @tOut'@, then @inum1 |. inum2@ produces a new 'Inum' that
+-- transcodes from @tIn@ to @tOut'@.
 --
--- Note that while ordinarily type @a@ in this signature will be equal
--- to @'Inum' tOut tOther m b@, strictly speaking, the second argument
+-- Note that while ordinarily type @b@ in this signature will be equal
+-- to @'Inum' tOut tOut' m a@, strictly speaking, the second argument
 -- (@inum2@ above) does not actually need to be an 'Inum'; it might,
 -- for instance, translate between monads as well as transcoding
 -- types.
@@ -572,11 +572,11 @@ infixr 3 `cat`
 --
 -- > infixl 4 |.
 (|.) :: (ChunkData tIn, ChunkData tOut, Monad m) => 
-        Inum tIn tOut m a
+        Inum tIn tOut m b
      -- ^ 'Inum' translating from @tIn@ to @tOut@.
-     -> (a -> Iter tOut m a)
+     -> (b -> Iter tOut m b)
      -- ^ 'Inum' translating from @tOut@ to something else.
-     -> a -> Iter tIn m a
+     -> b -> Iter tIn m b
      -- ^ Returns an 'Inum' translating from @tIn@ to something else.
 (|.) outer inner iter = joinI $ outer $ inner iter
 infixl 4 |.
