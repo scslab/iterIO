@@ -1,7 +1,10 @@
 module Message 
-  ( html2L, headersL
+  ( httpResponse
+  , statusOK, statusSeeOther, statusBadRequest, statusNotFound
+  , xhtmlResponse
   , withParm, mapForm
   , urlencoded, multipart
+  , headersL
   )
 where
 
@@ -23,16 +26,36 @@ type S = S.ByteString
 -- Response construction
 --
 
+httpVersion :: S
+httpVersion = S.pack "HTTP/1.1"
+
+statusOK :: S
+statusOK = S.pack "200 OK"
+
+statusSeeOther :: S
+statusSeeOther = S.pack "303 See Other"
+
+statusBadRequest :: S
+statusBadRequest = S.pack "400 Bad Request"
+
+statusNotFound :: S
+statusNotFound = S.pack "404 Not Found"
+
+httpResponse :: S -> L -> L
+httpResponse status message =
+  L.append (L.fromChunks [httpVersion, S.pack " ", status, S.pack "\r\n"]) message
+
+xhtmlResponse :: S -> [String] -> Html -> L
+xhtmlResponse status headers h =
+  httpResponse status $ L.append (headersL $ xhtmlHeaders ++ headers)
+                                 (U.fromString $ showHtml h)
+
+xhtmlHeaders :: [String]
+xhtmlHeaders = ["Content-Type: text/html"]
+
 headersL :: [String] -> L
 headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
  where crlf = L.pack ['\r', '\n']
-
-html2L :: Html -> L
-html2L h = L.append (headersL xhtmlHeaders)
-                    (U.fromString $ showHtml h)
-
-xhtmlHeaders :: [String]
-xhtmlHeaders = ["HTTP/1.1 200 OK", "Content-Type: text/html"]
 
 
 --

@@ -50,11 +50,20 @@ handleRequest h = enumHandle' h |$ do
                    "gzip-file" -> gzipFile req h >> return ()
                    "gzip" -> inumGzipResponse .| handleI h  -- process the input raw, not form-encoded
                    "submit" -> echo req
-                   _ -> error "Unrecognized action"
+                   _ -> notFound'
         _ -> echo req
-    _ -> error "Unrecognized method"
+    _ -> notFound'
  where
-  ok html = inumPure (html2L html) .| handleI h
+  respondI response = inumPure response .| handleI h
+  xhtmlResponseI status headers x = respondI $ xhtmlResponse status headers (toHtml x)
+  ok = xhtmlResponseI statusOK []
+  {-
+  seeOther url = xhtmlResponseI statusSeeOther ["Location: " ++ url]
+  badRequest = xhtmlResponseI statusBadRequest []
+  -}
+  notFound = xhtmlResponseI statusNotFound []
+  notFound' = notFound "Not Found."
+
   echo req = parmsI req >>= ok . page "Request" . request2Html req
 
 
