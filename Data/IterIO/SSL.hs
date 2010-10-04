@@ -40,7 +40,7 @@ sslFromSocket :: (MonadIO m) =>
               -- ^ 'True' for server handshake, 'False' for client
               -> IO (Iter L.ByteString m (), Onum L.ByteString m a)
 sslFromSocket ctx sock server = do
-  mn <- newMVar 2
+  mn <- newMVar (2 :: Int)
   ssl <- SSL.connection ctx sock
   if server then SSL.accept ssl else SSL.connect ssl
   let cleanW = liftIO $ modifyMVar mn $ \n -> do
@@ -63,6 +63,7 @@ simpleContext keyfile = do
   SSL.contextSetDefaultCiphers ctx
   SSL.contextSetCertificateFile ctx keyfile
   SSL.contextSetPrivateKeyFile ctx keyfile
+  SSL.contextSetVerificationMode ctx $ SSL.VerifyPeer False True
   return ctx
 
 -- | Quick and dirty funciton to generate a self signed certificate

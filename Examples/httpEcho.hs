@@ -360,3 +360,7 @@ headersL :: [String] -> L
 headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
  where crlf = L.pack ['\r', '\n']
 
+
+-- Local Variables:
+-- haskell-program-name: "ghci -lz"
+-- End:
