@@ -6,7 +6,6 @@ import Control.Exception (throwIO, ErrorCall(..))
 import Control.Monad
 import Control.Monad.Trans
 import qualified Network.Socket as Net
-import qualified OpenSSL as SSL
 import qualified OpenSSL.Session as SSL
 import System.Cmd
 import System.Exit
