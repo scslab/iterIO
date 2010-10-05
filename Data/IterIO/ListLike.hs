@@ -344,7 +344,7 @@ inumhLog h = mkInumM $ do addCleanup (ipopresid >>= ungetI)
                                        ifeed buf
 
 -- | Log a copy of everything to standard error.  (@inumStderr =
--- 'inumhLog' 'stderr')
+-- 'inumhLog' 'stderr'@)
 inumStderr :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
               Inum t t m a
 inumStderr = inumhLog stderr

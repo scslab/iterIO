@@ -29,13 +29,13 @@ sslI ssl = loop
             unless (L.null t) $ liftIO $ SSL.lazyWrite ssl t
             if eof then liftIO $ SSL.shutdown ssl SSL.Unidirectional else loop
 
--- | Turn a socket into an 'Iter' and 'Onum' that use OpenSSL to read
--- and write from the socket, respectively.  Does an SSL
+-- | Turn a socket into an 'Iter' and 'Onum' that use OpenSSL to write
+-- to and read from the socket, respectively.  Does an SSL
 -- bi-directional shutdown and closes the socket when both a) the enum
 -- completes and b) the iter has received an EOF chunk.
 --
--- This funciton must only be called from within a call to
--- 'SSL.withOpenSSL'.
+-- This funciton must only be invoked from within a call to
+-- @withOpenSSL@.
 sslFromSocket :: (MonadIO m) =>
                  SSL.SSLContext
               -- ^ OpenSSL context
