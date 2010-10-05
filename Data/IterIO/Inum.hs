@@ -178,10 +178,7 @@ computation.  Using 'irepeat' to simplify further, we have:
 @
 
 'withCleanup', demonstrated here, is a variant of 'addCleanup' that is
-in effect only for the duration of a single action, and only if that
-action executes a non-local exit (e.g., by calling 'idone', throwing
-an exception, or triggering temrination via the /AutoEOF/ or
-/AutoDone/ flags).
+in effect only for the duration of a single action.
 
 In addition to 'ifeed', the 'ipipe' function invokes a different
 'Inum' from within the 'InumM' monad, piping its output directly to
@@ -309,23 +306,29 @@ addCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -> InumM tIn tOut m a ()
 addCleanup clean = ncmodify $ \s -> s { insCleanup = clean >> insCleanup s }
 
--- | Run an 'InumM' action with some cleanup action in effect for
--- non-local termination (which means an invocation of 'idone', an
--- exception, or termination of the 'Inum' because of /AutoDone/ or
--- /AutoEOF/).  If the action returns without causing non-local
--- termination of the 'Inum', then the cleanup action is never
--- executed and the effects of any calls to 'addCleanup' within the
--- 'InumM' are reset.
+-- | Run an 'InumM' with some cleanup action in effect.  If the 'Inum'
+-- ends through non-local termination (which means an invocation of
+-- 'idone', an exception, or termination of the 'Inum' because of
+-- /AutoDone/ or /AutoEOF/), then the cleanup action will be executed
+-- along with any previously set cleanup actions.
+--
+-- If, on the other hand, the 'InumM' returns normally, then the
+-- cleanup action and any cleanup actions added by 'addCleanup' within
+-- the call to 'withCleanup' will be run, but cleanup actions added
+-- prior to invocation of 'withCleanup' will not be run immediately,
+-- but instead be defered for termination of the overall 'InumM'
+-- computation.
 withCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -- ^ Cleanup action
            -> InumM tIn tOut m a b  -- ^ Action to execute with Cleanup
            -> InumM tIn tOut m a b
 withCleanup clean action = do
   old <- igets insCleanup
-  ncmodify $ \s -> s { insCleanup = clean >> old }
-  b <- action
-  imodify $ \s -> s { insCleanup = old }
-  return b
+  ncmodify $ \s -> s { insCleanup = clean }
+  action `finallyI` do
+    newclean <- igets insCleanup
+    imodify $ \s -> s { insCleanup = old }
+    newclean
 
 -- | Convert an 'InumM' computation into an 'Inum', given some
 -- @'InumState'@ to run on.

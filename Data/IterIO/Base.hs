@@ -74,7 +74,7 @@ module Data.IterIO.Base
     , IterNoParse(..), IterEOF(..), mkIterEOF, isIterEOF
     , IterExpected(..), IterMiscParseErr(..)
     , throwI, throwEOFI
-    , tryI, tryBI, catchI, catchOrI, catchBI, handlerI, handlerBI
+    , tryI, tryBI, catchI, finallyI, catchOrI, catchBI, handlerI, handlerBI
     , inumCatch, inumHandler
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
@@ -793,6 +793,13 @@ catchI iter0 handler = finishI iter0 >>= check
           check iter            = case fromException $ getIterError iter of
                                     Just e  -> handler e iter
                                     Nothing -> iter
+
+-- | Execute an 'Iter', then perform a cleanup action regardless of
+-- whether the 'Iter' threw an exception or not.  Analogous to the
+-- standard library funciton @'finally'@.
+finallyI :: (ChunkData t, Monad m) =>
+            Iter t m a -> Iter t m b -> Iter t m a
+finallyI iter0 cleanup = finishI iter0 >>= \iter -> cleanup >> iter
 
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception
