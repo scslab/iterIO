@@ -3,7 +3,7 @@ module Data.IterIO.SSL where
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Control.Concurrent
-import Control.Exception (throwIO, ErrorCall(..))
+import Control.Exception (throwIO, ErrorCall(..), finally)
 import Control.Monad
 import Control.Monad.Trans
 import qualified Network.Socket as Net
@@ -20,17 +20,22 @@ enumSsl ssl = mkInumM $ irepeat $
               liftIO (SSL.read ssl defaultChunkSize) >>=
                      ifeed1 . L.fromChunks . (: [])
 
--- | Simple OpenSSL 'Iter'.  Does not do any kind of shutdown.
+-- | Simple OpenSSL 'Iter'.  Does a uni-directional SSL shutdown when
+-- it receives a 'Chunk' with the EOF bit 'True'.
 sslI :: (MonadIO m) => SSL.SSL -> Iter L.ByteString m ()
 sslI ssl = loop
     where loop = do
             Chunk t eof <- chunkI
             unless (L.null t) $ liftIO $ SSL.lazyWrite ssl t
-            if eof then return () else loop
+            if eof then liftIO $ SSL.shutdown ssl SSL.Unidirectional else loop
 
 -- | Turn a socket into an 'Iter' and 'Onum' that use OpenSSL to read
--- and write from the socket, respectively.  Don't forget to call this
--- from within 'SSL.withOpenSSL'.
+-- and write from the socket, respectively.  Does an SSL
+-- bi-directional shutdown and closes the socket when both a) the enum
+-- completes and b) the iter has received an EOF chunk.
+--
+-- This funciton must only be called from within a call to
+-- 'SSL.withOpenSSL'.
 sslFromSocket :: (MonadIO m) =>
                  SSL.SSLContext
               -- ^ OpenSSL context
@@ -40,20 +45,16 @@ sslFromSocket :: (MonadIO m) =>
               -- ^ 'True' for server handshake, 'False' for client
               -> IO (Iter L.ByteString m (), Onum L.ByteString m a)
 sslFromSocket ctx sock server = do
-  mn <- newMVar (2 :: Int)
+  mc <- newMVar False
   ssl <- SSL.connection ctx sock
   if server then SSL.accept ssl else SSL.connect ssl
-  let cleanW = liftIO $ modifyMVar mn $ \n -> do
-               if (n < 2)
-                 then do SSL.shutdown ssl SSL.Bidirectional
-                         Net.sClose sock
-                 else SSL.shutdown ssl SSL.Unidirectional
-               return (n - 1, ())
-      cleanR = mkInumM $ liftIO $ modifyMVar mn $ \n -> do
-               when (n < 2) $ do SSL.shutdown ssl SSL.Bidirectional
-                                 Net.sClose sock
-               return (n - 1, ())
-  return (sslI ssl >> cleanW, enumSsl ssl `cat` cleanR)
+  let end = modifyMVar mc $ \closeit ->
+            do when closeit $ SSL.shutdown ssl SSL.Bidirectional
+                                `finally` Net.sClose sock
+               return (True, ())
+      iter = sslI ssl >> liftIO end
+      enum = mkInumM $ withCleanup (liftIO end) $ ipipe (enumSsl ssl)
+  return (iter, enum)
 
 -- | Simplest possible SSL context, loads cert and unencrypted private
 -- key from a single file.
