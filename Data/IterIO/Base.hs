@@ -271,10 +271,19 @@ instance (ChunkData t) => Show (Iter t m a) where
     showsPrec _ (IterF _) rest = "IterF _" ++ rest
     showsPrec _ (IterM _) rest = "IterM _" ++ rest
     showsPrec _ (Done _ c) rest = "Done _ " ++ shows c rest
-    showsPrec _ (IterC a _) rest =
-        "IterC " ++ show (typeOf a) ++ " _" ++ rest
+    showsPrec _ (IterC a _) rest = "IterC " ++ show (typeOf a) ++ " _" ++ rest
     showsPrec _ (IterFail e) rest = "IterFail " ++ show e ++ rest
     showsPrec _ (InumFail e _) rest = "InumFail " ++ (shows e $ " _" ++ rest)
+
+iterTc :: TyCon
+iterTc = mkTyCon "Iter"
+instance (Typeable t, Typeable1 m) => Typeable1 (Iter t m) where
+    typeOf1 iter = mkTyConApp iterTc [typeOf $ t iter, typeOf1 $ m iter]
+        where t :: Iter t m a -> t; t _ = undefined
+              m :: Iter t m a -> m (); m _ = undefined
+
+instance (Typeable t, Typeable1 m, Typeable a) => Typeable (Iter t m a) where
+    typeOf = typeOfDefault
 
 instance (ChunkData t, Monad m) => Functor (Iter t m) where
     fmap = liftM
