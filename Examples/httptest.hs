@@ -3,13 +3,11 @@ module Main where
 
 -- import Control.Monad.Trans
 import Control.Concurrent
-import Control.Exception (finally)
 import Control.Monad.Trans
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Network.Socket as Net
 import qualified OpenSSL as SSL
 import qualified OpenSSL.Session as SSL
-import System.IO
 -- import Text.XHtml.Strict
 
 import Data.IterIO
@@ -31,7 +29,7 @@ myListen pn = do
   return sock
 
 handle_connection :: Onum L IO (Iter L IO HttpReq) -> Iter L IO () -> IO ()
-handle_connection enum iter = do
+handle_connection enum _iter = do
   req <- enum |. inumLog "http.log" True |$ httpreqI
   print req
 
@@ -40,7 +38,7 @@ accept_loop ctx sem sock = do
   (s, addr) <- Net.accept sock
   print addr
   (iter, enum) <- liftIO $ sslFromSocket ctx s True
-  forkIO $ handle_connection (enum |. inumStderr) (inumStderr .| iter)
+  _ <- forkIO $ handle_connection (enum |. inumStderr) (inumStderr .| iter)
 {-
   h <- Net.socketToHandle s ReadWriteMode
   _ <- forkIO $ handle_connection (enumHandle h) (handleI h) `finally` hClose h
