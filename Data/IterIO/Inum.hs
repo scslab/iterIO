@@ -305,26 +305,27 @@ ncmodify fn = imodify $ \s -> if insCleaning s
                               then error "illegal call within Cleanup function"
                               else fn s
 
--- | Add a cleanup action to be executed when the 'Inum' finishes.
+-- | Add a cleanup action to be executed when the 'Inum' finishes, or,
+-- if used in conjunction with the 'withCleanup' function, when the
+-- innermost enclosing 'withCleanup' action finishes.
 addCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -> InumM tIn tOut m a ()
 addCleanup clean = ncmodify $ \s -> s { insCleanup = clean >> insCleanup s }
 
--- | Run an 'InumM' with some cleanup action in effect.  If the 'Inum'
--- ends through non-local termination (which means an invocation of
--- 'idone', an exception, or termination of the 'Inum' because of
--- /AutoDone/ or /AutoEOF/), then the cleanup action will be executed
--- along with any previously set cleanup actions.
+-- | Run an 'InumM' with some cleanup action in effect.  The cleanup
+-- action specified will be executed when the main action returns,
+-- whether normally, through an exception, because of the /AutoDone/
+-- or /AutoEOF/ flags, or because 'idone' is invoked.
 --
--- If, on the other hand, the 'InumM' returns normally, then the
--- cleanup action and any cleanup actions added by 'addCleanup' within
--- the call to 'withCleanup' will be run, but cleanup actions added
--- prior to invocation of 'withCleanup' will not be run immediately,
--- but instead be defered for termination of the overall 'InumM'
--- computation.
+-- Note @withCleanup@ also defines the scope of actions added by the
+-- 'addCleanup' function.  In other words, given a call such as
+-- @withCleanup cleaner1 main@, if @main@ invokes @'addCleanup'
+-- cleaner2@, then both @cleaner1@ and @cleaner2@ will be executed
+-- upon @main@'s return, even if the overall 'Inum' has not finished
+-- yet.
 withCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -- ^ Cleanup action
-           -> InumM tIn tOut m a b  -- ^ Action to execute with Cleanup
+           -> InumM tIn tOut m a b  -- ^ Main action to execute
            -> InumM tIn tOut m a b
 withCleanup clean action = do
   old <- igets insCleanup
@@ -364,8 +365,9 @@ runInumM inumm s0 = do
       convertFail is = return is
       isInumDone e = maybe False (\InumDone -> True) $ fromException e
 
--- | A variant of 'mkInumM' that sets the flags controlled by
--- 'setAutoEOF' and 'setAutoDone' to @'True'@.
+-- | A variant of 'mkInumM' that sets /AutoEOF/ and /AutoDone/ to
+-- 'True' by default.  (Equivalent to calling @'setAutoEOF' 'True' >>
+-- 'setAutoDone' 'True'@ as the first thing inside 'mkInumM'.)
 mkInumAutoM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
                InumM tIn tOut m a b -> Inum tIn tOut m a
 mkInumAutoM inumm iter0 =
@@ -406,13 +408,13 @@ ithrow e = do
   imodify $ \s -> s { insRemain = c }
   throwI e
 
--- | Used from within the 'InumM' monad to feed data to the 'Iter'
--- being processed by that 'Inum'.  Returns @'False'@ if the 'Iter' is
--- still active and @'True'@ if the iter has finished and the 'Inum'
--- should also return.  (If the @autoDone@ flag is @'True'@, then
--- @ifeed@, @ipipe@, and @irun@ will never actually return @'True'@,
--- but instead just run cleanup functions and exit the 'Inum'
--- immediately.)
+-- | Used from within the 'InumM' monad to feed data to the target
+-- 'Iter'.  Returns @'False'@ if the target 'Iter' is still active and
+-- @'True'@ if the iter has finished and the 'Inum' should also
+-- return.  (If the @autoDone@ flag is @'True'@, then @ifeed@,
+-- @ipipe@, and @irun@ will never actually return @'True'@, but
+-- instead just immediately run cleanup functions and exit the
+-- 'Inum' when the target 'Iter' stops being active.)
 ifeed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          tOut -> InumM tIn tOut m a Bool
 ifeed = ipipe . enumPure
@@ -475,7 +477,7 @@ ipopresid = do
 
 -- | Immediately perform a successful exit from an 'InumM' monad,
 -- terminating the 'Inum' and returning the current state of the
--- 'Iter'.  Can be used to end an 'irepeat' loop.  (Use @'lift' $
--- 'throwI' ...@ for an unsuccessful exit.)
+-- target 'Iter'.  Can be used to end an 'irepeat' loop.  (Use
+-- @'throwI' ...@ for an unsuccessful exit.)
 idone :: (ChunkData tIn, Monad m) => InumM tIn tOut m a b
 idone = ithrow InumDone
