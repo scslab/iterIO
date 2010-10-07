@@ -549,9 +549,13 @@ infixr 2 .|$
 --  catFiles files = 'foldr' ('cat' . 'inumLazy' . 'enumFile') 'return' files
 -- @
 --
--- Note the use of 'return' as the starting value for 'foldr'.
--- ('return' acts like a no-operation 'Inum' when concatenating, while
--- 'inumNop' acts as a no-operation in fusing.)  Also note the use of
+-- Note the use of 'return' as the starting value for 'foldr'.  The
+-- type of 'return' as used here in the @'Iter' () m@ monad is @iter
+-- -> 'Iter' () m iter@, or more precisely @'Iter' 'L.ByteString' m a
+-- -> 'Iter' () m ('Iter' 'L.ByteString' m a)@, which is equivalent to
+-- @'Onum' 'L.ByteString' m a@--effectively a dummy no-operation
+-- 'Inum'.  ('return' acts like a no-op 'Inum' for concatentation,
+-- while 'inumNop' is the no-op for fusing.)  Also note the use of
 -- 'inumLazy' as an optimization to avoid processing files once the
 -- 'Iter' has finished.
 --
@@ -1160,9 +1164,9 @@ ungetI = Done () . chunk
 -- Iter manipulation functions
 --
 
--- | Feeds an 'Iter' with a 'Chunk' of data.  When the 'Iter' is
--- already 'Done', or in some error condition, simulates the behavior
--- appropriately.
+-- | Feeds an 'Iter' by passing it a 'Chunk' of data.  When the 'Iter'
+-- is already 'Done', or in some error condition, simulates the
+-- behavior appropriately.
 --
 -- It is important to remember that @feedI@ is a pure transformation
 -- of an 'Iter'--it doesn't actually execute anything.  For example,
@@ -1347,7 +1351,7 @@ enumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 --
 -- > inumNop' = inumRepeat (inumF `cat` inumMC passCtl) -- Bad
 --
--- The reason is that fusing an @inum@ to an iter should have no
+-- The reason is that fusing @inumNop@ to an iter should have no
 -- effect:  @'inumNop' .| iter@ behaves identially to @iter@.  On the
 -- other hand, @inumNop' .| iter@ discards any residual data.  For
 -- example, @inumNop' .| ('Done' () ('chunk' \"abcde\"))@ becomes
@@ -1378,9 +1382,10 @@ inumC _ iter = return iter
 -- monad, or a custom 'CtlHandler' function for the @'Iter' tIn m@
 -- monad.
 --
--- @inumMC@ is useful for partially executing and iter up to the point
--- where it requires more input.  For example, to duplicate the input
--- stream and execute two 'Iter's incrementally on the same input:
+-- @inumMC@ is useful for partially executing an 'Iter' up to the
+-- point where it requires more input.  For example, to duplicate the
+-- input stream and execute two 'Iter's incrementally on the same
+-- input:
 --
 -- @
 --  iterTee :: ('ChunkData' t, 'Monad' m) =>
@@ -1394,18 +1399,20 @@ inumC _ iter = return iter
 -- @
 --
 -- (Note the use of @iter '<*' 'nullI'@, which is equivalent to
--- @iter >>= \\r -> 'nullI' >> r@ and discards any residual input.)
--- See the description of 'feedI' for a discussion of why this
--- function is not a good idea without @inumMC@ or something
--- comparable.
+-- @iter >>= \\r -> 'nullI' >> r@ and has the effect of discarding any
+-- residual input.)  See the description of 'feedI' for a discussion
+-- of why this function is not a good idea without @inumMC@ or
+-- something comparable.
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           CtlHandler (Iter tIn m) -> Inum tIn tOut m a
 inumMC ch (IterM m)        = IterM $ inumMC ch `liftM` m
 inumMC ch iter@(IterC _ _) = inumC ch iter `inumBind` inumMC ch
 inumMC _ iter              = return iter
 
--- | An 'Inum' that processes an 'Iter' so long as it is the 'IterF'
--- or 'IterC' states, then returns it.
+-- | A combination of 'inumC' and 'inumF'--processes an 'Iter' so long
+-- as it is in either the 'IterF' or 'IterC' states, then returns it.
+-- ('inumFC' pulls residual data up to the enclosing 'Iter' monad,
+-- just like 'inumF'.)
 inumFC :: (ChunkData t, Monad m1, Monad m2) =>
           CtlHandler (Iter t m1)
        -> Iter t m2 a -> Iter t m1 (Iter t m2 a)
@@ -1431,28 +1438,29 @@ inumRepeat inum = runinum
             eof <- atEOFI
             if eof then return iter else runinum iter
           again iter           = do
-            -- Here we might miss an EOF we haven't read yet, but but
+            -- Here we might miss an EOF we haven't read yet, but we
             -- don't want to request more than residual input in case
-            -- monadic side-effects are required to produce that
-            -- input.  (Note the capital IterF, which makes the next
-            -- line different from atEOFI.)
+            -- monadic side-effects of inum or the target Iter are
+            -- required to produce the input in the first place.
+            -- hence the capital IterF (not iterF), which makes the
+            -- next line different from atEOFI.
             eof <- IterF $ \c@(Chunk t eof) -> Done (eof && null t) c
             if eof then return iter else runinum iter
           
 -- | The dummy 'Inum' which passes all data straight through to the
 -- 'Iter'.  Note that this is a \"Nop\" in the sense that if you fuse
 -- it to an iter with @inumNop '.|' iter@, you get a result
--- indistinguishable from @iter@ on its own.  This is useful, for
--- instance, when switching between various processing at runtime,
--- with a construct such as:
+-- indistinguishable from @iter@ on its own.  This can be useful when
+-- switching between various processing at runtime, with a construct
+-- such as:
 --
 -- > enum |. (if debug then inumLog "debug.log" else inumNop) |$ iter
 --
--- Another type of \"Nop\" you might want is an 'Iter' that literally
+-- Another type of \"Nop\" you might want is an 'Inum' that literally
 -- does nothing (not even pass through data) and immediately returns
 -- the 'Iter'.  Such a nop is useful as the initial value of a fold.
--- This second \"Nop\" functionaly is already provided by the monadic
--- 'return' function.  See an example at 'cat'.
+-- This second kind of \"Nop\" functionaly is already provided by the
+-- monadic 'return' function.  See an example at 'cat'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = inumRepeat (inumMC passCtl `cat` inumF)
 
@@ -1467,7 +1475,8 @@ safeCtlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
 safeCtlI carg = IterC carg return
 
 -- | Issue a control request, and return the result.  Throws an
--- exception if the operation did not succeed.
+-- exception if the operation type was not supported by an enclosing
+-- enumerator.
 ctlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
         carg -> Iter t m cres
 ctlI carg = safeCtlI carg >>= returnit
@@ -1493,7 +1502,9 @@ data CtlArg = forall carg cres. (CtlCmd carg cres) => CtlArg !carg
 -- directly.
 data CtlRes = forall cres. (Typeable cres) => CtlRes cres
 
--- | A control request handler maps control requests to 'Iter's.
+-- | Generally the type parameter @m@ has to be @'Iter' t m@.  Thus, a
+-- control handler maps control requests to 'Iter' actions that
+-- produce a corresponding result.  See a use example at 'consCtl'.
 type CtlHandler m = CtlArg -> m CtlRes
 
 -- | A control request handler that ignores the request argument and
@@ -1524,6 +1535,19 @@ passCtl (CtlArg carg) = safeCtlI carg >>= return . maybe (CtlRes CtlBad) CtlRes
 -- Has fixity:
 --
 -- > infixr 9 `consCtl`
+--
+-- An example use is the 'Handle'-related enumerators in
+-- "Data.IterIO.ListLike", which all provide seek functionality with
+-- the following 'CtlHandler':
+--
+-- > fileCtl :: (ChunkData t, MonadIO m) => Handle -> CtlHandler (Iter t m)
+-- > fileCtl h = (\(SeekC mode pos) -> liftIO (hSeek h mode pos))
+-- >             `consCtl` (\TellC -> liftIO (hTell h))
+-- >             `consCtl` (\SizeC -> liftIO (hFileSize h))
+-- >             `consCtl` passCtl
+--
+-- With such a handler in place, executing an action such as @'ctlI'
+-- SizeC@ returns the size of the file currently being enumerated.
 consCtl :: (CtlCmd carg cres, Monad m) =>
            (carg -> m cres) -> CtlHandler m -> CtlHandler m
 consCtl fn fallback arg@(CtlArg carg) =
