@@ -75,7 +75,7 @@ class Message msg where
   msgInum :: (MonadIO m, ChunkData t) => msg -> Inum t L m a
 
   msgBytes _ = error "msgBytes unimplemented"
-  msgInum msg = inumPure $ msgBytes msg
+  msgInum msg = enumPure $ msgBytes msg
 
 inumMsg :: (MonadIO m, ChunkData tIn, Message msg) =>
            S -> [S] -> msg -> Inum tIn L m a
