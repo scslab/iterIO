@@ -19,8 +19,7 @@ import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.ByteString.Lazy.UTF8 as U
 import           Data.IterIO
 import           Data.IterIO.Http
--- import           Data.IterIO.Zlib
-import           Text.XHtml.Strict -- (Html, showHtml, HTML, toHtml)
+import           Text.XHtml.Strict
 
 type L = L.ByteString
 type S = S.ByteString
@@ -45,30 +44,6 @@ statusBadRequest = S.pack "400 Bad Request"
 statusNotFound :: S
 statusNotFound = S.pack "404 Not Found"
 
-{-
-httpResponse :: S -> [String] -> L -> L
-httpResponse status headers message =
-  L.concat [ L.fromChunks [httpVersion, S.pack " ", status, S.pack "\r\n"]
-           , headersL headers
-           , message
-           ]
-
-enumHttpResponse :: (Monad m, ChunkData tIn) =>
-                    S -> [String] -> Inum tIn L m a -> Inum tIn L m a
-enumHttpResponse status headers inumMessage =
-  mkInumAutoM $ do
-    _ <- ifeed $ L.fromChunks [httpVersion, S.pack " ", status, S.pack "\r\n"]
-    _ <- ifeed $ headersL headers
-    ipipe inumMessage
-
-xhtmlResponse :: S -> [String] -> Html -> L
-xhtmlResponse status headers h =
-  httpResponse status (xhtmlHeaders ++ headers) (U.fromString $ showHtml h)
-
-xhtmlHeaders :: [String]
-xhtmlHeaders = ["Content-Type: text/html"]
--}
-
 class Message msg where
   msgContentType :: msg -> S
   msgBytes :: msg -> L
@@ -85,12 +60,6 @@ inumMsg status headers msg =
   in mkInumAutoM $ do
     _ <- ifeed $ L.append responseLine (headersL headers')
     ipipe $ msgInum msg
-
-data JSONMessage = JSONMessage String
-
-instance Message JSONMessage where
-  msgContentType _ = mimetype'json
-  msgBytes (JSONMessage contents) = U.fromString contents
 
 data FileMsg = FileMsg S FilePath
 
