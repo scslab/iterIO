@@ -296,7 +296,7 @@ packE = mkInum $ do
   return packet
 
 cE :: (Monad m) => Char -> Int -> Onum L.ByteString m a
-cE c len = inumPure $ L8.replicate (fromIntegral len) c
+cE c len = enumPure $ L8.replicate (fromIntegral len) c
 nI :: (Monad m) => Int -> Iter L.ByteString m Bool
 nI n = do
   s <- takeI $ fromIntegral n
@@ -393,7 +393,7 @@ twoWay ut a b = do
 pingPong :: [ThreadId] -> Targ -> Targ -> TM Bool
 pingPong ut a b = do
   runStreamTest ut [a, b] 30
-               [inumPure (L8.pack "1000\n") `cat` tSource a
+               [enumPure (L8.pack "1000\n") `cat` tSource a
                     |$ minusOne 1000 (tDrain a)
                , tSource b |$ minusOne 999 (tDrain b)]
                []
@@ -433,13 +433,13 @@ eofTest ut a b = do
               [tSource a |$ a4I key strTestLen]
               [tSource b |$ (nullI >> lift (sendit str) >> return True)
                    >> return ()
-              , inumPure (L8.pack "request\n") |$ tDrain a]
+              , enumPure (L8.pack "request\n") |$ tDrain a]
     where
-      sendit str = inumPure str |$ (tDrain b >> return True)
+      sendit str = enumPure str |$ (tDrain b >> return True)
 {-
               [tSource a |$ a4I key strTestLen]
               [tSource b |$ (nullI >> lift (a4E key strTestLen |$ packE
                                             .| (tDrain b >> return True)))
                        >> return ()
-              , inumPure (L8.pack "request\n") |$ tDrain a]
+              , enumPure (L8.pack "request\n") |$ tDrain a]
 -}

@@ -120,7 +120,7 @@ catchTest1 :: IO ()
 catchTest1 = myEnum |$ fail "bad Iter"
     where
       myEnum :: Onum String IO ()
-      myEnum iter = catchI (inumPure "test" .| iter) handler
+      myEnum iter = catchI (enumPure "test" .| iter) handler
                     >>= return . return
       handler (SomeException _) _ = do
         liftIO $ hPutStrLn stderr "ignoring exception"
@@ -131,7 +131,7 @@ catchTest2 :: IO ()
 catchTest2 = myEnum |. inumNop |$ fail "bad Iter"
     where
       myEnum :: Onum String IO (Iter String IO ())
-      myEnum iter = catchI (inumPure "test" .| iter) handler
+      myEnum iter = catchI (enumPure "test" .| iter) handler
                     >>= return . return
       handler (SomeException _) _ = do
         liftIO $ hPutStrLn stderr "ignoring exception"
@@ -156,40 +156,40 @@ resumeTest = doFile "file1" `cat` doFile "file2" |$ handleI stdout
 -- Throws an exception, because inumBad was fused outside the argument
 -- to inumCatch.
 test1 :: IO ()
-test1 = inumCatch (inumPure "test") skipError |. inumBad |$ nullI
+test1 = inumCatch (enumPure "test") skipError |. inumBad |$ nullI
 
 -- Does not throw an exception, because inumBad fused within the
 -- argument to enumCatch.
 test2 :: IO ()
-test2 = inumCatch (inumPure "test" |. inumBad) skipError |$ nullI
+test2 = inumCatch (enumPure "test" |. inumBad) skipError |$ nullI
 
 -- Again no exception, because inumCatch is wrapped around inumBad.
 test3 :: IO ()
-test3 = inumPure "test" |. (inumCatch inumBad skipError) |$ nullI
+test3 = enumPure "test" |. (inumCatch inumBad skipError) |$ nullI
 
 -- Catches exception, because .|$ propagates failure through the outer
 -- Iter Monad, where it can still be caught.
 apply1 :: IO String
-apply1 = inumPure "test1" |$ iter `catchI` handler
+apply1 = enumPure "test1" |$ iter `catchI` handler
     where
-      iter = inumPure "test2" .|$ fail "error"
+      iter = enumPure "test2" .|$ fail "error"
       handler (SomeException _) _ = return "caught error"
 
 -- Does not catch error, because |$ turns an Iter failure into a
 -- language-level exception, which can only be caught in IO Monad.
 apply2 :: IO String
-apply2 = inumPure "test1" |$ iter `catchI` handler
+apply2 = enumPure "test1" |$ iter `catchI` handler
     where
-      iter = lift (inumPure "test2" |$ fail "error")
+      iter = lift (enumPure "test2" |$ fail "error")
       handler (SomeException _) _ = return "caught error"
 
 -- Catches the exception, because liftIO uses the IO catch function to
 -- turn language-level exceptions into Monadic Iter failures.  (By
 -- contrast, lift must work for all Monads so cannot this in apply2.)
 apply3 :: IO String
-apply3 = inumPure "test1" |$ iter `catchI` handler
+apply3 = enumPure "test1" |$ iter `catchI` handler
     where
-      iter = liftIO (inumPure "test2" |$ fail "error")
+      iter = liftIO (enumPure "test2" |$ fail "error")
       handler (SomeException _) _ = return "caught error"
 
 

@@ -14,7 +14,7 @@ minusOne :: Int -> Iter [Int] IO () -> Iter [Int] IO ()
 minusOne expect iout = do
   x <- headLI
   when (x /= expect) $ error $ "expected " ++ show expect ++ ", got " ++ show x
-  iout' <- inumPure [x - 1] iout
+  iout' <- enumPure [x - 1] iout
   if x <= 0 then runI iout' else minusOne (x - 1) iout'
 
 inumPrintList :: Inum [Int] [Int] IO a
@@ -26,7 +26,7 @@ inumPrintList = mkInum' $ do
 ping :: IO ()
 ping = do
   (iterA, enumA) <- iterLoop
-  (inumPure [10] `cat` enumA |. inumNop) |. inumNop
+  (enumPure [10] `cat` enumA |. inumNop) |. inumNop
        |$ inumNop .| inumPrintList .| minusOne 10 iterA
 
 pong :: IO ()
@@ -35,7 +35,7 @@ pong = do
   (iterA, enumB) <- iterLoop
   (iterB, enumA) <- iterLoop
   _ <- forkIO $ do
-         (inumPure [10] `cat` enumA |. inumNop) |. inumNop
+         (enumPure [10] `cat` enumA |. inumNop) |. inumNop
                 |$ inumNop .| inumPrintList .| minusOne 10 iterA
          signalQSemN sem 1
   _ <- forkIO $ do

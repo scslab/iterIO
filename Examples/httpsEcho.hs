@@ -19,21 +19,25 @@ import           Text.XHtml.Strict hiding (p)
 import           Data.IterIO
 import           Data.IterIO.Http
 import           Data.IterIO.Zlib
+import           Data.IterIO.SSL
 import qualified Data.ListLike as LL
+
+import OpenSSL
+import OpenSSL.Session
 
 type L = L.ByteString
 type S = S.ByteString
 
 
 port :: Net.PortNumber
-port = 8000
+port = 4443
 
 --
 -- Request handler
 --
 
-handleRequest :: (MonadIO m) => IO.Handle -> Iter L m ()
-handleRequest h = do
+handleRequest :: (MonadIO m) => Iter L m () -> Iter L m ()
+handleRequest out = do
   req <- httpreqI
   case S.unpack $ reqMethod req of
     "GET" ->
@@ -52,15 +56,15 @@ handleRequest h = do
     "POST" ->
       case reqPathLst req of
         (x:_) -> case S.unpack x of
-                   "echo-file" -> echoFile req h >> return ()
-                   "gzip-file" -> gzipFile req h >> return ()
-                   "gzip" -> inumGzipResponse .| handleI h  -- process the input raw, not form-encoded
+                   "echo-file" -> echoFile req out >> return ()
+                   "gzip-file" -> gzipFile req out >> return ()
+                   "gzip" -> inumGzipResponse .| out -- process the input raw, not form-encoded
                    "submit" -> echo req
                    _ -> error "Unrecognized action"
         _ -> echo req
     _ -> error "Unrecognized method"
  where
-  ok html = enumPure (html2L html) .| handleI h
+  ok html = enumPure (html2L html) .| out
   echo req = parmsI req >>= ok . page "Request" . request2Html req
 
 
@@ -68,16 +72,16 @@ handleRequest h = do
 -- Services for uploaded files
 --
 
-echoFile :: (MonadIO m) => HttpReq -> IO.Handle -> Iter L m (Maybe ())
-echoFile req h = withParm "input" req $ inumEchoResponse .| handleI h
+echoFile :: (MonadIO m) => HttpReq -> Iter L m () -> Iter L m (Maybe ())
+echoFile req out = withParm "input" req $ inumEchoResponse .| out
 
 inumEchoResponse :: (MonadIO m) => Inum L L m a
 inumEchoResponse = mkInumAutoM $ do
   _ <- ifeed $ headersL echoHeaders
   ipipe inumToChunks
 
-gzipFile :: (MonadIO m) => HttpReq -> IO.Handle -> Iter L m (Maybe ())
-gzipFile req h = withParm "input" req $ inumGzipResponse .| handleI h
+gzipFile :: (MonadIO m) => HttpReq -> Iter L m () -> Iter L m (Maybe ())
+gzipFile req out = withParm "input" req $ inumGzipResponse .| out
 
 inumGzipResponse :: (MonadIO m) => Inum L L m a
 inumGzipResponse = mkInumAutoM $ do
@@ -240,17 +244,18 @@ data Event = CxDone ThreadId
 type Events = Chan Event
 
 main :: IO ()
-main = Net.withSocketsDo $ do
+main = Net.withSocketsDo $ withOpenSSL $ do
   listener <- myListen port
   connections <- newMVar Map.empty
   events <- newChan
-  _ <- forkIO $ forever $ acceptConnection listener connections events
+  ctx <- simpleContext "testkey.pem"
+  _ <- forkIO $ forever $ acceptConnection ctx listener connections events
   forever $ handleEvent connections events
 
-acceptConnection :: Net.Socket -> Connections -> Events -> IO ()
-acceptConnection listener connections events = do
+acceptConnection :: SSLContext -> Net.Socket -> Connections -> Events -> IO ()
+acceptConnection ctx listener connections events = do
   (s, addr) <- Net.accept listener
-  c <- spawnConnection s addr events
+  c <- spawnConnection ctx s addr events
   modifyMVar_ connections $ return . Map.insert (cxTid c) c
 
 handleEvent :: Connections -> Events -> IO ()
@@ -263,21 +268,29 @@ handleEvent connections events = do
       modifyMVar_ connections $ return . Map.delete tid
       warn $ show tid ++ " FINISHED"
 
-spawnConnection :: Net.Socket -> Net.SockAddr -> Events -> IO Connection
-spawnConnection s addr events = do
+spawnConnection :: SSLContext
+                -> Net.Socket -> Net.SockAddr -> Events -> IO Connection
+spawnConnection ctx s addr events = do
   tid <- forkIO $ do
             tid <- myThreadId
-            handleConnection s `finally` writeChan events (CxDone tid)
+            handleConnection ctx s `finally` writeChan events (CxDone tid)
   writeChan events $
     CxNote tid $ "Handling connection from " ++ show addr
   return $ Connection tid
 
-handleConnection :: Net.Socket -> IO ()
-handleConnection s = do
-  h <- Net.socketToHandle s IO.ReadWriteMode
-  IO.hSetBuffering h IO.NoBuffering
-  enumHandle' h |$ handleRequest h
+handleConnection :: SSLContext -> Net.Socket -> IO ()
+handleConnection ctx s = do
+  -- h <- Net.socketToHandle s IO.ReadWriteMode
+  -- IO.hSetBuffering h IO.NoBuffering
+  (iter, enum) <- sslFromSocket ctx s True
+  enum |$ handleRequest iter
+{-
+  enumHandle' h
+     -- |. stderrLog (L.pack "< ")
+     -- |$ req2Html .| html2L .| handleI h
+     |$ handleRequest h
   IO.hClose h
+-}
 
 
 ---
@@ -357,7 +370,3 @@ headersL :: [String] -> L
 headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
  where crlf = L.pack ['\r', '\n']
 
-
--- Local Variables:
--- haskell-program-name: "ghci -lz"
--- End:
