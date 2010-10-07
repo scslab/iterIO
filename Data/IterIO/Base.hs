@@ -54,8 +54,8 @@
      the '.|' operator fuses an 'Inum' to an 'Iter', yielding a new
      'Iter' with a potentially different input type.
 
-     Enumerators of the same type can also be concatenated with the
-     'cat' function.  @enum1 ``cat`` enum2@ produces an enumerator
+     Enumerators of the same type can also be /concatenated/, using
+     the 'cat' function.  @enum1 ``cat`` enum2@ produces an enumerator
      whose effect is to feed first @enum1@'s data then @enum2@'s data
      to an 'Iter'.
 
