@@ -50,22 +50,30 @@ handleRequest h = enumHandle' h |$ do
                    "gzip-file" -> gzipFile req h >> return ()
                    "gzip" -> inumGzipResponse .| handleI h  -- process the input raw, not form-encoded
                    "submit" -> echo req
-                   _ -> notFound'
+                   _ -> notFound "Service not found"
         _ -> echo req
-    _ -> notFound'
+    _ -> badRequest "Bad method"
  where
-  respondI response = inumPure response .| handleI h
-  xhtmlResponseI status headers x = respondI $ xhtmlResponse status headers (toHtml x)
-  ok = xhtmlResponseI statusOK []
-  {-
-  seeOther url = xhtmlResponseI statusSeeOther ["Location: " ++ url]
-  badRequest = xhtmlResponseI statusBadRequest []
-  -}
-  notFound = xhtmlResponseI statusNotFound []
-  notFound' = notFound "Not Found."
-
   echo req = parmsI req >>= ok . page "Request" . request2Html req
+ 
+  ok :: (Message msg, MonadIO m) => msg -> Iter L m ()
+  ok msg = messageI statusOK [] msg
 
+  notFound :: (Message msg, MonadIO m) => msg -> Iter L m ()
+  notFound = messageI statusNotFound []
+
+  badRequest :: (Message msg, MonadIO m) => msg -> Iter L m ()
+  badRequest = messageI statusBadRequest []
+
+  {-
+  seeOther :: (Message msg, MonadIO m) => URL -> msg -> Iter L m ()
+  seeOther url = messageI statusSeeOther [S.pack $ "Location: " ++ url]
+  -}
+
+  messageI :: (Message msg, MonadIO m) => S -> [S] -> msg -> Iter L m ()
+  messageI status headers msg =
+    inumMsg status headers msg .| handleI h
+ 
 
 --
 -- Services for uploaded files
@@ -87,11 +95,15 @@ inumGzipResponse = mkInumAutoM $ do
   _ <- ifeed $ headersL gzipHeaders
   ipipe (inumGzip |. inumToChunks)
 
-gzipHeaders :: [String]
-gzipHeaders = ["HTTP/1.1 200 OK", "Content-Type: application/x-gzip", "Transfer-Encoding: chunked"]
+gzipHeaders :: [S]
+gzipHeaders = map S.pack [ "HTTP/1.1 200 OK"
+                         , "Content-Type: application/x-gzip"
+                         , "Transfer-Encoding: chunked" ]
 
-echoHeaders :: [String]
-echoHeaders = ["HTTP/1.1 200 OK", "Content-Type: application/octet-stream", "Transfer-Encoding: chunked"]
+echoHeaders :: [S]
+echoHeaders = map S.pack [ "HTTP/1.1 200 OK"
+                         , "Content-Type: application/octet-stream"
+                         , "Transfer-Encoding: chunked" ]
 
 
 --

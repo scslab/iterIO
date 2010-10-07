@@ -1,7 +1,11 @@
+{-# LANGUAGE FlexibleInstances #-}
+
 module Message 
-  ( httpResponse
+  ( Message(..)
+  , FileMsg(..)
+  , mimetype'html, mimetype'javascript, mimetype'json
+  , inumMsg
   , statusOK, statusSeeOther, statusBadRequest, statusNotFound
-  , xhtmlResponse
   , withParm, mapForm
   , urlencoded, multipart
   , headersL
@@ -16,7 +20,7 @@ import qualified Data.ByteString.Lazy.UTF8 as U
 import           Data.IterIO
 import           Data.IterIO.Http
 -- import           Data.IterIO.Zlib
-import           Text.XHtml.Strict (Html, showHtml)
+import           Text.XHtml.Strict -- (Html, showHtml, HTML, toHtml)
 
 type L = L.ByteString
 type S = S.ByteString
@@ -41,21 +45,82 @@ statusBadRequest = S.pack "400 Bad Request"
 statusNotFound :: S
 statusNotFound = S.pack "404 Not Found"
 
-httpResponse :: S -> L -> L
-httpResponse status message =
-  L.append (L.fromChunks [httpVersion, S.pack " ", status, S.pack "\r\n"]) message
+{-
+httpResponse :: S -> [String] -> L -> L
+httpResponse status headers message =
+  L.concat [ L.fromChunks [httpVersion, S.pack " ", status, S.pack "\r\n"]
+           , headersL headers
+           , message
+           ]
+
+enumHttpResponse :: (Monad m, ChunkData tIn) =>
+                    S -> [String] -> Inum tIn L m a -> Inum tIn L m a
+enumHttpResponse status headers inumMessage =
+  mkInumAutoM $ do
+    _ <- ifeed $ L.fromChunks [httpVersion, S.pack " ", status, S.pack "\r\n"]
+    _ <- ifeed $ headersL headers
+    ipipe inumMessage
 
 xhtmlResponse :: S -> [String] -> Html -> L
 xhtmlResponse status headers h =
-  httpResponse status $ L.append (headersL $ xhtmlHeaders ++ headers)
-                                 (U.fromString $ showHtml h)
+  httpResponse status (xhtmlHeaders ++ headers) (U.fromString $ showHtml h)
 
 xhtmlHeaders :: [String]
 xhtmlHeaders = ["Content-Type: text/html"]
+-}
 
-headersL :: [String] -> L
-headersL hh = L.append (L.concat (map ((flip L.append crlf) . L.pack) hh)) crlf
- where crlf = L.pack ['\r', '\n']
+class Message msg where
+  msgContentType :: msg -> S
+  msgBytes :: msg -> L
+  msgInum :: (MonadIO m, ChunkData t) => msg -> Inum t L m a
+
+  msgBytes _ = error "msgBytes unimplemented"
+  msgInum msg = inumPure $ msgBytes msg
+
+inumMsg :: (MonadIO m, ChunkData tIn, Message msg) =>
+           S -> [S] -> msg -> Inum tIn L m a
+inumMsg status headers msg = 
+  let responseLine = L.fromChunks [httpVersion, S.pack " ", status, S.pack "\r\n"]
+      headers' = (S.append (S.pack "Content-Type: ") (msgContentType msg)) : headers
+  in mkInumAutoM $ do
+    _ <- ifeed $ L.append responseLine (headersL headers')
+    ipipe $ msgInum msg
+
+data JSONMessage = JSONMessage String
+
+instance Message JSONMessage where
+  msgContentType _ = mimetype'json
+  msgBytes (JSONMessage contents) = U.fromString contents
+
+data FileMsg = FileMsg S FilePath
+
+instance Message FileMsg where
+  msgContentType (FileMsg contentType _) = contentType
+  msgInum (FileMsg _ filePath) = mkInumAutoM $ irun $ enumFile' filePath
+
+instance Message Html where
+  msgContentType _ = mimetype'html
+  msgBytes h = U.fromString $ showHtml h
+
+instance Message [Char] where
+  msgContentType _ = mimetype'html
+  msgBytes s = U.fromString $ showHtml $ thehtml <<
+    [ header << thetitle << s
+    , body << h1 << s
+    ]
+
+mimetype'html :: S
+mimetype'html = S.pack "text/html"
+
+mimetype'json :: S
+mimetype'json = S.pack "application/json; charset=UTF-8"
+
+mimetype'javascript :: S
+mimetype'javascript = S.pack "application/javascript; charset=UTF-8"
+
+headersL :: [S] -> L
+headersL hh = L.fromChunks $ (map (flip S.append crlf) hh) ++ [crlf]
+ where crlf = S.pack "\r\n"
 
 
 --
