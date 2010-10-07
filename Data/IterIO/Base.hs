@@ -808,7 +808,7 @@ catchI iter0 handler = finishI iter0 >>= check
 -- standard library funciton @'finally'@.
 finallyI :: (ChunkData t, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m a
-finallyI iter0 cleanup = finishI iter0 >>= \iter -> cleanup >> iter
+finallyI iter0 cleanup = finishI iter0 >>= (cleanup >>)
 
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception

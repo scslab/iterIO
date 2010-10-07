@@ -5,12 +5,12 @@
 -- 'Inum's.  The first, 'mkInum', creates simple, stateless 'Inum's
 -- out of 'Iter's that translate from an input type to an output type.
 -- The second, 'mkInumM', creates an 'Inum' out of a computation in
--- the 'InumM' monad.  'InumM' an 'Iter' that wraps its inner monadic
--- type with an 'IterStateT' to keep track of the state of the 'Iter'
--- being feed data.  'InumM' computations can consume input by
+-- the 'InumM' monad.  'InumM' is an 'Iter' that wraps its inner
+-- monadic type with an 'IterStateT' to keep track of the state of the
+-- 'Iter' being feed data.  'InumM' computations can consume input by
 -- invoking 'Iter' computations (though 'Iter's that are not
 -- polymorphic in their monad may need to be transformed with the
--- 'liftIterM' function.  The 'InumM' computation can produce output
+-- 'liftIterM' function).  The 'InumM' computation can produce output
 -- by calling any of the 'ifeed', 'ipipe', and 'irun' functions.
 
 module Data.IterIO.Inum
@@ -57,16 +57,16 @@ import Data.IterIO.Trans
 --
 
 -- | Construct a simple @'Inum' tIn tOut m a@ from a transcoder of
--- type @'Iter' tIn m tOut@.  The created 'Inum' simply invokes the
+-- type @'Iter' tIn m tOut@.  The 'Inum' created simply invokes the
 -- transcoder over and over again to get more data.  It finishes when
--- the @'Iter' tOut m a@ being fed by the 'Inum' is no longer active
--- or the trancoder @'Iter' tIn m tOut@ throws an exception of class
--- 'IterEOF'.  If the transcoder throws any other kind of exception,
--- the whole 'Inum' fails with an 'InumFail' error.
+-- the \"target\" 'Iter' (of type @'Iter' tOut m a@) being fed by the
+-- 'Inum' is no longer active, or when the trancoder 'Iter' throws an
+-- exception of class 'IterEOF'.  If the transcoder throws any other
+-- kind of exception, the whole 'Inum' fails with an 'InumFail' error.
 mkInum :: (Monad m, ChunkData tIn, ChunkData tOut) =>
            Iter tIn m tOut
-        -- ^ This Iteratee will be executed repeatedly to produce
-        -- transcoded chunks.
+        -- ^ This \"transcoder\" 'Iter' is executed repeatedly to
+        -- produce transcoded chunks of type @tOut@.
         -> Inum tIn tOut m a
 mkInum codec = loop
     where
@@ -86,7 +86,7 @@ Complex 'Inum's that need state and non-trivial control flow can be
 constructed using the 'mkInumM' function to produce an 'Inum' out of a
 computation in the 'InumM' monad.  The 'InumM' monad implicitly keeps
 track of the state of the 'Iter' to which the 'Inum' is feeding data,
-which we call the \"target 'Iter'\".
+which we call the \"target\" 'Iter'.
 
 'InumM' is an 'Iter' monad, and so can consume input by invoking
 ordinary 'Iter' actions.  However, to keep track of the state of the
@@ -118,8 +118,9 @@ in 'Chunk's using 'chunkI', rather than just inputting data with
 'dataI'.  The choice of 'chunkI' rather than 'dataI' allows
 @inumConcat@ to see the @eof@ flag and know when there is no more
 input.  'chunkI' also avoids throwing an 'IterEOF' exception on end of
-file, as 'dataI' would; such an exception would cause the 'Inum' to
-fail.
+file, as 'dataI' would.  In contrast to 'mkInum', which gracefully
+interprets 'IterEOF' exceptions as an exit request, 'mkInumM' by
+default treats such exceptions as an 'Inum' failure.
 
 As previously mentioned, data is fed to the target 'Iter', which here
 is of type @'Iter' L.ByteString m a@, using 'ifeed'.  'ifeed' returns
@@ -133,8 +134,8 @@ What happens when @eof@ or @done@ is set?  One possibility is to do
 nothing.  This is often correct.  Falling off the end of the 'InumM'
 do-block causes the 'Inum' to return the current state of the 'Iter'.
 However, it may be that the 'Inum' has been fused to the target
-'Iter', in which case any left-over residual data fed to but not
-consumed by the target 'Iter' will be discarded.  We may instead want
+'Iter', in which case any left-over residual data fed to, but not
+consumed by, the target 'Iter' will be discarded.  We may instead want
 to put the data back onto the input stream.  The 'ipopresid' function
 extracts any left-over data from the target 'Iter', while 'ungetI'
 places data back in the input stream.  Since here the input stream is
@@ -148,11 +149,12 @@ The code above looks much clumsier than the version based on 'mkInum',
 but several of these steps can be made implicit.  There is an
 /AutoEOF/ flag, controlable with the 'setAutoEOF' function, that
 causes 'IterEOF' exceptions to produce normal termination of the
-'Inum', rather than failure.  Another flag, /AutoDone/, is controlable
-with the 'setAutoDone' function and causes the 'Inum' to exit
-immediately when the underlying 'Iter' is no longer active (i.e., the
-'ifeed' function returns @'True'@).  Both of these flags are set at
-once by the 'mkInumAutoM' function, which yields the following simpler
+'Inum', rather than failure (just as 'mkInum' handles such
+exceptions).  Another flag, /AutoDone/, is controlable with the
+'setAutoDone' function and causes the 'Inum' to exit immediately when
+the underlying 'Iter' is no longer active (i.e., the 'ifeed' function
+returns @'True'@).  Both of these flags are set at once by the
+'mkInumAutoM' function, which yields the following simpler
 implementation of @inumConcat@:
 
 @
@@ -177,8 +179,10 @@ computation.  Using 'irepeat' to simplify further, we have:
              'irepeat' $ 'dataI' >>= 'ifeed' . L.concat
 @
 
-'withCleanup', demonstrated here, is a variant of 'addCleanup' that is
-in effect only for the duration of a single action.
+'withCleanup', demonstrated here, is a variant of 'addCleanup' that
+cleans up after a particular action, rather than at the end of the
+`Inum`'s whole execution.  (At the outermost level, as used here,
+`withCleanup`'s effects are identical to `addCleanup`'s.)
 
 In addition to 'ifeed', the 'ipipe' function invokes a different
 'Inum' from within the 'InumM' monad, piping its output directly to
