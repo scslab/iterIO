@@ -295,7 +295,7 @@ skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
 -- character that should not be included in the returned string.
 whileStateI :: (LL.ListLike t e, Monad m, ChunkData t) =>
                (a -> e -> Either a a)
-            -- ^ Preidcate function
+            -- ^ Predicate function
             -> a 
             -- ^ Initial state
             -> Iter t m (t, a)
