@@ -89,7 +89,7 @@ module Data.IterIO.Base
     , CtlHandler, CtlArg(..), CtlRes(..)
     , noCtl, passCtl, consCtl
     -- * Misc debugging function
-    , tidTrace
+    , traceInput, tidTrace
     ) where
 
 import Prelude hiding (null)
@@ -167,12 +167,6 @@ instance (ChunkData t) => Monoid (Chunk t) where
     --
     --   (Done (Done "" (Chunk "" True)) (Chunk "" False)) >>= id
     --
-    -- While the above code may seem arcane, something similar happens
-    -- with, for instance:
-    --
-    -- do iter <- finishI $ feedI (return "") chunkEOF
-    --    iter
-    --
     -- Also, we expect b to be null a fair fraction of the time, so it
     -- is important to optimize that case.  (E.g., actually computing
     -- longList ++ [] via mappend would be expensive.)
@@ -248,8 +242,7 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
 -- like invoke 'liftIO' in a tail-recursive 'Iter', you can easily
 -- cause an infinite loop with 'IterF', which @iterF@ prevents.
 iterF :: (ChunkData t) => (Chunk t -> Iter t m a) -> Iter t m a
-iterF f = iter
-    where iter = IterF $ \c -> if null c then iter else f c
+iterF f = IterF $ \c -> if null c then iterF f else f c
 
 -- | Show the current state of an 'Iter', prepending it to some
 -- remaining input (the standard 'ShowS' optimization), when 'a' is in
@@ -1292,11 +1285,10 @@ feedI (InumFail e a c) c'       = InumFail e a (mappend c c')
 -- 'Iter' or another 'Inum'.  See the documentation of these two
 -- functions for more discussion.
 pullupI :: (ChunkData t) => Iter t m1 a -> Iter t m2 (Iter t m3 a)
-pullupI (Done a c@(Chunk _ eof))       = Done (Done a (Chunk mempty eof)) c
-pullupI (IterFail e c@(Chunk _ eof))   = Done (IterFail e (Chunk mempty eof)) c
-pullupI (InumFail e a c@(Chunk _ eof)) =
-    Done (InumFail e a (Chunk mempty eof)) c
-pullupI _ = error "pullupI: Iter still active"
+pullupI (Done a c)       = Done (Done a mempty) c
+pullupI (IterFail e c)   = Done (IterFail e mempty) c
+pullupI (InumFail e a c) = Done (InumFail e a mempty) c
+pullupI _                = error "pullupI: Iter still active"
 
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
 -- 'IterF', 'IterM', or 'IterC' states), then 'return's the 'Iter'
@@ -1323,13 +1315,11 @@ pullupI _ = error "pullupI: Iter still active"
 -- the enclosing 'Iter'.  In other words, spelled out, a successful
 -- result is always of the form:
 --
--- >       Done (Done a (Chunk mempty eof) t eof)
+-- >       Done (Done a mempty) (Chunk t eof)
 --
 -- This makes it safe to ignore the residual data from the inner
 -- 'Done', as with @Done a _ -> ...@ in the example above, as the
--- ignored 'Chunk' will always have 'mempty' data.  You can, however,
--- examine the EOF flag of the 'Chunk' to determine whether the 'Iter'
--- received an EOF 'Chunk'.
+-- ignored 'Chunk' will always be 'null'.
 finishI :: (ChunkData t, Monad m) => Inum t t m a
 finishI iter@(IterF _) = iterF $ finishI . feedI iter
 finishI (IterM m)      = IterM $ finishI `liftM` m
@@ -1604,6 +1594,10 @@ infixr 9 `consCtl`
 --
 -- Debugging
 --
+
+-- | For debugging, print a tag along with the current residual input.
+traceInput :: (ChunkData t, Monad m) => String -> Iter t m ()
+traceInput tag = IterF $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
 
 -- | For debugging.  Print the current thread ID and a message.
 tidTrace :: (MonadIO m) => String -> m ()

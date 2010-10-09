@@ -432,7 +432,7 @@ readI s' = let s = LL.toString s'
 -- exception.
 eofI :: (ChunkData t, Monad m, Show t) => Iter t m ()
 eofI = do
-  Chunk t eof <- peekI chunkI
+  Chunk t eof <- iterF $ \c -> Done c c
   if eof && null t
     then return ()
     else expectedI (chunkShow t) "EOF"

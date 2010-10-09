@@ -11,7 +11,6 @@ module Data.IterIO.Http (HttpReq(..)
                         -- * For debugging
                         , postReq, encReq, mptest, mptest'
                         , formTestMultipart, formTestUrlencoded
-                        , peekaboo
                         ) where
 
 import Control.Monad
@@ -517,9 +516,6 @@ httpreqI = do
   (request_line >>= next_hdr) <* crlf
     where
       next_hdr req = seq req $ any_hdr req \/ return req $ next_hdr
-
-peekaboo :: (ChunkData t, Monad m) => String -> Iter t m ()
-peekaboo tag = iterF $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
 
 -- foo :: IO HttpReq
 -- foo = enumFile "/u/dm/hack/iterIO/x" |$ httpreqI
