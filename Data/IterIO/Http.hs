@@ -11,6 +11,7 @@ module Data.IterIO.Http (HttpReq(..)
                         -- * For debugging
                         , postReq, encReq, mptest, mptest'
                         , formTestMultipart, formTestUrlencoded
+                        , peekaboo
                         ) where
 
 import Control.Monad
@@ -39,7 +40,7 @@ import Data.IterIO.Parse
 import Data.IterIO.Search
 
 -- import System.IO
--- import Debug.Trace
+import Debug.Trace
 
 type L = L8.ByteString
 
@@ -496,11 +497,14 @@ any_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 any_hdr req = do
   (field, val) <- hdr_field_val
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
+  traceShow (field, val) $ return ()
   case Map.lookup field request_headers of
     Nothing -> return req'
-    Just f  -> enumPure (L.fromChunks [val]) .|$
+    Just f  -> do
+      r <- enumPure (L.fromChunks [val]) .|$
                (f req' <* (optional spaces >> eofI)
                       <?> (S8.unpack field ++ " header"))
+      return r
 
 httpreqI :: Monad m => Iter L m HttpReq
 httpreqI = do
@@ -514,6 +518,11 @@ httpreqI = do
     where
       next_hdr req = seq req $ any_hdr req \/ return req $ next_hdr
 
+peekaboo :: (ChunkData t, Monad m) => String -> Iter t m ()
+peekaboo tag = iterF $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
+
+-- foo :: IO HttpReq
+-- foo = enumFile "/u/dm/hack/iterIO/x" |$ httpreqI
 
 --
 -- Chunk encoding and decoding (RFC 2616)

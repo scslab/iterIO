@@ -234,9 +234,9 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- returning a result of type @a@.  In adition, the
                 -- 'Iter' has a 'Chunk' containing any residual input
                 -- that was not consumed in producing the result.
-                | IterFail !SomeException !(Chunk t)
+                | IterFail !SomeException (Chunk t)
                 -- ^ The 'Iter' failed.
-                | InumFail !SomeException a !(Chunk t)
+                | InumFail !SomeException a (Chunk t)
                 -- ^ An 'Inum' failed; this result includes status of
                 -- the Iteratee.  (In this case, the type @a@ will
                 -- generally be @'Iter' t' m a\'@ for some @t'@ and
@@ -299,11 +299,12 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Done a mempty
 
-    m@(IterF _)  >>= k = IterF $ feedI m >=> k
-    (IterM m)    >>= k = IterM $ liftM (>>= k) m
-    (Done a c)   >>= k = feedI (k a) c
-    (IterC a fr) >>= k = IterC a $ fr >=> k
-    err          >>= _ = IterFail (getIterError err) (getIterResid err)
+    m@(IterF _)      >>= k = IterF $ feedI m >=> k
+    (IterM m)        >>= k = IterM $ liftM (>>= k) m
+    (Done a c)       >>= k = feedI (k a) c
+    (IterC a fr)     >>= k = IterC a $ fr >=> k
+    (IterFail e c)   >>= _ = IterFail e c
+    (InumFail e _ c) >>= _ = IterFail e c
 
     fail msg = throwI $ ErrorCall msg
 
@@ -360,12 +361,6 @@ getIterError (InumFail e _ _) = e
 getIterError (IterM _)        = error "getIterError: no error (in IterM state)"
 getIterError (IterC _ _)      = error "getIterError: no error (in IterC state)"
 getIterError _                = error "getIterError: no error to extract"
-
-getIterResid :: (ChunkData t) => Iter t m a -> Chunk t
-getIterResid (Done _ c)       = c
-getIterResid (IterFail _ c)   = c
-getIterResid (InumFail _ _ c) = c
-getIterResid _                = mempty
 
 -- | True if an 'Iter' is requesting something from an
 -- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
@@ -1092,7 +1087,16 @@ multiParse a@(IterF _) b
       useIfParse _           = False
 multiParse a b
     | isIterActive a = inumMC passCtl a >>= flip multiParse b
-    | otherwise      = a `catchI` \err _ -> combineExpected err b
+    -- If there is an error, we flush the residual input, since we
+    -- have been feeding it to b all along.  It's not obvious from the
+    -- following line of code, but because of the way >>= is defined,
+    -- we know that the IterF is only going to be fed a's residual
+    -- input, and thus it will not consume anything that hasn't
+    -- already been fed to b.  The only way to fetch new input from an
+    -- enumerator (as opposed to getting the residual input of the
+    -- last iteratee to execute) is to return an IterF from an IterF,
+    -- so that the m in an (m >>= k) statement is of type IterF.
+    | otherwise      = a `catchI` \err _ -> IterF $ \_ -> combineExpected err b
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
 -- all input consumed using 'tryBI'.  (This means @iter@ must not
