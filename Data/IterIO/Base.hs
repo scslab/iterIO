@@ -1265,11 +1265,28 @@ feedI (IterC a fr) c            = IterC a $ flip feedI c . fr
 feedI (IterFail e c) c'         = IterFail e (mappend c c')
 feedI (InumFail e a c) c'       = InumFail e a (mappend c c')
 
--- | This function takes an non-active 'Iter' and returns it into
--- another 'Iter', much like the monadic 'return' function.  The
--- difference is that any residual data is stripped of from the
--- returned iter and instead injected into the outer 'Iter', as with
--- 'ungetI'.
+-- | This function takes a non-active 'Iter' and returns it into
+-- another 'Iter' of the same input type.  Any residual data from the
+-- argument iter is moved instead to the enclosing 'Iter' (as if
+-- injected with 'ungetI'), so that, for example:
+--
+-- >      pullupI (Done 1234 (chunk "residual data"))
+--
+-- Will be equivalent to:
+--
+-- >      do ungetI "residual data"
+-- >         return (Done 1234 mempty)
+--
+-- which in turn yields:
+--
+-- >      Done (Done 1234 mempty) (chunk "residual data")
+--
+-- @pullupI@ is used internally by functions such as 'finishI' and
+-- 'inumF'.  In the case of 'finishI', this saves the calling function
+-- from worrying about residual input.  In the case of 'inumF', it
+-- prevents residual data from being lost when 'inumF' is fused to an
+-- 'Iter' or another 'Inum'.  See the documentation of these two
+-- functions for more discussion.
 pullupI :: (ChunkData t) => Iter t m1 a -> Iter t m2 (Iter t m3 a)
 pullupI (Done a c@(Chunk _ eof))       = Done (Done a (Chunk mempty eof)) c
 pullupI (IterFail e c@(Chunk _ eof))   = Done (IterFail e (Chunk mempty eof)) c
@@ -1294,19 +1311,21 @@ pullupI _ = error "pullupI: Iter still active"
 --
 -- >  do iter' <- finishI iter
 -- >     case iter' of
--- >       IterFail e   -> ... handle error ...
--- >       InumFail e i -> ... handle error ...
--- >       Done a _     -> ... do something with a ...
+-- >       IterFail e _   -> ... handle error ...
+-- >       InumFail e i _ -> ... handle error ...
+-- >       Done a _       -> ... do something with a ...
 --
--- Note that @finishI@ pulls any left-over data up to the enclosing
--- 'Iter' when it returns 'Done'.  In other words, spelled out, a
--- successful result is always of the form:
+-- Note that @finishI@ uses 'pullupI' to pull any residual data up to
+-- the enclosing 'Iter'.  In other words, spelled out, a successful
+-- result is always of the form:
 --
 -- >       Done (Done a (Chunk mempty eof) t eof)
 --
 -- This makes it safe to ignore the residual data from the inner
--- 'Done', as with @Done a _ -> ...@ in the example above.  No
--- residual data is lost in this case.
+-- 'Done', as with @Done a _ -> ...@ in the example above, as the
+-- ignored 'Chunk' will always have 'mempty' data.  You can, however,
+-- examine the EOF flag of the 'Chunk' to determine whether the 'Iter'
+-- received an EOF 'Chunk'.
 finishI :: (ChunkData t, Monad m) => Inum t t m a
 finishI iter@(IterF _) = iterF $ finishI . feedI iter
 finishI (IterM m)      = IterM $ finishI `liftM` m
@@ -1358,12 +1377,12 @@ enumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 -- 'IterF' state and returns the 'Iter' as soon as it enters any
 -- state other than 'IterF'.
 --
--- When the 'Iter' returns 'Done', @inumF@ pulls the residual data up
--- to the enclosing 'Iter', ensuring the 'Done' returned will always
--- have 'mempty' residual data (like 'finishI').  This makes it
--- convenient to 'cat' @inumF@ at the end of other 'Inum's that have
--- the same input and output types.  For example, one can implement
--- 'inumNop' as follows:
+-- When the 'Iter' returns 'Done' or throws an exception, @inumF@
+-- pulls the residual data up to the enclosing 'Iter' (with
+-- 'pullupI'), ensuring the 'Done' returned will always have 'mempty'
+-- residual data.  This makes it convenient to 'cat' @inumF@ at the
+-- end of other 'Inum's that have the same input and output types.
+-- For example, one can implement 'inumNop' as follows:
 --
 -- @
 -- inumNop = 'inumRepeat' ('inumMC' 'passCtl' ``cat`` 'inumF')
@@ -1377,7 +1396,8 @@ enumPure t iter = inumMC passCtl $ feedI iter $ chunk t
 -- effect:  @'inumNop' .| iter@ behaves identially to @iter@.  On the
 -- other hand, @inumNop' .| iter@ discards any residual data.  For
 -- example, @inumNop' .| ('Done' () ('chunk' \"abcde\"))@ becomes
--- @'Done' () ('chunk' \"\")@
+-- @'Done' () ('chunk' \"\")@--the residual data @\"abcde\"@ has been
+-- discarded, whereas 'inumNop' would have left it untouched..
 inumF :: (ChunkData t, Monad m1, Monad m2) =>
          Iter t m1 a -> Iter t m2 (Iter t m1 a)
 inumF iter@(IterF _)           = iterF dochunk
