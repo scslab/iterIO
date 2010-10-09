@@ -59,6 +59,9 @@ instance (MonadIO m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
 
 -- | Runs an @'IterStateT' s m@ computation on some state @s@.
+-- Returns the state of the 'Iter' and the state of @s@ as a pair.
+-- Pull residual input up to the enclosing 'Iter' monad the same way
+-- that 'finishI' does.
 runIterStateT :: (ChunkData t, Monad m) => 
                  Iter t (IterStateT s m) a -> s -> Iter t m (Iter t m a, s)
 runIterStateT iter0 s = adapt iter0
@@ -66,9 +69,7 @@ runIterStateT iter0 s = adapt iter0
       adapt iter@(IterF _)         = IterF $ adapt . feedI iter
       adapt (IterM (IterStateT f)) = lift (f s) >>= uncurry runIterStateT
       adapt (IterC a fr)           = IterC a $ adapt . fr
-      adapt (Done a c)             = return (Done a c, s)
-      adapt (IterFail e)           = return (IterFail e, s)
-      adapt (InumFail e a)         = return (InumFail e a, s)
+      adapt inactive               = liftM (\a -> (a, s)) $ pullupI inactive
 
 -- | Returns the state in an @'Iter' t ('IterStateT' s m)@ monad.
 -- Analogous to @'get'@ for a @'StateT' s m@ monad.
@@ -127,12 +128,12 @@ adaptIter :: (ChunkData t, Monad m1, Monad m2) =>
           -> Iter t m2 b                       -- ^ Output computation
 adaptIter f mf = adapt
     where
-      adapt iter@(IterF _) = IterF $ adapt . feedI iter
-      adapt (IterM m)      = mf m
-      adapt (Done a c)     = Done (f a) c
-      adapt (IterC a fr)   = IterC a $ adapt . fr
-      adapt (IterFail e)   = IterFail e
-      adapt (InumFail e a) = InumFail e (f a)
+      adapt iter@(IterF _)   = IterF $ adapt . feedI iter
+      adapt (IterM m)        = mf m
+      adapt (Done a c)       = Done (f a) c
+      adapt (IterC a fr)     = IterC a $ adapt . fr
+      adapt (IterFail e c)   = IterFail e c
+      adapt (InumFail e a c) = InumFail e (f a) c
 
 -- | Adapt monadic computations of an 'Iter' from one monad to
 -- another.  This only works when the values are converted straight

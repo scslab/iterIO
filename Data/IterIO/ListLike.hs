@@ -174,10 +174,10 @@ takeExactI len | len <= 0  = return mempty
 -- this case it is better to have the thread handling reads call
 -- 'hSetBinaryMode'.)
 --
--- Also note that Haskell be default buffers data written to handle.
--- For may network protocols this is a problem.  Don't forget to call
--- @'hSetBuffering' h 'NoBuffering'@ before passing a handle to
--- 'handleI'.
+-- Also note that Haskell be default buffers data written to
+-- 'Handle's.  For may network protocols this is a problem.  Don't
+-- forget to call @'hSetBuffering' h 'NoBuffering'@ before passing a
+-- handle to 'handleI'.
 handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            Handle
         -> Iter t m ()
@@ -194,8 +194,7 @@ sockDgramI s mdest = do
     Nothing  -> return ()
     Just pkt -> liftIO (genSendTo s pkt mdest) >> sockDgramI s mdest
 
--- | An 'Iter' that uses 'LL.hPutStr' to writes all output to
--- 'stdout'.
+-- | An 'Iter' that uses 'LL.hPutStr' to write all output to 'stdout'.
 stdoutI :: (LL.ListLikeIO t e, ChunkData t, MonadIO m) => Iter t m ()
 stdoutI = putI (liftIO . LL.hPutStr stdout) (return ())
 
@@ -203,8 +202,8 @@ stdoutI = putI (liftIO . LL.hPutStr stdout) (return ())
 -- Control functions
 --
 
--- | A control command requesting the size of the current file being
--- enumerated.
+-- | A control command (issued with @'ctlI' SizeC@) requesting the
+-- size of the current file being enumerated.
 data SizeC = SizeC deriving (Typeable)
 instance CtlCmd SizeC Integer
 
@@ -219,6 +218,9 @@ instance CtlCmd SeekC ()
 data TellC = TellC deriving (Typeable)
 instance CtlCmd TellC Integer
 
+-- | A handler function for the 'SizeC', 'SeekC', and 'TellC' control
+-- requests.  @fileCtl@ is used internally by 'enumFile' and
+-- 'enumHandle', and is exposed for similar enumerators to use.
 fileCtl :: (ChunkData t, MonadIO m) => Handle -> CtlHandler (Iter t m)
 fileCtl h = (\(SeekC mode pos) -> liftIO (hSeek h mode pos))
             `consCtl` (\TellC -> liftIO (hTell h))
@@ -294,6 +296,7 @@ enumFile path = mkInumM $ do
   setCtlHandler $ fileCtl h
   irepeat $ liftIO (LL.hGet h defaultChunkSize) >>= ifeed1
 
+-- | Enumerate standard input.
 enumStdin :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) => Onum t m a
 enumStdin = enumHandle stdin
 
@@ -323,7 +326,8 @@ inumTake n = mkInumM $ setAutoEOF True >> ipipe (inumTakeExact n)
 -- | This inner enumerator is like 'inumNop' in that it passes
 -- unmodified 'Chunk's straight through to an iteratee.  However, it
 -- also logs the 'Chunk's to a file (which can optionally be truncated
--- or appended to, based on the second argument).
+-- or appended to, based on the second argument).  Does not close the
+-- file handle when done.
 inumLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            FilePath             -- ^ Path to log to
         -> Bool                 -- ^ True to truncate file

@@ -5,12 +5,12 @@
 -- 'Inum's.  The first, 'mkInum', creates simple, stateless 'Inum's
 -- out of 'Iter's that translate from an input type to an output type.
 -- The second, 'mkInumM', creates an 'Inum' out of a computation in
--- the 'InumM' monad.  'InumM' an 'Iter' that wraps its inner monadic
--- type with an 'IterStateT' to keep track of the state of the 'Iter'
--- being feed data.  'InumM' computations can consume input by
+-- the 'InumM' monad.  'InumM' is an 'Iter' that wraps its inner
+-- monadic type with an 'IterStateT' to keep track of the state of the
+-- 'Iter' being feed data.  'InumM' computations can consume input by
 -- invoking 'Iter' computations (though 'Iter's that are not
 -- polymorphic in their monad may need to be transformed with the
--- 'liftIterM' function.  The 'InumM' computation can produce output
+-- 'liftIterM' function).  The 'InumM' computation can produce output
 -- by calling any of the 'ifeed', 'ipipe', and 'irun' functions.
 
 module Data.IterIO.Inum
@@ -57,16 +57,16 @@ import Data.IterIO.Trans
 --
 
 -- | Construct a simple @'Inum' tIn tOut m a@ from a transcoder of
--- type @'Iter' tIn m tOut@.  The created 'Inum' simply invokes the
+-- type @'Iter' tIn m tOut@.  The 'Inum' created simply invokes the
 -- transcoder over and over again to get more data.  It finishes when
--- the @'Iter' tOut m a@ being fed by the 'Inum' is no longer active
--- or the trancoder @'Iter' tIn m tOut@ throws an exception of class
--- 'IterEOF'.  If the transcoder throws any other kind of exception,
--- the whole 'Inum' fails with an 'InumFail' error.
+-- the \"target\" 'Iter' (of type @'Iter' tOut m a@) being fed by the
+-- 'Inum' is no longer active, or when the trancoder 'Iter' throws an
+-- exception of class 'IterEOF'.  If the transcoder throws any other
+-- kind of exception, the whole 'Inum' fails with an 'InumFail' error.
 mkInum :: (Monad m, ChunkData tIn, ChunkData tOut) =>
            Iter tIn m tOut
-        -- ^ This Iteratee will be executed repeatedly to produce
-        -- transcoded chunks.
+        -- ^ This \"transcoder\" 'Iter' is executed repeatedly to
+        -- produce transcoded chunks of type @tOut@.
         -> Inum tIn tOut m a
 mkInum codec = loop
     where
@@ -86,7 +86,7 @@ Complex 'Inum's that need state and non-trivial control flow can be
 constructed using the 'mkInumM' function to produce an 'Inum' out of a
 computation in the 'InumM' monad.  The 'InumM' monad implicitly keeps
 track of the state of the 'Iter' to which the 'Inum' is feeding data,
-which we call the \"target 'Iter'\".
+which we call the \"target\" 'Iter'.
 
 'InumM' is an 'Iter' monad, and so can consume input by invoking
 ordinary 'Iter' actions.  However, to keep track of the state of the
@@ -118,8 +118,9 @@ in 'Chunk's using 'chunkI', rather than just inputting data with
 'dataI'.  The choice of 'chunkI' rather than 'dataI' allows
 @inumConcat@ to see the @eof@ flag and know when there is no more
 input.  'chunkI' also avoids throwing an 'IterEOF' exception on end of
-file, as 'dataI' would; such an exception would cause the 'Inum' to
-fail.
+file, as 'dataI' would.  In contrast to 'mkInum', which gracefully
+interprets 'IterEOF' exceptions as an exit request, 'mkInumM' by
+default treats such exceptions as an 'Inum' failure.
 
 As previously mentioned, data is fed to the target 'Iter', which here
 is of type @'Iter' L.ByteString m a@, using 'ifeed'.  'ifeed' returns
@@ -133,8 +134,8 @@ What happens when @eof@ or @done@ is set?  One possibility is to do
 nothing.  This is often correct.  Falling off the end of the 'InumM'
 do-block causes the 'Inum' to return the current state of the 'Iter'.
 However, it may be that the 'Inum' has been fused to the target
-'Iter', in which case any left-over residual data fed to but not
-consumed by the target 'Iter' will be discarded.  We may instead want
+'Iter', in which case any left-over residual data fed to, but not
+consumed by, the target 'Iter' will be discarded.  We may instead want
 to put the data back onto the input stream.  The 'ipopresid' function
 extracts any left-over data from the target 'Iter', while 'ungetI'
 places data back in the input stream.  Since here the input stream is
@@ -148,11 +149,12 @@ The code above looks much clumsier than the version based on 'mkInum',
 but several of these steps can be made implicit.  There is an
 /AutoEOF/ flag, controlable with the 'setAutoEOF' function, that
 causes 'IterEOF' exceptions to produce normal termination of the
-'Inum', rather than failure.  Another flag, /AutoDone/, is controlable
-with the 'setAutoDone' function and causes the 'Inum' to exit
-immediately when the underlying 'Iter' is no longer active (i.e., the
-'ifeed' function returns @'True'@).  Both of these flags are set at
-once by the 'mkInumAutoM' function, which yields the following simpler
+'Inum', rather than failure (just as 'mkInum' handles such
+exceptions).  Another flag, /AutoDone/, is controlable with the
+'setAutoDone' function and causes the 'Inum' to exit immediately when
+the underlying 'Iter' is no longer active (i.e., the 'ifeed' function
+returns @'True'@).  Both of these flags are set at once by the
+'mkInumAutoM' function, which yields the following simpler
 implementation of @inumConcat@:
 
 @
@@ -177,8 +179,10 @@ computation.  Using 'irepeat' to simplify further, we have:
              'irepeat' $ 'dataI' >>= 'ifeed' . L.concat
 @
 
-'withCleanup', demonstrated here, is a variant of 'addCleanup' that is
-in effect only for the duration of a single action.
+'withCleanup', demonstrated here, is a variant of 'addCleanup' that
+cleans up after a particular action, rather than at the end of the
+`Inum`'s whole execution.  (At the outermost level, as used here,
+`withCleanup`'s effects are identical to `addCleanup`'s.)
 
 In addition to 'ifeed', the 'ipipe' function invokes a different
 'Inum' from within the 'InumM' monad, piping its output directly to
@@ -234,7 +238,6 @@ data InumState tIn tOut m a = InumState {
     , insAutoDone :: !Bool
     , insCtl :: !(CtlHandler (Iter tIn m))
     , insIter :: !(Iter tOut m a)
-    , insRemain :: !(Chunk tIn)
     , insCleanup :: !(InumM tIn tOut m a ())
     , insCleaning :: !Bool
     }
@@ -245,7 +248,6 @@ defaultInumState = InumState {
                    , insAutoDone = False
                    , insCtl = passCtl
                    , insIter = IterF $ const $ error "insIter"
-                   , insRemain = mempty
                    , insCleanup = return ()
                    , insCleaning = False
                    }
@@ -301,26 +303,27 @@ ncmodify fn = imodify $ \s -> if insCleaning s
                               then error "illegal call within Cleanup function"
                               else fn s
 
--- | Add a cleanup action to be executed when the 'Inum' finishes.
+-- | Add a cleanup action to be executed when the 'Inum' finishes, or,
+-- if used in conjunction with the 'withCleanup' function, when the
+-- innermost enclosing 'withCleanup' action finishes.
 addCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -> InumM tIn tOut m a ()
 addCleanup clean = ncmodify $ \s -> s { insCleanup = clean >> insCleanup s }
 
--- | Run an 'InumM' with some cleanup action in effect.  If the 'Inum'
--- ends through non-local termination (which means an invocation of
--- 'idone', an exception, or termination of the 'Inum' because of
--- /AutoDone/ or /AutoEOF/), then the cleanup action will be executed
--- along with any previously set cleanup actions.
+-- | Run an 'InumM' with some cleanup action in effect.  The cleanup
+-- action specified will be executed when the main action returns,
+-- whether normally, through an exception, because of the /AutoDone/
+-- or /AutoEOF/ flags, or because 'idone' is invoked.
 --
--- If, on the other hand, the 'InumM' returns normally, then the
--- cleanup action and any cleanup actions added by 'addCleanup' within
--- the call to 'withCleanup' will be run, but cleanup actions added
--- prior to invocation of 'withCleanup' will not be run immediately,
--- but instead be defered for termination of the overall 'InumM'
--- computation.
+-- Note @withCleanup@ also defines the scope of actions added by the
+-- 'addCleanup' function.  In other words, given a call such as
+-- @withCleanup cleaner1 main@, if @main@ invokes @'addCleanup'
+-- cleaner2@, then both @cleaner1@ and @cleaner2@ will be executed
+-- upon @main@'s return, even if the overall 'Inum' has not finished
+-- yet.
 withCleanup :: (ChunkData tIn, Monad m) =>
               InumM tIn tOut m a () -- ^ Cleanup action
-           -> InumM tIn tOut m a b  -- ^ Action to execute with Cleanup
+           -> InumM tIn tOut m a b  -- ^ Main action to execute
            -> InumM tIn tOut m a b
 withCleanup clean action = do
   old <- igets insCleanup
@@ -340,28 +343,26 @@ runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          -> Iter tIn m (Iter tOut m a)
 runInumM inumm s0 = do
   (result1, s1) <- runIterStateT inumm s0 >>= convertFail
-  (result2, s2) <- runIterStateT (insCleanup s1) s1 {
-                      insAutoDone = False
-                    , insCleaning = True
-                    , insRemain = mempty }
+  (result2, s2) <- runIterStateT (insCleanup s1) s1 { insAutoDone = False
+                                                    , insCleaning = True }
                    >>= convertFail
   let iter = insIter s2
   case (result1, result2) of
-    (IterFail e, _) -> InumFail e iter
-    (_, IterFail e) -> InumFail e iter
-    _               -> return iter
+    (IterFail e _, _) -> InumFail e iter mempty
+    (_, IterFail e _) -> InumFail e iter mempty
+    _                 -> return iter
     where
-      convertFail (InumFail e _, s) = convertFail (IterFail e, s)
-      convertFail (iter@(IterFail e), s) = do
-          let ret = if isInumDone e || (insAutoEOF s && isIterEOF e)
-                    then (return $ error "runInumM", s)
-                    else (iter, s)
-          Done ret (insRemain s)
+      convertFail (InumFail e _ c, s) = convertFail (IterFail e c, s)
+      convertFail (iter@(IterFail e _), s) =
+          if isInumDone e || (insAutoEOF s && isIterEOF e)
+          then return (return $ error "runInumM", s)
+          else return (iter, s)
       convertFail is = return is
       isInumDone e = maybe False (\InumDone -> True) $ fromException e
 
--- | A variant of 'mkInumM' that sets the flags controlled by
--- 'setAutoEOF' and 'setAutoDone' to @'True'@.
+-- | A variant of 'mkInumM' that sets /AutoEOF/ and /AutoDone/ to
+-- 'True' by default.  (Equivalent to calling @'setAutoEOF' 'True' >>
+-- 'setAutoDone' 'True'@ as the first thing inside 'mkInumM'.)
 mkInumAutoM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
                InumM tIn tOut m a b -> Inum tIn tOut m a
 mkInumAutoM inumm iter0 =
@@ -393,22 +394,13 @@ mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
 mkInumM inumm iter0 =
     runInumM inumm defaultInumState { insIter = iter0 }
 
--- | Throw an exception from within the 'InumM' in such a way that
--- unconsumed input will be preserved if it is caught outside of the
--- 'mkInumM' function.
-ithrow :: (ChunkData tIn, Monad m, Exception e) => e -> InumM tIn tOut m a b
-ithrow e = do
-  c <- IterF return
-  imodify $ \s -> s { insRemain = c }
-  throwI e
-
--- | Used from within the 'InumM' monad to feed data to the 'Iter'
--- being processed by that 'Inum'.  Returns @'False'@ if the 'Iter' is
--- still active and @'True'@ if the iter has finished and the 'Inum'
--- should also return.  (If the @autoDone@ flag is @'True'@, then
--- @ifeed@, @ipipe@, and @irun@ will never actually return @'True'@,
--- but instead just run cleanup functions and exit the 'Inum'
--- immediately.)
+-- | Used from within the 'InumM' monad to feed data to the target
+-- 'Iter'.  Returns @'False'@ if the target 'Iter' is still active and
+-- @'True'@ if the iter has finished and the 'Inum' should also
+-- return.  (If the @autoDone@ flag is @'True'@, then @ifeed@,
+-- @ipipe@, and @irun@ will never actually return @'True'@, but
+-- instead just immediately run cleanup functions and exit the
+-- 'Inum' when the target 'Iter' stops being active.)
 ifeed :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          tOut -> InumM tIn tOut m a Bool
 ifeed = ipipe . enumPure
@@ -424,7 +416,7 @@ ifeed = ipipe . enumPure
 -- @
 ifeed1 :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           tOut -> InumM tIn tOut m a Bool
-ifeed1 dat = if null dat then ithrow $ mkIterEOF "ifeed1" else ifeed dat
+ifeed1 dat = if null dat then throwEOFI "ifeed1" else ifeed dat
 
 -- | Apply another 'Inum' to the target 'Iter' from within the 'InumM'
 -- monad.  As with 'ifeed', returns @'True'@ when the 'Iter' is
@@ -437,7 +429,7 @@ ipipe inum = do
           insIter s
   iput s { insIter = iter }
   let done = not $ isIterActive iter
-  if done && insAutoDone s then ithrow InumDone else return done
+  if done && insAutoDone s then idone else return done
 
 -- | Apply an 'Onum' (or 'Inum' of an arbitrary, unused input type) to
 -- the 'Iter' from within the 'InumM' monad.  As with 'ifeed', returns
@@ -471,7 +463,7 @@ ipopresid = do
 
 -- | Immediately perform a successful exit from an 'InumM' monad,
 -- terminating the 'Inum' and returning the current state of the
--- 'Iter'.  Can be used to end an 'irepeat' loop.  (Use @'lift' $
--- 'throwI' ...@ for an unsuccessful exit.)
+-- target 'Iter'.  Can be used to end an 'irepeat' loop.  (Use
+-- @'throwI' ...@ for an unsuccessful exit.)
 idone :: (ChunkData tIn, Monad m) => InumM tIn tOut m a b
-idone = ithrow InumDone
+idone = throwI InumDone

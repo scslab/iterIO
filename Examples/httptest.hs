@@ -3,22 +3,26 @@ module Main where
 
 -- import Control.Monad.Trans
 import Control.Concurrent
-import Control.Monad.Trans
+import Control.Exception (finally)
+-- import Control.Monad.Trans
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Network.Socket as Net
 import qualified OpenSSL as SSL
 import qualified OpenSSL.Session as SSL
+import System.IO
 -- import Text.XHtml.Strict
 
 import Data.IterIO
 -- import Data.IterIO.Parse
 import Data.IterIO.Http
 import Data.IterIO.SSL
+-- import Data.IterIO.ListLike
 
 type L = L.ByteString
 
 port :: Net.PortNumber
-port = 4443
+-- port = 4443
+port = 8000
 
 myListen :: Net.PortNumber -> IO Net.Socket
 myListen pn = do
@@ -37,12 +41,11 @@ accept_loop :: SSL.SSLContext -> QSem -> Net.Socket -> IO ()
 accept_loop ctx sem sock = do
   (s, addr) <- Net.accept sock
   print addr
-  (iter, enum) <- liftIO $ sslFromSocket ctx s True
-  _ <- forkIO $ handle_connection (enum |. inumStderr) (inumStderr .| iter)
-{-
+  -- (iter, enum) <- liftIO $ sslFromSocket ctx s True
+--  _ <- forkIO $ handle_connection (enum |. inumStderr) (inumStderr .| iter)
   h <- Net.socketToHandle s ReadWriteMode
-  _ <- forkIO $ handle_connection (enumHandle h) (handleI h) `finally` hClose h
--}
+  handle_connection (enumHandle h |. inumStderr) (handleI h) `finally` hClose h
+-- _ <- forkIO $ handle_connection (enumHandle h) (handleI h) `finally` hClose h
   accept_loop ctx sem sock
 
 main :: IO ()

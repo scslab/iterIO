@@ -178,7 +178,8 @@ infix 0 <?>
   
 -- | Throw an 'Iter' exception that describes expected input not
 -- found.
-expectedI :: String             -- ^ Input actually received
+expectedI :: (ChunkData t) =>
+             String             -- ^ Input actually received
           -> String             -- ^ Description of input that was wanted
           -> Iter t m a
 expectedI saw target = throwI $ IterExpected saw [target]
@@ -295,7 +296,7 @@ skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
 -- character that should not be included in the returned string.
 whileStateI :: (LL.ListLike t e, Monad m, ChunkData t) =>
                (a -> e -> Either a a)
-            -- ^ Preidcate function
+            -- ^ Predicate function
             -> a 
             -- ^ Initial state
             -> Iter t m (t, a)
@@ -431,7 +432,7 @@ readI s' = let s = LL.toString s'
 -- exception.
 eofI :: (ChunkData t, Monad m, Show t) => Iter t m ()
 eofI = do
-  Chunk t eof <- peekI chunkI
+  Chunk t eof <- iterF $ \c -> Done c c
   if eof && null t
     then return ()
     else expectedI (chunkShow t) "EOF"
