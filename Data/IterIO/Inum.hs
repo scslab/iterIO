@@ -238,7 +238,6 @@ data InumState tIn tOut m a = InumState {
     , insAutoDone :: !Bool
     , insCtl :: !(CtlHandler (Iter tIn m))
     , insIter :: !(Iter tOut m a)
-    , insRemain :: !(Chunk tIn)
     , insCleanup :: !(InumM tIn tOut m a ())
     , insCleaning :: !Bool
     }
@@ -249,7 +248,6 @@ defaultInumState = InumState {
                    , insAutoDone = False
                    , insCtl = passCtl
                    , insIter = IterF $ const $ error "insIter"
-                   , insRemain = mempty
                    , insCleanup = return ()
                    , insCleaning = False
                    }
@@ -345,23 +343,20 @@ runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          -> Iter tIn m (Iter tOut m a)
 runInumM inumm s0 = do
   (result1, s1) <- runIterStateT inumm s0 >>= convertFail
-  (result2, s2) <- runIterStateT (insCleanup s1) s1 {
-                      insAutoDone = False
-                    , insCleaning = True
-                    , insRemain = mempty }
+  (result2, s2) <- runIterStateT (insCleanup s1) s1 { insAutoDone = False
+                                                    , insCleaning = True }
                    >>= convertFail
   let iter = insIter s2
   case (result1, result2) of
-    (IterFail e, _) -> InumFail e iter
-    (_, IterFail e) -> InumFail e iter
-    _               -> return iter
+    (IterFail e _, _) -> InumFail e iter mempty
+    (_, IterFail e _) -> InumFail e iter mempty
+    _                 -> return iter
     where
-      convertFail (InumFail e _, s) = convertFail (IterFail e, s)
-      convertFail (iter@(IterFail e), s) = do
-          let ret = if isInumDone e || (insAutoEOF s && isIterEOF e)
-                    then (return $ error "runInumM", s)
-                    else (iter, s)
-          Done ret (insRemain s)
+      convertFail (InumFail e _ c, s) = convertFail (IterFail e c, s)
+      convertFail (iter@(IterFail e _), s) =
+          if isInumDone e || (insAutoEOF s && isIterEOF e)
+          then return (return $ error "runInumM", s)
+          else return (iter, s)
       convertFail is = return is
       isInumDone e = maybe False (\InumDone -> True) $ fromException e
 
@@ -399,15 +394,6 @@ mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
 mkInumM inumm iter0 =
     runInumM inumm defaultInumState { insIter = iter0 }
 
--- | Throw an exception from within the 'InumM' in such a way that
--- unconsumed input will be preserved if it is caught outside of the
--- 'mkInumM' function.
-ithrow :: (ChunkData tIn, Monad m, Exception e) => e -> InumM tIn tOut m a b
-ithrow e = do
-  c <- IterF return
-  imodify $ \s -> s { insRemain = c }
-  throwI e
-
 -- | Used from within the 'InumM' monad to feed data to the target
 -- 'Iter'.  Returns @'False'@ if the target 'Iter' is still active and
 -- @'True'@ if the iter has finished and the 'Inum' should also
@@ -430,7 +416,7 @@ ifeed = ipipe . enumPure
 -- @
 ifeed1 :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           tOut -> InumM tIn tOut m a Bool
-ifeed1 dat = if null dat then ithrow $ mkIterEOF "ifeed1" else ifeed dat
+ifeed1 dat = if null dat then throwEOFI "ifeed1" else ifeed dat
 
 -- | Apply another 'Inum' to the target 'Iter' from within the 'InumM'
 -- monad.  As with 'ifeed', returns @'True'@ when the 'Iter' is
@@ -443,7 +429,7 @@ ipipe inum = do
           insIter s
   iput s { insIter = iter }
   let done = not $ isIterActive iter
-  if done && insAutoDone s then ithrow InumDone else return done
+  if done && insAutoDone s then idone else return done
 
 -- | Apply an 'Onum' (or 'Inum' of an arbitrary, unused input type) to
 -- the 'Iter' from within the 'InumM' monad.  As with 'ifeed', returns
@@ -480,4 +466,4 @@ ipopresid = do
 -- target 'Iter'.  Can be used to end an 'irepeat' loop.  (Use
 -- @'throwI' ...@ for an unsuccessful exit.)
 idone :: (ChunkData tIn, Monad m) => InumM tIn tOut m a b
-idone = ithrow InumDone
+idone = throwI InumDone

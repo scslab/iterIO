@@ -178,7 +178,8 @@ infix 0 <?>
   
 -- | Throw an 'Iter' exception that describes expected input not
 -- found.
-expectedI :: String             -- ^ Input actually received
+expectedI :: (ChunkData t) =>
+             String             -- ^ Input actually received
           -> String             -- ^ Description of input that was wanted
           -> Iter t m a
 expectedI saw target = throwI $ IterExpected saw [target]
