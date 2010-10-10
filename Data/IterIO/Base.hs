@@ -1270,10 +1270,9 @@ feedI (InumFail e a c) c'          = InumFail e a (mappend c c')
 -- 'Iter' or another 'Inum'.  See the documentation of these two
 -- functions for more discussion.
 pullupI :: (ChunkData t) => Iter t m1 a -> Iter t m2 (Iter t m3 a)
-pullupI (Done a c@(Chunk _ eof))       = Done (Done a (Chunk mempty eof)) c
-pullupI (IterFail e c@(Chunk _ eof))   = Done (IterFail e (Chunk mempty eof)) c
-pullupI (InumFail e a c@(Chunk _ eof)) =
-    Done (InumFail e a (Chunk mempty eof)) c
+pullupI (Done a c)       = Done (Done a mempty) c
+pullupI (IterFail e c)   = Done (IterFail e mempty) c
+pullupI (InumFail e a c) = Done (InumFail e a mempty) c
 pullupI _                = error "pullupI: Iter still active"
 
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
