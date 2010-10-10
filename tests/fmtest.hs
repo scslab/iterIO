@@ -4,6 +4,7 @@ module Main where
 import Control.Exception
 import Data.Monoid
 
+import Control.Monad.Trans
 import Data.IterIO.Base
 import Data.IterIO.Extra
 import Data.IterIO.Parse
@@ -15,10 +16,24 @@ eof1 = feedI (IterF $ IterFail (toException $ ErrorCall "error"))
        (Chunk mempty True)
 -}
 
+import Debug.Trace
 
--- | This shouldn't mappend to EOF, but did when there was a bug in feedI
-eoftst :: Iter () IO ()
-eoftst = enumPure "ab" |$ skipMany (string "a" >> string "b")
+-- | These shouldn't mappend to EOF, but did when there was a bug in feedI
+
+eoftst1 :: IO ()
+eoftst1 = run $ ifParse dataI return $ return ()
+
+eoftst2 :: IO ()
+eoftst2 = run $ catchBI dataI $ \(SomeException _) -> return ()
+
+{-
+eoftst3 :: IO ()
+eoftst3 = run (copyInput dataI >>= check :: Iter () IO ())
+    where check (iter, input) = feedI (return ()) input
+-}
+
+eoftst4 :: IO ()
+eoftst4 = enumPure () |$ multiParse dataI (IterF $ \(Chunk t _) -> return t)
 
 fmtest :: IO ()
 fmtest = run $ feedI testiter (chunk ())
@@ -28,4 +43,9 @@ fmtest = run $ feedI testiter (chunk ())
       iterm = IterM (return $ return ())
 
 main :: IO ()
-main = fmtest
+main = do
+  fmtest
+  eoftst1
+  eoftst2
+  eoftst4
+  return ()

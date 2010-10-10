@@ -89,7 +89,7 @@ module Data.IterIO.Base
     , CtlHandler, CtlArg(..), CtlRes(..)
     , noCtl, passCtl, consCtl
     -- * Misc debugging function
-    , traceInput, tidTrace
+    , traceInput, tidTrace, getIterError
     ) where
 
 import Prelude hiding (null)
@@ -161,19 +161,11 @@ instance Functor Chunk where
 instance (ChunkData t) => Monoid (Chunk t) where
     mempty = Chunk mempty False
 
-    -- We mostly want to avoid appending data to a Chunk that has the
-    -- EOF bit set, but make an exception for appending a null chunk,
-    -- so that code like the following will work:
-    --
-    --   (Done (Done "" (Chunk "" True)) (Chunk "" False)) >>= id
-    --
-    -- Also, we expect b to be null a fair fraction of the time, so it
-    -- is important to optimize that case.  (E.g., actually computing
-    -- longList ++ [] via mappend would be expensive.)
-    mappend (Chunk a eofa) (Chunk b eofb)
-            | null b    = Chunk a (eofa || eofb)
-            | not eofa  = Chunk (mappend a b) eofb
-            | otherwise = error "mappend to EOF"
+    mappend ca@(Chunk a eofa) cb@(Chunk b eofb)
+        | eofa      = error $ "mappend to EOF: " ++ show ca
+                                           ++ " `mappend` " ++ show cb
+        | null b    = Chunk a eofb -- Just an optimization for below case
+        | otherwise = Chunk (mappend a b) eofb
 
 instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
@@ -728,17 +720,21 @@ copyInput :: (ChunkData t, Monad m) =>
        -> Iter t m (Iter t m a, Chunk t)
 copyInput iter0 = doit id iter0
     where
-      -- It is usually faster to use mappend in a right associative
-      -- way (i.e, mappend a1 (mappend a2 (mappand a3 a4)) will be
-      -- faster than mappend (mappend (mappend a1 a2) a3) a4).  Thus,
-      -- acc is a function of the rest of the input, rather than a
-      -- simple prefix of ithe input.  This is the same technique used
-      -- by 'ShowS' to optimize the use of (++) on srings.
-      doit acc iter@(IterF _)  =
-          iterF $ \c -> doit (acc . mappend c) (feedI iter c)
+      -- Use function to mappend in right associative way, like ShowS
+      doit acc iter@(IterF _)  = iterF $ \c@(Chunk t _) ->
+                                 doit (acc . mappend t) (feedI iter c)
       doit acc (IterM m)       = IterM $ doit acc `liftM` m
       doit acc (IterC carg fr) = IterC carg $ doit acc . fr
-      doit acc iter            = return (iter, acc mempty)
+      doit acc iter            = return $ (,) iter $ chunk $ acc mempty
+{-
+copyInput iter0 = doit id iter0
+    where
+      doit acc iter@(IterF _)  =
+          iterF $ \c -> traceShow c $ doit (acc . mappend c) (feedI iter c)
+      doit acc (IterM m)       = IterM $ doit acc `liftM` m
+      doit acc (IterC carg fr) = IterC carg $ doit acc . fr
+      doit acc iter            = return $ (,) iter $! acc mempty
+-}
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -1142,7 +1138,7 @@ pureI :: (Monad m, ChunkData t) => Iter t m t
 pureI = loop id
     where loop acc = do
             Chunk t eof <- chunkI
-            if eof then return $ acc t else loop $ acc . mappend t
+            if eof then return $! acc t else loop $ acc . mappend t
 
 -- | Returns the next 'Chunk' that either contains non-'null' data or
 -- has the EOF bit set.
@@ -1170,6 +1166,12 @@ ungetI = Done () . chunk
 --
 -- Iter manipulation functions
 --
+
+setEOF :: Iter t m a -> Iter t m a
+setEOF (Done a (Chunk t _))       = Done a (Chunk t True)
+setEOF (IterFail e (Chunk t _))   = IterFail e (Chunk t True)
+setEOF (InumFail e a (Chunk t _)) = InumFail e a (Chunk t True)
+setEOF iter                       = iter
 
 -- | Feeds an 'Iter' by passing it a 'Chunk' of data.  When the 'Iter'
 -- is already 'Done', or in some error condition, simulates the
@@ -1212,55 +1214,38 @@ ungetI = Done () . chunk
 --    b' <- 'inumMC' 'passCtl' $ feedI b c
 -- @
 --
--- Note that @feedI@ asserts the following invariants on the behavior
--- of an 'Iter':
+-- An 'Iter' may not return 'IterF' (asking for more input) in
+-- response to a 'Chunk' with the EOF bit 'True'.  @feedI@ enforces
+-- this by throwing an error if it happens.
 --
---     1. An 'Iter' may not return an 'IterF' (asking for more input)
---        after receiving a 'Chunk' with the EOF bit 'True'.
+-- Note also that when 'feedI' feeds a chunk with the EOF bit 'True'
+-- to an 'Iter', it propagates that bit by also setting it in outputs
+-- of type 'Done'.  Thus, if you write code such as:
 --
---     2. An 'Iter' returning 'Done' must not set the EOF bit if it
---        did not receive the EOF bit.
+-- >     dropchunk = IterF $ \_ -> return () -- discard an input chunk
 --
--- It /is/, however, okay for an 'Iter' to return 'Done' without the
--- EOF bit even if the EOF bit was set on the input chunk, as
--- @feedI@ will adjust the 'Done' response to set the EOF bit.
+-- Then, even though the @'return' ()@ is equivalent to @'Done' ()
+-- ('Chunk' mempty 'False')@, running @feedI dropchunk ('Chunk'
+-- 'mempty' 'True')@ results in:
 --
--- As an example, the following code is valid:
---
--- @
---      feedI (return ()) 'chunkEOF'
--- @
---
--- Even though it is equivalent to:
---
--- @
---      feedI ('Done' () ('Chunk' 'mempty' False)) ('Chunk' 'mempty' True)
--- @
---
--- in which the first argument to @feedI@ appears to be discarding
--- the EOF bit from the input chunk.  @feedI@ will propagate the EOF
--- bit, making the above code equivalent to to @'Done' () 'chunkEOF'@.
---
--- On the other hand, the following code is illegal, as it violates
--- invariant 2 above:
---
--- @
---      feedI ('Done' () 'chunkEOF') $ 'Chunk' \"some data\" False -- Bad
--- @
+-- >     Done () (Chunk mempty True)
 feedI :: (ChunkData t, Monad m) => Iter t m a -> Chunk t -> Iter t m a
-feedI (IterF f) c@(Chunk _ eof) = (if eof then forceEOF else noEOF) $ f c
-    where
-      noEOF (Done _ (Chunk _ True)) = error "feedI: illegal EOF"
-      noEOF iter                    = iter
-      forceEOF (IterF _)            = error "feedI: IterF returned after EOF"
-      forceEOF (Done a (Chunk t _)) = Done a (Chunk t True)
-      forceEOF iter                 = feedI iter chunkEOF
-feedI iter c | null c           = iter
-feedI (IterM m) c               = IterM $ flip feedI c `liftM` m
-feedI (Done a c) c'             = Done a (mappend c c')
-feedI (IterC a fr) c            = IterC a $ flip feedI c . fr
-feedI (IterFail e c) c'         = IterFail e (mappend c c')
-feedI (InumFail e a c) c'       = InumFail e a (mappend c c')
+feedI (IterF f) c@(Chunk _ False)  = f c
+feedI (IterF f) c@(Chunk _ True)   = forceEOF $ f c
+    where forceEOF (IterF _) = error "feedI: IterF returned after EOF"
+          forceEOF iter      = setEOF iter
+feedI iter c | null c              = iter
+feedI (IterM m) c                  = IterM $ flip feedI c `liftM` m
+feedI (IterC a fr) c               = IterC a $ flip feedI c . fr
+-- The next line is important to ensure "feedI iter chunkEOF" is
+-- always safe, even if the iter is in a state like (Done a (Chunk t
+-- True)), where it would be illegal to mappend (Chunk t True)
+-- chunkEOF.
+feedI iter (Chunk t True) | null t = setEOF iter
+feedI (Done a c) c'                = Done a (mappend c c')
+feedI (IterFail e c) c'            = IterFail e (mappend c c')
+feedI (InumFail e a c) c'          = InumFail e a (mappend c c')
+
 
 -- | This function takes a non-active 'Iter' and returns it into
 -- another 'Iter' of the same input type.  Any residual data from the
@@ -1285,9 +1270,10 @@ feedI (InumFail e a c) c'       = InumFail e a (mappend c c')
 -- 'Iter' or another 'Inum'.  See the documentation of these two
 -- functions for more discussion.
 pullupI :: (ChunkData t) => Iter t m1 a -> Iter t m2 (Iter t m3 a)
-pullupI (Done a c)       = Done (Done a mempty) c
-pullupI (IterFail e c)   = Done (IterFail e mempty) c
-pullupI (InumFail e a c) = Done (InumFail e a mempty) c
+pullupI (Done a c@(Chunk _ eof))       = Done (Done a (Chunk mempty eof)) c
+pullupI (IterFail e c@(Chunk _ eof))   = Done (IterFail e (Chunk mempty eof)) c
+pullupI (InumFail e a c@(Chunk _ eof)) =
+    Done (InumFail e a (Chunk mempty eof)) c
 pullupI _                = error "pullupI: Iter still active"
 
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
@@ -1365,7 +1351,7 @@ joinI iter             = finishI iter >>= joinI
 -- | An 'Inum' that will feed pure data to 'Iter's.
 enumPure :: (Monad m, ChunkData tIn, ChunkData tOut) =>
             tOut -> Inum tIn tOut m a
-enumPure t iter = inumMC passCtl $ feedI iter $ chunk t
+enumPure t iter = inumMC passCtl $! feedI iter $! chunk t
 
 -- | An 'Inum' that passes data straight through to an 'Iter' in the
 -- 'IterF' state and returns the 'Iter' as soon as it enters any

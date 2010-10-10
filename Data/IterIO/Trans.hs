@@ -49,7 +49,7 @@ instance (Monad m) => Monad (IterStateT s m) where
     return a = IterStateT $ \s -> return (a, s)
     (IterStateT mf) >>= k = IterStateT $ \s -> do (a, s') <- mf s
                                                   let (IterStateT kf) = k a
-                                                  kf s'
+                                                  kf $! s'
     fail = IterStateT . const . fail
 
 instance MonadTrans (IterStateT s) where

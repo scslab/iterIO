@@ -39,7 +39,6 @@ import Data.IterIO.Parse
 import Data.IterIO.Search
 
 -- import System.IO
-import Debug.Trace
 
 type L = L8.ByteString
 
@@ -496,7 +495,6 @@ any_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 any_hdr req = do
   (field, val) <- hdr_field_val
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
-  traceShow (field, val) $ return ()
   case Map.lookup field request_headers of
     Nothing -> return req'
     Just f  -> do
