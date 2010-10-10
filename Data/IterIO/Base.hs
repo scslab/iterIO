@@ -89,7 +89,7 @@ module Data.IterIO.Base
     , CtlHandler, CtlArg(..), CtlRes(..)
     , noCtl, passCtl, consCtl
     -- * Misc debugging function
-    , traceInput, tidTrace, getIterError
+    , traceInput, traceI
     ) where
 
 import Prelude hiding (null)
@@ -105,6 +105,7 @@ import Data.IORef
 import Data.List (intercalate)
 import Data.Monoid
 import Data.Typeable
+import Data.ByteString.Internal (inlinePerformIO)
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
@@ -167,6 +168,8 @@ instance (ChunkData t) => Monoid (Chunk t) where
         | null b    = Chunk a eofb -- Just an optimization for below case
         | otherwise = Chunk (mappend a b) eofb
 
+-- | A 'Chunk' is 'null' when its data is 'null' and its EOF flag is
+-- 'False'.
 instance (ChunkData t) => ChunkData (Chunk t) where
     null (Chunk t False) = null t
     null (Chunk _ True)  = False
@@ -177,7 +180,7 @@ instance (ChunkData t) => ChunkData (Chunk t) where
 chunk :: t -> Chunk t
 chunk t = Chunk t False
 
--- | An empty chunk with the EOF flag 'True'.
+-- | An chunk with 'mempty' data and the EOF flag 'True'.
 chunkEOF :: (Monoid t) => Chunk t
 chunkEOF = Chunk mempty True
 
@@ -224,15 +227,42 @@ data Iter t m a = IterF !(Chunk t -> Iter t m a)
                 -- ^ The 'Iter' failed.
                 | InumFail !SomeException a (Chunk t)
                 -- ^ An 'Inum' failed; this result includes status of
-                -- the Iteratee.  (In this case, the type @a@ will
-                -- generally be @'Iter' t' m a\'@ for some @t'@ and
-                -- @a'@.)
+                -- the `Inum`'s target 'Iter' at the time of the
+                -- failure.  (The type @a@ will generally be @'Iter'
+                -- t' m a\'@ for some @t'@ and @a'@.)
 
 -- | Builds an 'Iter' in the 'IterF' state.  The difference between
--- this and using 'IterF' directly is that @iterF@ returns immediately
--- upon receiving a 'null' chunk.  If you use 'IterF' and do things
--- like invoke 'liftIO' in a tail-recursive 'Iter', you can easily
--- cause an infinite loop with 'IterF', which @iterF@ prevents.
+-- this and using 'IterF' directly is that @iterF@ keeps requesting
+-- input until it receives a non-'null' chunk.  If you use 'IterF' and
+-- do things like invoke 'liftIO' in a tail-recursive 'Iter', you can
+-- easily cause an infinite loop with 'IterF', which @iterF@ prevents.
+--
+-- As an example of what not to do, consider the following code:
+--
+-- > hangs :: IO ()
+-- > hangs = enumPure () |$ iter
+-- >     where
+-- >       iter = IterF $ \(Chunk _ eof) -> do     -- Bad! IterF should be iterF
+-- >                lift $ return ()
+-- >                if eof then return () else iter
+--
+-- This code loops forever and never returns, because it never
+-- actually reads the end-of-file.  When binding 'Iter's with @m >>=
+-- k@ (where @m = lift $ return ()@ and @k = \\_ -> if eof then return
+-- () else iter@ in this case), only if @m@ is in the 'IterF' state
+-- will more input be read from the enclosing 'Inum'.  @k@ is
+-- initially fed the residual input of @m@, and must return 'IterF'
+-- again to get non-'null' input from the enumerator, which is exactly
+-- what @iterF@ does.
+--
+-- There are some subtle cases where 'IterF' is correct and 'iterF' is
+-- not, but these mostly occur when monadic actions inside the 'Iter'
+-- are required before the enclosing 'Inum' can read data.  (E.g., if
+-- both ends of an @'iterLoop'@ from "Data.IterIO.Extra" are being
+-- processed in the same thread.)  'inumRepeat' (if you look at the
+-- source code) is an example of a function that must use 'IterF'
+-- directly, but it is an exception.  When in doubt, choose @iterF@
+-- over 'IterF'.
 iterF :: (ChunkData t) => (Chunk t -> Iter t m a) -> Iter t m a
 iterF f = IterF $ \c -> if null c then iterF f else f c
 
@@ -520,13 +550,15 @@ infixr 2 .|$
 
 -- | Concatenate the outputs of two enumerators.  For example,
 -- @'enumFile' \"file1\" \`cat\` 'enumFile' \"file2\"@ produces an
--- 'Onum' that outputs the concatenation files \"file1\" and
--- \"file2\".  Unless there is a failure, @cat@ always invokes both
--- 'Inum's, in case the 'Inum' of the second argument has some monadic
+-- 'Onum' that outputs the concatenation of files \"file1\" and
+-- \"file2\".  Unless there is an 'InumFail' failure, @cat@ always
+-- invokes both 'Inum's, as the second 'Inum' may have monadic
 -- side-effects that must be executed even when the 'Iter' has already
 -- finished.  You can wrap 'inumLazy' around an 'Inum' to prevent this
--- behavior and have it just return immediately if the 'Iter' has
--- stopped accepting input.
+-- behavior and just return immediately if the 'Iter' has stopped
+-- accepting input.  Conversely, if you want to continue executing
+-- even in the event of an 'InumFail' condition, you can wrap the
+-- first 'Inum' with 'inumCatch'.
 --
 -- @cat@ is useful in right folds.  Say, for example, that @files@ is
 -- a list of files that you want to concatenate.  You can use a
@@ -720,21 +752,12 @@ copyInput :: (ChunkData t, Monad m) =>
        -> Iter t m (Iter t m a, Chunk t)
 copyInput iter0 = doit id iter0
     where
-      -- Use function to mappend in right associative way, like ShowS
+      -- Use function to mappend in a right-associative way, like ShowS
       doit acc iter@(IterF _)  = iterF $ \c@(Chunk t _) ->
                                  doit (acc . mappend t) (feedI iter c)
       doit acc (IterM m)       = IterM $ doit acc `liftM` m
       doit acc (IterC carg fr) = IterC carg $ doit acc . fr
-      doit acc iter            = return $ (,) iter $ chunk $ acc mempty
-{-
-copyInput iter0 = doit id iter0
-    where
-      doit acc iter@(IterF _)  =
-          iterF $ \c -> traceShow c $ doit (acc . mappend c) (feedI iter c)
-      doit acc (IterM m)       = IterM $ doit acc `liftM` m
-      doit acc (IterC carg fr) = IterC carg $ doit acc . fr
-      doit acc iter            = return $ (,) iter $! acc mempty
--}
+      doit acc iter            = return $ (iter, chunk $ acc mempty)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -854,12 +877,12 @@ handlerBI = flip catchBI
 -- scope of the argument to 'inumCatch' will be caught.  For example:
 --
 -- > inumBad :: (ChunkData t, Monad m) => Inum t t m a
--- > inumBad = mkInum' $ fail "inumBad"
+-- > inumBad = mkInum $ fail "inumBad"
 -- > 
--- > skipError :: (ChunkData tOut, MonadIO m) =>
+-- > skipError :: (ChunkData tIn, MonadIO m) =>
 -- >              SomeException
--- >           -> Iter tOut m (Iter tIn m a)
--- >           -> Iter tOut m (Iter tIn m a)
+-- >           -> Iter tIn m (Iter tOut m a)
+-- >           -> Iter tIn m (Iter tOut m a)
 -- > skipError e iter = do
 -- >   liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
 -- >   resumeI iter
@@ -876,7 +899,7 @@ handlerBI = flip catchBI
 -- > 
 -- > -- Again no exception, because inumCatch is wrapped around inumBad.
 -- > test3 :: IO ()
--- > test3 = enumPure "test" |. (inumCatch inumBad skipError) |$ nullI
+-- > test3 = enumPure "test" |. inumCatch inumBad skipError |$ nullI
 --
 -- Note that @\`inumCatch\`@ has the default infix precedence (@infixl
 -- 9 \`inumcatch\`@), which binds more tightly than any concatenation
@@ -1055,10 +1078,12 @@ combineExpected (IterNoParse e) iter =
 -- @
 --
 -- This last definition of @total@ may leave the input in some
--- partially consumed state (including input beyond the parse error
--- that just happened to be in the chunk that caused the parse error).
--- But this is fine so long as @total@ is the last Iteratee executed
--- on the input stream.
+-- partially consumed state.  This is fine so long as @total@ is the
+-- last 'Iter' executed on the input stream.  Otherwise, before
+-- throwing the parse error, @parseAndSumIntegerList@ would need to
+-- ensure the input is at some reasonable boundary point for whatever
+-- comes next.  (The 'ungetI' funciton is sometimes helpful for this
+-- purpose.)
 multiParse :: (ChunkData t, Monad m) =>
               Iter t m a -> Iter t m a -> Iter t m a
 multiParse a@(IterF _) b
@@ -1145,13 +1170,14 @@ pureI = loop id
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 chunkI = iterF return
 
--- | Runs an 'Iter' without consuming any input if the 'Iter'
--- succeeds.  (See 'tryBI' if you want to avoid consuming input when
--- the 'Iter' fails.)
+-- | Runs an 'Iter' without consuming any input.  (See 'tryBI' if you
+-- want to avoid consuming input just when the 'Iter' fails.)
 peekI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a
 peekI iter0 = copyInput iter0 >>= check
-    where check (Done a _, c) = Done a c
-          check (iter, _)     = iter
+    where check (Done a _, c)       = Done a c
+          check (IterFail e _, c)   = IterFail e c
+          check (InumFail e a _, c) = InumFail e a c
+          check _                   = error "peekI"
 
 -- | Does not actually consume any input, but returns 'True' if there
 -- is no more input data to be had.
@@ -1186,7 +1212,8 @@ setEOF iter                       = iter
 -- >               Iter t m a -> Iter t m b -> Iter t m (a, b)
 -- > iterTeeBad a b = do
 -- >   c@(Chunk t eof) <- chunkI
--- >   let (a', b') = (feedI a c, feedI b c)  -- Bad idea
+-- >   let a' = feedI a c                     -- Bad idea
+-- >       b' = feedI b c                     -- Bad idea
 -- >   if eof then liftM2 (,) (runI a') (runI b') else iterTeeBad a' b'
 --
 -- (The purpose of the 'runI' calls is to ensure that any residual
@@ -1207,7 +1234,7 @@ setEOF iter                       = iter
 --    b' <- 'enumPure' t b
 -- @
 --
--- or:
+-- or (as suggested in the documentation for 'inumMC'):
 --
 -- @
 --    a' <- 'inumMC' 'passCtl' $ feedI a c
@@ -1218,9 +1245,10 @@ setEOF iter                       = iter
 -- response to a 'Chunk' with the EOF bit 'True'.  @feedI@ enforces
 -- this by throwing an error if it happens.
 --
--- Note also that when 'feedI' feeds a chunk with the EOF bit 'True'
--- to an 'Iter', it propagates that bit by also setting it in outputs
--- of type 'Done'.  Thus, if you write code such as:
+-- When 'feedI' feeds a chunk with the EOF bit 'True' to an 'Iter', it
+-- propagates that bit by also setting it in outputs of type 'Done',
+-- 'IterFail', and 'InumFail' (which all carry residual input).  Thus,
+-- if you write code such as:
 --
 -- >     dropchunk = IterF $ \_ -> return () -- discard an input chunk
 --
@@ -1401,8 +1429,8 @@ inumC _ iter = return iter
 -- returns a result, or experiences an error.  The first argument
 -- specifies what to do with 'IterC' requests, and can be 'noCtl' to
 -- reject requests, 'passCtl' to pass them up to the @'Iter' tIn m@
--- monad, or a custom 'CtlHandler' function for the @'Iter' tIn m@
--- monad.
+-- monad, or a custom handler function of type @'CtlHandler' ('Iter'
+-- tIn m)@.
 --
 -- @inumMC@ is useful for partially executing an 'Iter' up to the
 -- point where it requires more input.  For example, to duplicate the
@@ -1581,11 +1609,13 @@ infixr 9 `consCtl`
 --
 
 -- | For debugging, print a tag along with the current residual input.
+-- Not referentially transparent.
 traceInput :: (ChunkData t, Monad m) => String -> Iter t m ()
 traceInput tag = IterF $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
 
--- | For debugging.  Print the current thread ID and a message.
-tidTrace :: (MonadIO m) => String -> m ()
-tidTrace msg = liftIO $ do
-                 tid <- myThreadId
-                 putTraceMsg $ show tid ++ ": " ++ msg
+-- | For debugging.  Print the current thread ID and a message.  Not
+-- referentially transparent.
+traceI :: (ChunkData t, Monad m) => String -> Iter t m ()
+traceI msg = return $ inlinePerformIO $ do
+               tid <- myThreadId
+               putTraceMsg $ show tid ++ ": " ++ msg

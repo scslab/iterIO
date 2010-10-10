@@ -36,11 +36,18 @@ eoftst4 :: IO ()
 eoftst4 = enumPure () |$ multiParse dataI (IterF $ \(Chunk t _) -> return t)
 
 fmtest :: IO ()
-fmtest = run $ feedI testiter (chunk ())
+fmtest = enumPure () |$ testiter
     where
       testiter = iterF iterf -- iterF prevents infinite loop IterF wouldn't
       iterf (Chunk _ eof) = iterm >> if eof then return () else testiter
       iterm = IterM (return $ return ())
+
+hangtest :: IO ()
+hangtest = enumPure () |$ iter
+    where
+      iter = iterF $ \(Chunk _ eof) -> do
+               lift $ return ()
+               if eof then return () else iter
 
 main :: IO ()
 main = do
