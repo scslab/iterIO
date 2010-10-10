@@ -757,7 +757,7 @@ copyInput iter0 = doit id iter0
                                  doit (acc . mappend t) (feedI iter c)
       doit acc (IterM m)       = IterM $ doit acc `liftM` m
       doit acc (IterC carg fr) = IterC carg $ doit acc . fr
-      doit acc iter            = return $ (iter, chunk $ acc mempty)
+      doit acc iter            = return (setEOF iter False, chunk $ acc mempty)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -1110,7 +1110,8 @@ multiParse a b
     -- enumerator (as opposed to getting the residual input of the
     -- last iteratee to execute) is to return an IterF from an IterF,
     -- so that the m in an (m >>= k) statement is of type IterF.
-    | otherwise      = a `catchI` \err _ -> IterF $ \_ -> combineExpected err b
+    | otherwise      = setEOF a False `catchI` \err _ ->
+                       IterF $ \_ -> combineExpected err $ setEOF b False
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
 -- all input consumed using 'tryBI'.  (This means @iter@ must not
@@ -1193,11 +1194,17 @@ ungetI = Done () . chunk
 -- Iter manipulation functions
 --
 
-setEOF :: Iter t m a -> Iter t m a
-setEOF (Done a (Chunk t _))       = Done a (Chunk t True)
-setEOF (IterFail e (Chunk t _))   = IterFail e (Chunk t True)
-setEOF (InumFail e a (Chunk t _)) = InumFail e a (Chunk t True)
-setEOF iter                       = iter
+setEOF :: Iter t m a -> Bool -> Iter t m a
+setEOF (Done a (Chunk t _)) eof       = Done a (Chunk t eof)
+setEOF (IterFail e (Chunk t _)) eof   = IterFail e (Chunk t eof)
+setEOF (InumFail e a (Chunk t _)) eof = InumFail e a (Chunk t eof)
+setEOF iter _                         = iter
+
+getEOF :: Iter t m a -> Bool
+getEOF (Done _ (Chunk _ eof))       = eof
+getEOF (IterFail _ (Chunk _ eof))   = eof
+getEOF (InumFail _ _ (Chunk _ eof)) = eof
+getEOF _                            = False
 
 -- | Feeds an 'Iter' by passing it a 'Chunk' of data.  When the 'Iter'
 -- is already 'Done', or in some error condition, simulates the
@@ -1246,7 +1253,7 @@ setEOF iter                       = iter
 -- this by throwing an error if it happens.
 --
 -- When 'feedI' feeds a chunk with the EOF bit 'True' to an 'Iter', it
--- propagates that bit by also setting it in outputs of type 'Done',
+-- propagates that bit by also setting EOF in outputs of type 'Done',
 -- 'IterFail', and 'InumFail' (which all carry residual input).  Thus,
 -- if you write code such as:
 --
@@ -1257,22 +1264,24 @@ setEOF iter                       = iter
 -- 'mempty' 'True')@ results in:
 --
 -- >     Done () (Chunk mempty True)
+--
+-- @feedI@ does not set the EOF bit if there have been intervening
+-- 'IterM' or 'IterC' calls, as these might remove the end-of-file
+-- condition.  (This is okay since 'run' and 'runI' repeatedly feed
+-- EOF to their target 'Iter's.)
 feedI :: (ChunkData t, Monad m) => Iter t m a -> Chunk t -> Iter t m a
-feedI (IterF f) c@(Chunk _ False)  = f c
-feedI (IterF f) c@(Chunk _ True)   = forceEOF $ f c
+feedI (IterF f) c@(Chunk _ False) = f c
+feedI (IterF f) c@(Chunk _ True)  = forceEOF $ f c
     where forceEOF (IterF _) = error "feedI: IterF returned after EOF"
-          forceEOF iter      = setEOF iter
-feedI iter c | null c              = iter
-feedI (IterM m) c                  = IterM $ flip feedI c `liftM` m
-feedI (IterC a fr) c               = IterC a $ flip feedI c . fr
--- The next line is important to ensure "feedI iter chunkEOF" is
--- always safe, even if the iter is in a state like (Done a (Chunk t
--- True)), where it would be illegal to mappend (Chunk t True)
--- chunkEOF.
-feedI iter (Chunk t True) | null t = setEOF iter
-feedI (Done a c) c'                = Done a (mappend c c')
-feedI (IterFail e c) c'            = IterFail e (mappend c c')
-feedI (InumFail e a c) c'          = InumFail e a (mappend c c')
+          forceEOF iter      = setEOF iter True
+feedI iter c | null c             = iter
+feedI (IterM m) c                 = IterM $ flip feedI c `liftM` m
+feedI (IterC a fr) c              = IterC a $ flip feedI c . fr
+feedI iter c | getEOF iter        = error $ "feedI after EOF: "
+                                    ++ show iter ++ " `feedI` " ++ show c
+feedI (Done a c) c'               = Done a (mappend c c')
+feedI (IterFail e c) c'           = IterFail e (mappend c c')
+feedI (InumFail e a c) c'         = InumFail e a (mappend c c')
 
 
 -- | This function takes a non-active 'Iter' and returns it into
