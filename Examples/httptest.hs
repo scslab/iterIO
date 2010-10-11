@@ -4,12 +4,13 @@ module Main where
 -- import Control.Monad.Trans
 import Control.Concurrent
 import Control.Exception (finally)
--- import Control.Monad.Trans
+import Control.Monad
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Network.Socket as Net
 import qualified OpenSSL as SSL
 import qualified OpenSSL.Session as SSL
 import System.IO
+import System.Posix.Files
 -- import Text.XHtml.Strict
 
 import Data.IterIO
@@ -48,10 +49,15 @@ accept_loop ctx sem sock = do
 -- _ <- forkIO $ handle_connection (enumHandle h) (handleI h) `finally` hClose h
   accept_loop ctx sem sock
 
+privkey :: FilePath
+privkey = "testkey.pem"
+
 main :: IO ()
 main = Net.withSocketsDo $ SSL.withOpenSSL $ do
          sock <- myListen port
          sem <- newQSem 0
+         exists <- fileExist privkey
+         unless exists $ genSelfSigned "testkey.pem" "localhost"
          ctx <- simpleContext "testkey.pem"
          accept_loop ctx sem sock
          waitQSem sem
