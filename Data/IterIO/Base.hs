@@ -88,7 +88,7 @@ module Data.IterIO.Base
     , ctlI, safeCtlI
     , CtlHandler, CtlArg(..), CtlRes(..)
     , noCtl, passCtl, consCtl
-    -- * Misc debugging function
+    -- * Misc debugging functions
     , traceInput, traceI
     ) where
 
@@ -486,7 +486,8 @@ runI (InumFail e i _) = InumFail e i mempty
 runI iter             = inumMC noCtl iter >>= runI
 
 -- | Run an 'Onum' on an 'Iter'.  This is the main way of actually
--- executing IO with 'Iter's.  @|$@ is equivalent to:
+-- executing IO with 'Iter's.  @|$@ is equivalent to a type-restricted
+-- version of the following code, in which @inum@ must be an 'Onum':
 --
 -- @
 --  inum |$ iter = 'run' (inum .| iter)
@@ -592,11 +593,11 @@ infixr 3 `cat`
 -- | Fuse two 'Inum's when the output type of the first 'Inum' is the
 -- same as the input type of the second.  More specifically, if
 -- @inum1@ transcodes type @tIn@ to @tOut@ and @inum2@ transcodes
--- @tOut@ to @tOut'@, then @inum1 |. inum2@ produces a new 'Inum' that
--- transcodes from @tIn@ to @tOut'@.
+-- @tOut@ to @tOut2@, then @inum1 |. inum2@ produces a new 'Inum' that
+-- transcodes from @tIn@ to @tOut2@.
 --
 -- Note that while ordinarily type @b@ in this signature will be equal
--- to @'Inum' tOut tOut' m a@, strictly speaking, the second argument
+-- to @'Inum' tOut tOut2 m a@, strictly speaking, the second argument
 -- (@inum2@ above) does not actually need to be an 'Inum'; it might,
 -- for instance, translate between monads as well as transcoding
 -- types.
@@ -608,9 +609,13 @@ infixr 3 `cat`
         Inum tIn tOut m b
      -- ^ 'Inum' translating from @tIn@ to @tOut@.
      -> (b -> Iter tOut m b)
-     -- ^ 'Inum' translating from @tOut@ to something else.
-     -> b -> Iter tIn m b
-     -- ^ Returns an 'Inum' translating from @tIn@ to something else.
+     -- ^ 'Inum' translating from @tOut@ to something else.  Typically
+     -- @b@ is @'Iter' tOut2 m a@, making the overall type of this
+     -- argument equivalent to @'Inum' tOut tOut2 m a@.
+     -> (b -> Iter tIn m b)
+     -- ^ Returns a function of type @b -> 'Iter' tIn m b@, which,
+     -- when @b@ is @'Iter' tOut2 m a@, is equivalent to an @'Inum'
+     -- tIn tOut2 m a@.
 (|.) outer inner iter = joinI $ outer $ inner iter
 infixl 4 |.
 
@@ -1555,14 +1560,14 @@ data CtlBad = CtlBad deriving (Typeable)
 -- 'CtlRes' types directly.
 data CtlArg = forall carg cres. (CtlCmd carg cres) => CtlArg !carg
 
--- | Use to wrap the result of a 'CtlHandler'.  Without Rank2Types,
+-- | Used to wrap the result of a 'CtlHandler'.  Without Rank2Types,
 -- the CtlHandler result has to be dynamic like this.  It is best to
 -- use 'consCtl' instead of employing the 'CtlArg' and 'CtlRes' types
 -- directly.
 data CtlRes = forall cres. (Typeable cres) => CtlRes cres
 
--- | Generally the type parameter @m@ has to be @'Iter' t m@.  Thus, a
--- control handler maps control requests to 'Iter' actions that
+-- | Generally the type parameter @m@ has to be @'Iter' t m'@.  Thus,
+-- a control handler maps control requests to 'Iter' actions that
 -- produce a corresponding result.  See a use example at 'consCtl'.
 type CtlHandler m = CtlArg -> m CtlRes
 
@@ -1573,7 +1578,7 @@ type CtlHandler m = CtlArg -> m CtlRes
 -- One use of this is for 'Inum's that change the data in such a way
 -- that control requests would not make sense to outer enumerators.
 -- Suppose @inumGunzip@ is a codec that uncompresses a file in gzip
--- format.  It should probably be call @'setCtlHandler' noCtl@ before
+-- format.  It should probably call @'setCtlHandler' noCtl@ before
 -- producing any output.  Otherwise, problems would likely ensue in
 -- the event of any seek requests, as whatever enumerator surrounds
 -- @inumGunzip@ might seek around in the file, confusing the
@@ -1584,7 +1589,7 @@ noCtl _ = return $ CtlRes CtlBad
 -- | A control request hander that simply passes control requests
 -- straight through from the @'Iter' tOut m@ monad to the enclosing
 -- @'Iter' tIn m@ monad.
-passCtl :: (ChunkData t, Monad m) => CtlHandler (Iter t m)
+passCtl :: (ChunkData tIn, Monad m) => CtlHandler (Iter tIn m)
 passCtl (CtlArg carg) = safeCtlI carg >>= return . maybe (CtlRes CtlBad) CtlRes
 
 -- | Construct a 'CtlHandler', from a function of a particular
