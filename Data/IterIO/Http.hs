@@ -1,7 +1,7 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
 module Data.IterIO.Http (HttpReq(..)
-                        , httpreqI
+                        , httpreqI, inumHttpbody
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
                         , http_fmt_time, dateI
@@ -37,6 +37,7 @@ import Text.Printf
 import Data.IterIO
 import Data.IterIO.Parse
 import Data.IterIO.Search
+import Data.IterIO.Zlib
 
 -- import System.IO
 
@@ -401,6 +402,7 @@ data HttpReq = HttpReq {
     , reqCookies :: ![(S, S)]   -- ^ Cookies
     , reqContentType :: !(Maybe (S, [(S,S)])) -- ^ Content-Type + parms
     , reqContentLength :: !(Maybe Int)        -- ^ Content-Length header
+    , reqTransferEncoding :: ![S]
     } deriving (Show)
 
 defaultHttpReq :: HttpReq
@@ -417,6 +419,7 @@ defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqCookies = []
                          , reqContentType = Nothing
                          , reqContentLength = Nothing
+                         , reqTransferEncoding = []
                          }
 
 hTTPvers :: (Monad m) => Iter L m (Int, Int)
@@ -457,6 +460,7 @@ request_headers = Map.fromList $
     , ("Cookie", cookie_hdr)
     , ("Content-Type", content_type_hdr)
     , ("Content-Length", content_length_hdr)
+    , ("Transfer-Encoding", transfer_encoding_hdr)
     ]
 
 host_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
@@ -482,6 +486,17 @@ content_length_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 content_length_hdr req = do
   len <- olws >> (while1I (isDigit . w2c) >>= readI) <* olws
   return req { reqContentLength = Just len }
+
+transfer_encoding_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+transfer_encoding_hdr req = do
+  tclist <- many tc
+  return req { reqTransferEncoding = tclist }
+  where
+    tc = do
+      olws
+      coding <- S8.map toLower <$> token
+      skipMany $ olws >> char ';' >> parameter
+      return coding
 
 hdr_field_val :: (Monad m) => Iter L m (S, S)
 hdr_field_val = do
@@ -516,8 +531,6 @@ httpreqI = do
     where
       next_hdr req = seq req $ any_hdr req \/ return req $ next_hdr
 
--- foo :: IO HttpReq
--- foo = enumFile "/u/dm/hack/iterIO/x" |$ httpreqI
 
 --
 -- Chunk encoding and decoding (RFC 2616)
@@ -550,6 +563,28 @@ inumFromChunks = mkInumM $ getchunk
                     else do
                       skipMany (noctl >> crlf)
                       skipI crlf
+
+inumHttpbody :: (MonadIO m) => HttpReq -> Inum L L m a
+inumHttpbody req =
+    case reqTransferEncoding req of
+      []                              -> notc
+      [tc] | tc == S8.pack "identity" -> notc
+      [tc]                            -> tclookup tc
+      tclist                          -> tcfold tclist
+    where
+      tclookup :: (MonadIO m) => S -> Inum L L m a
+      tclookup tc
+          | tc == S8.pack "identity" = inumNop
+          | tc == S8.pack "chunked"  = inumFromChunks
+          | tc == S8.pack "gzip"     = inumGunzip
+          | otherwise = mkInum $ fail "unknown Transfer-Coding " $ chunkShow tc
+      tcfold [a, b] = tclookup a |. tclookup b
+      tcfold (h:t)  = tclookup h |. tcfold t
+      tcfold _      = error "inumHttpbody"
+      notc = maybe nocl inumTakeExact $ reqContentLength req
+      nocl = case lookup (S8.pack "connection") $ reqHeaders req of
+               Just c | c == S8.pack "close" -> inumNop
+               _                             -> return -- assume no body
 
 --
 -- application/x-www-form-urlencoded decoding
