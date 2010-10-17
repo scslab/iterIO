@@ -1,6 +1,8 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
-module Data.IterIO.Http (HttpReq(..)
+module Data.IterIO.Http (-- * HTTP Request support
+                         HttpReq(..)
                         , httpreqI, inumHttpbody
                         , inumToChunks, inumFromChunks
                         , comment, qvalue
@@ -8,6 +10,11 @@ module Data.IterIO.Http (HttpReq(..)
                         , urlencodedFormI
                         , Multipart(..), multipartI, inumMultipart
                         , foldForm, foldUrlencoded, foldMultipart, foldQuery
+                        -- * HTTP Response support
+                        , HttpStatus(..), HttpResp(..)
+                        , stat100, stat200, stat301
+                        , stat400, stat404, stat500
+                        , enumHttpResp
                         -- * For debugging
                         , postReq, encReq, mptest, mptest'
                         , formTestMultipart, formTestUrlencoded
@@ -30,6 +37,7 @@ import Data.Char
 import Data.Int
 import Data.List
 import Data.Time
+import Data.Typeable
 import Data.Word
 import System.Locale
 import Text.Printf
@@ -403,7 +411,7 @@ data HttpReq = HttpReq {
     , reqContentType :: !(Maybe (S, [(S,S)])) -- ^ Content-Type + parms
     , reqContentLength :: !(Maybe Int)        -- ^ Content-Length header
     , reqTransferEncoding :: ![S]
-    } deriving (Show)
+    } deriving (Typeable, Show)
 
 defaultHttpReq :: HttpReq
 defaultHttpReq = HttpReq { reqMethod = S.empty
@@ -665,9 +673,6 @@ foldQuery :: (Monad m) =>
              HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
 foldQuery req f z = enumPure (L.fromChunks [reqQuery req]) .| foldControls f z
 
-encReq :: L
-encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
-
 --
 -- multipart/form-data decoding, as specified throughout the following:
 --
@@ -756,6 +761,89 @@ foldMultipart req f z = multipartI req >>= doPart
           inumMultipart req .| (f z mp <* nullI) `inumBind` \a ->
           foldMultipart req f a
 
+
+--
+-- Fold either type of form
+--
+
+foldForm :: (Monad m) =>
+            HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+foldForm req = case reqContentType req of
+                 Nothing -> foldQuery req
+                 Just (mt, _) | mt == urlencoded -> foldUrlencoded req
+                 Just (mt, _) | mt == multipart  -> foldMultipart req
+                 _ -> \_ _ -> throwI $ IterMiscParseErr $
+                      "foldForm: invalid Content-Type"
+
+--
+-- HTTP Response support
+--
+
+data HttpStatus = HttpStatus !Int !S
+
+mkStat :: Int -> String -> HttpStatus
+mkStat n s = HttpStatus n $ S8.pack s
+
+fmtStat :: HttpStatus -> L
+fmtStat (HttpStatus n s) = L.fromChunks [
+                            S8.pack $ "HTTP/1.1 " ++ show n ++ " "
+                           , s, S8.pack "\r\n"]
+
+stat100, stat200, stat301, stat400, stat404, stat500 :: HttpStatus
+stat100 = mkStat 100 "Continue"
+stat200 = mkStat 200 "OK"
+stat301 = mkStat 301 "Moved Permanently"
+stat400 = mkStat 400 "Bad Request"
+stat404 = mkStat 404 "Not Found"
+stat500 = mkStat 500 "Internal Server Error"
+
+data HttpResp = HttpResp {
+      respStatus :: !HttpStatus
+    , respHeaders :: ![(S, S)]
+    }
+
+enumHttpResp :: (Monad m) =>
+                HttpResp -> Onum L m (Iter L m a) -> Onum L m a
+enumHttpResp resp body = enumPure fmtresp `cat` (body |. inumToChunks)
+    where fmtresp :: L
+          fmtresp = L.append (fmtStat $ respStatus resp) hdrs
+          hdrs = foldr (L.append . hdr) L.empty (respHeaders resp)
+          hdr (f, v) = L.fromChunks [f, S8.pack ": ", v, S8.pack "\r\n"]
+
+--
+-- Everything below here is crap for testing
+--
+
+formTest :: L -> IO ()
+formTest b = enumPure b |$ handleReq
+ where
+  handleReq = do
+    req <- httpreqI
+    parts <- foldForm req getPart []
+    liftIO $ putStrLn $ "### Summary\n" ++ show parts
+  getPart result mp = do
+    liftIO $ do putStrLn $ "### Part " ++ show (length result); print mp; putStrLn ""
+    stdoutI
+    liftIO $ putStr "\n\n"
+    return (mp:result)
+
+formTestMultipart :: IO ()
+formTestMultipart = formTest postReq
+
+formTestUrlencoded :: IO ()
+formTestUrlencoded = formTest postReqUrlencoded
+
+{-
+dumpCtl :: () -> Multipart -> Iter L IO ()
+dumpCtl () mp = do
+  liftIO $ S.putStr (mpName mp) >> putStrLn ":"
+  stdoutI
+  liftIO $ putStrLn "\n"
+
+x :: L
+x = L8.pack "p1=v1&p2=v2"
+-}
+
 mptest :: IO ()
 mptest = enumPure postReq |$ (httpreqI >>= getHead)
     where
@@ -840,45 +928,6 @@ postReqUrlencoded = L8.pack
  \p1=v1&p2=v2"
 
 
---
--- Fold either type of form
---
+encReq :: L
+encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
 
-foldForm :: (Monad m) =>
-            HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
-foldForm req = case reqContentType req of
-                 Nothing -> foldQuery req
-                 Just (mt, _) | mt == urlencoded -> foldUrlencoded req
-                 Just (mt, _) | mt == multipart  -> foldMultipart req
-                 _ -> \_ _ -> throwI $ IterMiscParseErr $
-                      "foldForm: invalid Content-Type"
-
-formTest :: L -> IO ()
-formTest b = enumPure b |$ handleReq
- where
-  handleReq = do
-    req <- httpreqI
-    parts <- foldForm req getPart []
-    liftIO $ putStrLn $ "### Summary\n" ++ show parts
-  getPart result mp = do
-    liftIO $ do putStrLn $ "### Part " ++ show (length result); print mp; putStrLn ""
-    stdoutI
-    liftIO $ putStr "\n\n"
-    return (mp:result)
-
-formTestMultipart :: IO ()
-formTestMultipart = formTest postReq
-
-formTestUrlencoded :: IO ()
-formTestUrlencoded = formTest postReqUrlencoded
-
-{-
-dumpCtl :: () -> Multipart -> Iter L IO ()
-dumpCtl () mp = do
-  liftIO $ S.putStr (mpName mp) >> putStrLn ":"
-  stdoutI
-  liftIO $ putStrLn "\n"
-
-x :: L
-x = L8.pack "p1=v1&p2=v2"
--}
