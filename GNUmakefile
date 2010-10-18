@@ -16,7 +16,7 @@ always:
 	@:
 
 Examples/%: always $(HSCS)
-	$(GHC) --make -i$(dir $@) $(WALL) $@.hs $(LIBS)
+	$(GHC) --make -i$(dir $@) $@.hs $(LIBS)
 
 %.hs: %.hsc
 	hsc2hs $<

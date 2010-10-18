@@ -11,7 +11,7 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , Multipart(..), multipartI, inumMultipart
                         , foldForm, foldUrlencoded, foldMultipart, foldQuery
                         -- * HTTP Response support
-                        , HttpStatus(..), HttpResp(..)
+                        , HttpStatus(..), HttpResp(..), defaultHttpResp
                         , stat100, stat200, stat301
                         , stat400, stat404, stat500
                         , enumHttpResp
@@ -779,7 +779,7 @@ foldForm req = case reqContentType req of
 -- HTTP Response support
 --
 
-data HttpStatus = HttpStatus !Int !S
+data HttpStatus = HttpStatus !Int !S deriving Show
 
 mkStat :: Int -> String -> HttpStatus
 mkStat n s = HttpStatus n $ S8.pack s
@@ -797,18 +797,31 @@ stat400 = mkStat 400 "Bad Request"
 stat404 = mkStat 404 "Not Found"
 stat500 = mkStat 500 "Internal Server Error"
 
-data HttpResp = HttpResp {
+data HttpResp m = HttpResp {
       respStatus :: !HttpStatus
-    , respHeaders :: ![(S, S)]
+    , respHeaders :: ![S]
+    , respBody :: !(Onum L m (Iter L m ()))
     }
 
+instance Show (HttpResp m) where
+    showsPrec _ resp rest = "HttpResp (" ++ show (respStatus resp)
+                            ++ ") " ++ show (respHeaders resp) ++ rest
+
+defaultHttpResp :: (ChunkData t, Monad m) => Iter t m (HttpResp m)
+defaultHttpResp = return $ HttpResp { respStatus = stat200
+                                    , respHeaders = []
+                                    , respBody = return
+                                    }
+
 enumHttpResp :: (Monad m) =>
-                HttpResp -> Onum L m (Iter L m a) -> Onum L m a
-enumHttpResp resp body = enumPure fmtresp `cat` (body |. inumToChunks)
+                HttpResp m -> Onum L m ()
+enumHttpResp resp = enumPure fmtresp `cat` (respBody resp |. inumToChunks)
     where fmtresp :: L
           fmtresp = L.append (fmtStat $ respStatus resp) hdrs
-          hdrs = foldr (L.append . hdr) L.empty (respHeaders resp)
-          hdr (f, v) = L.fromChunks [f, S8.pack ": ", v, S8.pack "\r\n"]
+          hdrs = foldr (L.append . hdr)
+                 (L8.pack "Transfer-Encoding: chunked\r\n\r\n")
+                 (respHeaders resp)
+          hdr h = L.fromChunks [h, S8.pack "\r\n"]
 
 --
 -- Everything below here is crap for testing
