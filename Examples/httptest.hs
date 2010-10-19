@@ -61,8 +61,10 @@ handle_connection enum iter0 = enum |$ reqloop iter0
         unless eof $ doreq iter
       doreq iter = do
         req <- httpreqI
+        liftIO $ print req
         resp <- handlerI bail $
                 inumHttpbody req .| (process_request req <* nullI)
+        liftIO $ print resp
         runI (enumHttpResp resp iter) >>= reqloop
       bail e@(SomeException _) _ = do
         liftIO $ putStrLn "I'm bailing"
@@ -86,10 +88,7 @@ accept_loop ctx sem sock = do
               hSetBuffering h NoBuffering
               return (handleI h,
                       \i -> enumHandle h i `finallyI` liftIO (hClose h))
-  liftIO $ putStrLn "got this far"
-  -- _ <- forkIO $
-  handle_connection (enum |. inumLog "request.log" False)
-                    (inumLog "response.log" False .| iter)
+  _ <- forkIO $ handle_connection (enum |. inumLog "request.log" False) iter
   accept_loop ctx sem sock
 
 privkey :: FilePath
