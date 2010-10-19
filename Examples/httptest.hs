@@ -58,15 +58,12 @@ handle_connection enum iter0 = enum |$ reqloop iter0
     where
       reqloop iter = do
         eof <- atEOFI
-        unless eof $ do
-          req <- httpreqI
-          iter' <- handlerI (bail iter) $ do
-            resp <- inumHttpbody req .| (process_request req <* nullI)
-            runI $ enumHttpResp resp $ iter
-          reqloop iter'
-      bail :: Iter L IO () -> SomeException
-           -> Iter L IO (Iter L IO ())
-           -> Iter L IO (Iter L IO ())
+        unless eof $ doreq iter
+      doreq iter = do
+        req <- httpreqI
+        resp <- handlerI (bail iter) $
+                inumHttpbody req .| (process_request req <* nullI)
+        runI (enumHttpResp resp iter) >>= reqloop
       bail iter e@(SomeException _) _ = do
         liftIO $ putStrLn "I'm bailing"
         resp0 <- defaultHttpResp
@@ -77,7 +74,7 @@ handle_connection enum iter0 = enum |$ reqloop iter0
                    }
         liftIO $ print resp
         _ <- runI $ enumHttpResp resp stdoutI
-        runI $ enumHttpResp resp iter
+        return resp
 
 accept_loop :: SSL.SSLContext -> QSem -> Net.Socket -> IO ()
 accept_loop ctx sem sock = do
