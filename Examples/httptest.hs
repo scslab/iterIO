@@ -61,10 +61,10 @@ handle_connection enum iter0 = enum |$ reqloop iter0
         unless eof $ doreq iter
       doreq iter = do
         req <- httpreqI
-        resp <- handlerI (bail iter) $
+        resp <- handlerI bail $
                 inumHttpbody req .| (process_request req <* nullI)
         runI (enumHttpResp resp iter) >>= reqloop
-      bail iter e@(SomeException _) _ = do
+      bail e@(SomeException _) _ = do
         liftIO $ putStrLn "I'm bailing"
         resp0 <- defaultHttpResp
         let resp = resp0 {
