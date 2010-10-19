@@ -64,7 +64,8 @@ simpleContext keyfile = do
   SSL.contextSetDefaultCiphers ctx
   SSL.contextSetCertificateFile ctx keyfile
   SSL.contextSetPrivateKeyFile ctx keyfile
-  SSL.contextSetVerificationMode ctx $ SSL.VerifyPeer False True
+  -- SSL.contextSetVerificationMode ctx $ SSL.VerifyPeer False True
+  SSL.contextSetVerificationMode ctx SSL.VerifyNone
   return ctx
 
 -- | Quick and dirty funciton to generate a self signed certificate

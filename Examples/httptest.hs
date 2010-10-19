@@ -28,10 +28,10 @@ import Data.IterIO.SSL
 type L = L.ByteString
 
 secure :: Bool
-secure = False
+secure = True
 
 port :: Net.PortNumber
-port = if secure then 4443 else 8000
+port = if secure then 4433 else 8000
 
 myListen :: Net.PortNumber -> IO Net.Socket
 myListen pn = do
