@@ -332,11 +332,10 @@ inumLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            FilePath             -- ^ Path to log to
         -> Bool                 -- ^ True to truncate file
         -> Inum t t m a
-inumLog path trunc = mkInumM $ do
+inumLog path trunc iter = do
   h <- liftIO $ openBinaryFile path (if trunc then WriteMode else AppendMode)
   liftIO $ hSetBuffering h NoBuffering
-  addCleanup (liftIO $ hClose h)
-  ipipe $ inumhLog h
+  inumhLog h iter `finallyI` liftIO (hClose h)
 
 -- | Like 'inumLog', but takes a writeable file handle rather than a
 -- file name.  Does not close the handle when done.

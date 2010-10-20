@@ -75,7 +75,7 @@ module Data.IterIO.Base
     , IterExpected(..), IterMiscParseErr(..)
     , throwI, throwEOFI
     , tryI, tryBI, catchI, finallyI, catchOrI, catchBI, handlerI, handlerBI
-    , inumCatch, inumHandler
+    , inumCatch, inumFinally, inumHandler
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
@@ -940,6 +940,11 @@ inumCatch enum handler = finishI . enum >=> check
                                           Just e' -> handler e' iter
                                           Nothing -> iter
           check iter                  = iter
+
+-- | Execute some cleanup action when an 'Inum' finishes.
+inumFinally :: (ChunkData tIn, Monad m) =>
+               Inum tIn tOut m a -> Iter tIn m b -> Inum tIn tOut m a
+inumFinally inum cleanup iter = inum iter `finallyI` cleanup
 
 -- | 'inumCatch' with the argument order switched.
 inumHandler :: (Exception e, ChunkData tIn, Monad m) =>

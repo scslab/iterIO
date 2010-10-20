@@ -3,6 +3,7 @@
 
 module Main where
 
+import Prelude hiding (catch)
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception
@@ -27,11 +28,11 @@ import Data.IterIO.SSL
 
 type L = L.ByteString
 
-secure :: Bool
-secure = True
-
-port :: Net.PortNumber
-port = if secure then 4433 else 8000
+data HttpServer = HttpServer {
+      hsListenSock :: !Net.Socket
+    , hsSslCtx :: !(Maybe SSL.SSLContext)
+    , hsLog :: !(Maybe Handle)
+    }
 
 myListen :: Net.PortNumber -> IO Net.Socket
 myListen pn = do
@@ -41,33 +42,69 @@ myListen pn = do
   Net.listen sock Net.maxListenQueue
   return sock
 
+httpAccept :: HttpServer -> IO (Iter L IO (), Onum L IO a)
+httpAccept hs = do
+  (s, addr) <- Net.accept $ hsListenSock hs
+  hPutStrLn stderr (show addr)
+  (iter, enum) <- maybe (mkInsecure s) (mkSecure s) (hsSslCtx hs)
+  return $ maybe (iter, enum |. inumhLog undefined)
+                (\h -> (inumhLog h .| iter, enum |. inumhLog h))
+                (hsLog hs)
+  where
+    mkInsecure s = do
+      h <- Net.socketToHandle s ReadWriteMode
+      hSetBuffering h NoBuffering
+      return (handleI h, enumHandle h `inumFinally` liftIO (hClose h))
+    mkSecure s ctx = iterSSL ctx s True `catch` \e@(SomeException _) ->
+                     hPutStrLn stderr (show e) >> return (nullI, return)
+                  
+mkServer :: Net.PortNumber -> Maybe SSL.SSLContext -> IO HttpServer
+mkServer port mctx = do
+  sock <- myListen port
+  h <- openBinaryFile "http.log" WriteMode
+  hSetBuffering h NoBuffering
+  return $ HttpServer sock mctx (Just h)
+  
+
 process_request :: (MonadIO m) => HttpReq -> Iter L m (HttpResp m)
 process_request req = do
   home <- liftIO $ getEnv "HOME"
-  let path = home ++ "/.cabal/share/doc" ++
-             concatMap (('/':) . S8.unpack) (reqPathLst req)
+  let urlpath = concatMap (('/':) . S8.unpack) (reqPathLst req)
+  let path = home ++ "/.cabal/share/doc" ++ urlpath
   resp <- defaultHttpResp
-  h <- liftIO $ openBinaryFile path ReadMode
-  return resp { respStatus = stat200
-              , respHeaders = [S8.pack "Content-Type: text/html"]
-              , respBody = \i -> enumNonBinHandle h i
-                           `finallyI` liftIO (hClose h) }
+  estat <- liftIO $ try $ getFileStatus path
+  case estat :: Either IOError FileStatus of
+    Left e -> return resp { respStatus = stat404
+                          , respHeaders = map S8.pack
+                                          ["Content-Type: text/plain"]
+                          , respBody = enumPure $ L8.pack (show e) }
+    Right stat | isDirectory stat ->
+                   return resp { respStatus = stat301
+                               , respHeaders = map S8.pack
+                                 ["Location: " ++ urlpath ++ "/index.html"
+                                 , "Content-Type: text/plain"] }
+    _ -> do
+       h <- liftIO $ openBinaryFile path ReadMode
+       return resp { respStatus = stat200
+                   , respHeaders = [S8.pack "Content-Type: text/html"]
+                   , respBody = \i -> enumNonBinHandle h i
+                                `finallyI` liftIO (hClose h) }
 
-handle_connection :: Onum L IO () -> Iter L IO () -> IO ()
-handle_connection enum iter0 = enum |$ reqloop iter0
+handle_connection :: Iter L IO () -> Onum L IO () -> IO ()
+handle_connection iter0 enum = enum |$ reqloop iter0
     where
       reqloop iter = do
         eof <- atEOFI
         unless eof $ doreq iter
       doreq iter = do
         req <- httpreqI
-        liftIO $ print req
+        -- liftIO $ print req
         resp <- handlerI bail $
                 inumHttpbody req .| (process_request req <* nullI)
-        liftIO $ print resp
+        -- liftIO $ print resp
         runI (enumHttpResp resp iter) >>= reqloop
       bail e@(SomeException _) _ = do
-        liftIO $ putStrLn "I'm bailing"
+        liftIO $ hPutStrLn stderr $ "Error: " ++ show e
         resp0 <- defaultHttpResp
         let resp = resp0 {
                      respStatus = stat500
@@ -75,36 +112,26 @@ handle_connection enum iter0 = enum |$ reqloop iter0
                    , respBody = enumPure $ L8.pack $ show e ++ "\r\n"
                    }
         liftIO $ print resp
-        _ <- runI $ enumHttpResp resp stdoutI
+        liftIO $ print e
         return resp
 
-accept_loop :: SSL.SSLContext -> QSem -> Net.Socket -> IO ()
-accept_loop ctx sem sock = do
-  (s, addr) <- Net.accept sock
-  print addr
-  (iter, enum) <- if secure
-      then sslFromSocket ctx s True
-      else do h <- Net.socketToHandle s ReadWriteMode
-              hSetBuffering h NoBuffering
-              return (handleI h,
-                      \i -> enumHandle h i `finallyI` liftIO (hClose h))
-  _ <- forkIO $ handle_connection (enum |. inumLog "request.log" False) iter
-  accept_loop ctx sem sock
-
-privkey :: FilePath
-privkey = "testkey.pem"
+accept_loop :: HttpServer -> IO ()
+accept_loop srv = loop
+    where loop = httpAccept srv >>= forkIO . uncurry handle_connection >> loop
 
 main :: IO ()
 main = Net.withSocketsDo $ SSL.withOpenSSL $ do
-         sock <- myListen port
-         sem <- newQSem 0
-         exists <- fileExist privkey
-         unless exists $ genSelfSigned "testkey.pem" "localhost"
-         ctx <- simpleContext "testkey.pem"
-         accept_loop ctx sem sock
-         waitQSem sem
-         Net.sClose sock
-
--- Local Variables:
--- haskell-program-name: "ghci -lz"
--- End:
+  mctx <- if secure
+          then do
+            exists <- fileExist privkey
+            unless exists $ genSelfSigned privkey "localhost"
+            ctx <- simpleContext privkey
+            return $ Just ctx
+          else return Nothing
+  srv <- mkServer (if secure then 4433 else 8000) mctx
+  sem <- newQSem 0
+  _ <- forkIO $ accept_loop srv `finally` signalQSem sem
+  waitQSem sem
+    where
+      privkey = "testkey.pem"
+      secure = True

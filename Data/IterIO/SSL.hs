@@ -36,15 +36,15 @@ sslI ssl = loop
 --
 -- This funciton must only be invoked from within a call to
 -- @withOpenSSL@.
-sslFromSocket :: (MonadIO m) =>
-                 SSL.SSLContext
-              -- ^ OpenSSL context
-              -> Net.Socket
-              -- ^ The socket
-              -> Bool
-              -- ^ 'True' for server handshake, 'False' for client
-              -> IO (Iter L.ByteString m (), Onum L.ByteString m a)
-sslFromSocket ctx sock server = do
+iterSSL :: (MonadIO m) =>
+           SSL.SSLContext
+        -- ^ OpenSSL context
+        -> Net.Socket
+        -- ^ The socket
+        -> Bool
+        -- ^ 'True' for server handshake, 'False' for client
+        -> IO (Iter L.ByteString m (), Onum L.ByteString m a)
+iterSSL ctx sock server = do
   mc <- newMVar False
   ssl <- SSL.connection ctx sock
   if server then SSL.accept ssl else SSL.connect ssl
