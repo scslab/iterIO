@@ -1,12 +1,12 @@
 
 PKG = $(basename $(wildcard *.cabal))
-TARGETS = $(basename $(shell find Examples -name '[a-z]*.hs' -print))
+TARGETS := $(basename $(shell find Examples -name '[a-z]*.hs' -print))
 HSCS := $(patsubst %.hsc,%.hs,$(shell find . -name '*.hsc' -print))
 HSCCLEAN = $(patsubst %.hs,%_hsc.[ch],$(HSCS))
 
 all: $(TARGETS) $(HSCS)
 
-.PHONY: all always clean build dist doc browse install
+.PHONY: all always clean build dist doc browse install hsc
 
 GHC = ghc $(WALL)
 WALL = -Wall -Werror
@@ -20,6 +20,8 @@ Examples/%: always $(HSCS)
 
 %.hs: %.hsc
 	hsc2hs $<
+
+hsc: $(HSCS)
 
 Setup: Setup.hs
 	$(GHC) --make Setup.hs
