@@ -67,6 +67,7 @@ Library
   Exposed-modules:
     Data.IterIO,
     Data.IterIO.Base,
+    Data.IterIO.CtlStream,
     Data.IterIO.Extra,
     Data.IterIO.Http,
     Data.IterIO.Inum,
