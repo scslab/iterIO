@@ -18,7 +18,7 @@ module Data.IterIO.Http (-- * HTTP Request support
                         -- * For routing
                         , HttpRoute(..), HttpMap
                         , routeMethod, routeHost
-                        , routeFn, routeMap, routeName, routeVar
+                        , routeFn, routeTop, routeMap, routeName, routeVar
                         -- * For debugging
                         , postReq, encReq, mptest, mptest'
                         , formTestMultipart, formTestUrlencoded
@@ -845,6 +845,24 @@ instance Monoid (HttpRoute m) where
     mappend (HttpRoute a) (HttpRoute b) =
         HttpRoute $ \req -> a req `mplus` b req
 
+popPath :: Bool -> HttpReq -> HttpReq
+popPath isParm req =
+    case reqPathLst req of
+      h:t -> req { reqPathLst = t
+                 , reqPathCtx = reqPathCtx req ++ [h]
+                 , reqPathParms = if isParm then h : reqPathParms req
+                                            else reqPathParms req
+                 }
+      _   -> error "Data.IterIO.Http.popPath: empty path"
+
+routeFn :: (HttpReq -> Iter L m (HttpResp m)) -> HttpRoute m
+routeFn fn = HttpRoute $ Just . fn
+
+routeTop :: HttpRoute m -> HttpRoute m
+routeTop (HttpRoute route) = HttpRoute $ \req ->
+                             if null $ reqPathLst req then route req
+                             else Nothing
+
 routeHost :: String -> HttpRoute m -> HttpRoute m
 routeHost host (HttpRoute route) = HttpRoute check
     where shost = S8.pack $ map toLower host
@@ -857,18 +875,12 @@ routeMethod method (HttpRoute route) = HttpRoute check
           check req | reqMethod req /= smethod = Nothing
                     | otherwise                = route req
 
-routeFn :: (HttpReq -> Iter L m (HttpResp m)) -> HttpRoute m
-routeFn fn = HttpRoute $ Just . fn
-
 routeMap :: HttpMap m -> HttpRoute m
 routeMap lst = HttpRoute check
     where
       check req = case reqPathLst req of
-                    h:t -> maybe Nothing
-                           (\(HttpRoute route) ->
-                            route req { reqPathLst = t
-                                      , reqPathCtx = (reqPathCtx req) ++ [h]
-                                      })
+                    h:_ -> maybe Nothing
+                           (\(HttpRoute route) -> route $ popPath False req)
                            (Map.lookup h rmap)
                     _   -> Nothing
       rmap = Map.fromListWithKey nocombine lst
@@ -879,20 +891,13 @@ routeName name (HttpRoute route) = HttpRoute check
     where sname = S8.pack name
           headok (h:_) | h == sname = True
           headok _                  = False
-          check req | headok (reqPathLst req) = route req {
-                          reqPathLst = tail $ reqPathLst req
-                        , reqPathCtx = reqPathCtx req ++ [head $ reqPathLst req]
-                        }
+          check req | headok (reqPathLst req) = route $ popPath False req
           check _                             = Nothing
 
 routeVar :: HttpRoute m -> HttpRoute m
 routeVar (HttpRoute route) = HttpRoute check
     where check req = case reqPathLst req of
-                        h:t -> route req {
-                                 reqPathLst = t
-                               , reqPathParms = h : reqPathParms req
-                               , reqPathCtx = reqPathCtx req ++ [h]
-                               }
+                        _:_ -> route $ popPath True req
                         _   -> Nothing
 
 
