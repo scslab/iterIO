@@ -282,7 +282,7 @@ handleConnection :: SSLContext -> Net.Socket -> IO ()
 handleConnection ctx s = do
   -- h <- Net.socketToHandle s IO.ReadWriteMode
   -- IO.hSetBuffering h IO.NoBuffering
-  (iter, enum) <- sslFromSocket ctx s True
+  (iter, enum) <- iterSSL ctx s True
   enum |$ handleRequest iter
 {-
   enumHandle' h

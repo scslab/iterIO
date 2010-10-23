@@ -15,6 +15,10 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , stat100, stat200, stat301
                         , stat400, stat404, stat500
                         , enumHttpResp
+                        -- * For routing
+                        , HttpRoute(..), HttpMap
+                        , routeMethod, routeHost
+                        , routeFn, routeMap, routeName, routeVar
                         -- * For debugging
                         , postReq, encReq, mptest, mptest'
                         , formTestMultipart, formTestUrlencoded
@@ -25,13 +29,14 @@ import Control.Monad.Identity
 import Control.Monad.Trans
 import Data.Array.Unboxed
 import Data.Bits
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.Monoid
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.ByteString.Internal (w2c, c2w)
-import Data.Map (Map)
-import qualified Data.Map as Map
 -- import Data.Bits
 import Data.Char
 import Data.Int
@@ -822,6 +827,72 @@ enumHttpResp resp = enumPure fmtresp `cat` (respBody resp |. inumToChunks)
                  (L8.pack "Transfer-Encoding: chunked\r\n\r\n")
                  (respHeaders resp)
           hdr h = L.fromChunks [h, S8.pack "\r\n"]
+
+--
+-- Request routing
+--
+
+data HttpRoute m = HttpRoute {
+      runHttpRoute :: !(HttpReq -> Maybe (Iter L m (HttpResp m)))
+    }
+
+type HttpMap m = [(S, HttpRoute m)]
+
+instance Monoid (HttpRoute m) where
+    mempty = HttpRoute $ const Nothing
+    mappend (HttpRoute a) (HttpRoute b) =
+        HttpRoute $ \req -> a req `mplus` b req
+
+routeHost :: String -> HttpRoute m -> HttpRoute m
+routeHost host (HttpRoute route) = HttpRoute check
+    where shost = S8.pack host
+          check req | reqHost req /= shost = Nothing -- XXX case sensitive
+                    | otherwise            = route req
+
+routeMethod :: String -> HttpRoute m -> HttpRoute m
+routeMethod method (HttpRoute route) = HttpRoute check
+    where smethod = S8.pack method
+          check req | reqMethod req /= smethod = Nothing
+                    | otherwise                = route req
+
+routeFn :: (HttpReq -> Iter L m (HttpResp m)) -> HttpRoute m
+routeFn fn = HttpRoute $ Just . fn
+
+routeMap :: HttpMap m -> HttpRoute m
+routeMap lst = HttpRoute check
+    where
+      check req = case reqPathLst req of
+                    h:t -> maybe Nothing
+                           (\(HttpRoute route) ->
+                            route req { reqPathLst = t
+                                      , reqPathCtx = (reqPathCtx req) ++ [h]
+                                      })
+                           (Map.lookup h rmap)
+                    _   -> Nothing
+      rmap = Map.fromListWithKey nocombine lst
+      nocombine k _ _ = error $ "routeMap: duplicate key for " ++ S8.unpack k
+
+routeName :: String -> HttpRoute m -> HttpRoute m
+routeName name (HttpRoute route) = HttpRoute check
+    where sname = S8.pack name
+          headok (h:_) | h == sname = True
+          headok _                  = False
+          check req | headok (reqPathLst req) = route req {
+                          reqPathLst = tail $ reqPathLst req
+                        , reqPathCtx = reqPathCtx req ++ [head $ reqPathLst req]
+                        }
+          check _                             = Nothing
+
+routeVar :: HttpRoute m -> HttpRoute m
+routeVar (HttpRoute route) = HttpRoute check
+    where check req = case reqPathLst req of
+                        h:t -> route req {
+                                 reqPathLst = t
+                               , reqPathParms = h : reqPathParms req
+                               , reqPathCtx = reqPathCtx req ++ [h]
+                               }
+                        _   -> Nothing
+
 
 --
 -- Everything below here is crap for testing
