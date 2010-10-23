@@ -339,7 +339,8 @@ isUnreserved c = rfc3986_syntax ! c .&. rfc3986_unreserved /= 0
 hostI :: (Monad m) => Iter L m (S, Maybe Int)
 hostI = (,) <$> host <*> (Just <$> port <|> return Nothing) <?> "host"
     where
-      host = strictify <$> (bracketed <|> percent_decode regnamechar)
+      host = S8.map toLower <$> strictify <$>
+             (bracketed <|> percent_decode regnamechar)
       port = do _ <- char ':'; whileI (isDigit . w2c) >>= readI
       regnamechar c = (rfc3986_syntax ! c
                        .&. (rfc3986_unreserved .|. rfc3986_sub_delims)) /= 0
@@ -408,7 +409,8 @@ data HttpReq = HttpReq {
     , reqPathParms :: ![S]      -- ^ Can be used to save parameters from path
     , reqPathCtx :: ![S]        -- ^ Can be used to store popped filenames
     , reqQuery :: !S            -- ^ Part of URL after ?
-    , reqHost :: !S             -- ^ Host header (or from reqline if has absUri)
+    , reqHost :: !S             -- ^ Lower-case host header (or from
+                                --   reqline if has absUri)
     , reqPort :: !(Maybe Int)   -- ^ Port if supplied in Host header
     , reqVers :: !(Int, Int)    -- ^ HTTP version number from reqline
     , reqHeaders :: ![(S, S)]   -- ^ Headers, with field names lowercased
@@ -845,8 +847,8 @@ instance Monoid (HttpRoute m) where
 
 routeHost :: String -> HttpRoute m -> HttpRoute m
 routeHost host (HttpRoute route) = HttpRoute check
-    where shost = S8.pack host
-          check req | reqHost req /= shost = Nothing -- XXX case sensitive
+    where shost = S8.pack $ map toLower host
+          check req | reqHost req /= shost = Nothing
                     | otherwise            = route req
 
 routeMethod :: String -> HttpRoute m -> HttpRoute m
