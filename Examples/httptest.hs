@@ -3,7 +3,7 @@
 
 module Main where
 
-import Prelude hiding (catch)
+import Prelude hiding (catch, head, id, div)
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception
@@ -11,14 +11,17 @@ import Control.Monad
 import Control.Monad.Trans
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
-import qualified Data.ByteString.Lazy.Char8 as L8
+-- import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Network.Socket as Net
 import qualified OpenSSL as SSL
 import qualified OpenSSL.Session as SSL
+import Data.Time.Clock (getCurrentTime)
 import System.Environment
 import System.IO
+import System.IO.Error (isDoesNotExistError)
 import System.Posix.Files
--- import Text.XHtml.Strict
+import Text.Blaze.Html4.Strict hiding (map)
+import Text.Blaze.Renderer.Utf8 (renderHtml)
 
 import Data.IterIO
 -- import Data.IterIO.Parse
@@ -64,20 +67,25 @@ mkServer port mctx = do
   h <- openBinaryFile "http.log" WriteMode
   hSetBuffering h NoBuffering
   return $ HttpServer sock mctx (Just h)
-  
+
+fmt_error :: (MonadIO m) => String -> Iter L m (HttpResp m)
+fmt_error err = liftIO getCurrentTime >>= return . resp
+    where htmlerr = html $ do
+                      head $ title "Internal Server Error"
+                      body $ do h1 $ string "Iternal Server Error"
+                                div $ string err
+          resp date = mkHttpResp stat500 (Just date) $ renderHtml htmlerr
 
 process_request :: (MonadIO m) => HttpReq -> Iter L m (HttpResp m)
 process_request req = do
   home <- liftIO $ getEnv "HOME"
   let urlpath = concatMap (('/':) . S8.unpack) (reqPathLst req)
   let path = home ++ "/.cabal/share/doc" ++ urlpath
-  resp <- defaultHttpResp
+  let resp = defaultHttpResp
   estat <- liftIO $ try $ getFileStatus path
   case estat :: Either IOError FileStatus of
-    Left e -> return resp { respStatus = stat404
-                          , respHeaders = map S8.pack
-                                          ["Content-Type: text/plain"]
-                          , respBody = enumPure $ L8.pack (show e) }
+    Left e | isDoesNotExistError e -> resp404 req
+    Left e                         -> fmt_error $ show e
     Right stat | isDirectory stat ->
                    return resp { respStatus = stat301
                                , respHeaders = map S8.pack
@@ -86,9 +94,20 @@ process_request req = do
     _ -> do
        h <- liftIO $ openBinaryFile path ReadMode
        return resp { respStatus = stat200
-                   , respHeaders = [S8.pack "Content-Type: text/html"]
-                   , respBody = \i -> enumNonBinHandle h i
-                                `finallyI` liftIO (hClose h) }
+                   , respHeaders = [contentType path]
+                   , respBody = enumNonBinHandle h
+                                `inumFinally` liftIO (hClose h) }
+
+fileExt :: String -> String
+fileExt str = case dropWhile (/= '.') str of
+                []  -> str
+                _:t -> fileExt t
+
+contentType :: String -> S8.ByteString
+contentType file = S8.pack $ "Content-Type: " ++
+                   case fileExt file of
+                     "css" -> "text/css"
+                     _     -> "text/html"
 
 handle_connection :: Iter L IO () -> Onum L IO () -> IO ()
 handle_connection iter0 enum = enum |$ reqloop iter0
@@ -105,12 +124,7 @@ handle_connection iter0 enum = enum |$ reqloop iter0
         runI (enumHttpResp resp iter) >>= reqloop
       bail e@(SomeException _) _ = do
         liftIO $ hPutStrLn stderr $ "Error: " ++ show e
-        resp0 <- defaultHttpResp
-        let resp = resp0 {
-                     respStatus = stat500
-                   , respHeaders = [S8.pack "Content-Type: text/plain"]
-                   , respBody = enumPure $ L8.pack $ show e ++ "\r\n"
-                   }
+        resp <- fmt_error (show e)
         liftIO $ print resp
         liftIO $ print e
         return resp

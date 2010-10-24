@@ -12,8 +12,9 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , foldForm, foldUrlencoded, foldMultipart, foldQuery
                         -- * HTTP Response support
                         , HttpStatus(..), HttpResp(..), defaultHttpResp
-                        , stat100, stat200, stat301
-                        , stat400, stat404, stat500
+                        , stat100, stat200, stat301, stat302, stat303, stat304
+                        , stat400, stat401, stat403, stat404, stat500, stat501
+                        , mkHttpHead, mkHttpResp, resp404
                         , enumHttpResp
                         -- * For routing
                         , HttpRoute(..), HttpMap
@@ -796,17 +797,27 @@ fmtStat (HttpStatus n s) = L.fromChunks [
                             S8.pack $ "HTTP/1.1 " ++ show n ++ " "
                            , s, S8.pack "\r\n"]
 
-stat100, stat200, stat301, stat400, stat404, stat500 :: HttpStatus
+stat100, stat200
+           , stat301, stat302, stat303, stat304
+           , stat400, stat401, stat403, stat404
+           , stat500, stat501 :: HttpStatus
 stat100 = mkStat 100 "Continue"
 stat200 = mkStat 200 "OK"
 stat301 = mkStat 301 "Moved Permanently"
+stat302 = mkStat 302 "Found"
+stat303 = mkStat 303 "See Other"
+stat304 = mkStat 304 "Not Modified"
 stat400 = mkStat 400 "Bad Request"
+stat401 = mkStat 401 "Unauthorized"
+stat403 = mkStat 403 "Forbidden"
 stat404 = mkStat 404 "Not Found"
 stat500 = mkStat 500 "Internal Server Error"
+stat501 = mkStat 501 "Not Implemented"
 
 data HttpResp m = HttpResp {
       respStatus :: !HttpStatus
     , respHeaders :: ![S]
+    , respChunk :: !Bool
     , respBody :: !(Onum L m (Iter L m ()))
     }
 
@@ -814,21 +825,53 @@ instance Show (HttpResp m) where
     showsPrec _ resp rest = "HttpResp (" ++ show (respStatus resp)
                             ++ ") " ++ show (respHeaders resp) ++ rest
 
-defaultHttpResp :: (ChunkData t, Monad m) => Iter t m (HttpResp m)
-defaultHttpResp = return $ HttpResp { respStatus = stat200
-                                    , respHeaders = []
-                                    , respBody = return
-                                    }
+defaultHttpResp :: (Monad m) => HttpResp m
+defaultHttpResp = HttpResp { respStatus = stat200
+                           , respHeaders = []
+                           , respChunk = True
+                           , respBody = return
+                           }
+
+mkHttpHead :: (Monad m) => HttpStatus -> Maybe UTCTime -> HttpResp m
+mkHttpHead stat mtime = HttpResp { respStatus = stat
+                                 , respHeaders = date
+                                 , respChunk = False
+                                 , respBody = return }
+    where date = maybe [] (\t -> [S8.pack $ "Date: " ++ http_fmt_time t]) mtime
+
+mkHttpResp :: (Monad m) => HttpStatus -> Maybe UTCTime -> L -> HttpResp m
+mkHttpResp stat mtime html = resp
+    where resp0 = mkHttpHead stat mtime `asTypeOf` resp
+          ctype = S8.pack "Content-Type: text/html"
+          len = S8.pack $ "Content-Length: " ++ show (L8.length html)
+          resp  = resp0 { respHeaders = respHeaders resp0 ++ [ctype, len]
+                        , respBody = enumPure html
+                        }
+
+resp404 :: (ChunkData t, MonadIO m) => HttpReq -> Iter t m (HttpResp m)
+resp404 _req = do
+  time <- liftIO getCurrentTime
+  return $ mkHttpResp stat404 (Just time) html
+    where html = L8.pack
+                 "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                 \<HTML><HEAD>\n\
+                 \<TITLE>404 Not Found</TITLE>\n\
+                 \</HEAD><BODY>\n\
+                 \<H1>Not Found</H1>\n\
+                 \<P>The requested URL was not found on this server.</P>\n\
+                 \</BODY></HTML>\n"
 
 enumHttpResp :: (Monad m) =>
                 HttpResp m -> Onum L m ()
-enumHttpResp resp = enumPure fmtresp `cat` (respBody resp |. inumToChunks)
-    where fmtresp :: L
-          fmtresp = L.append (fmtStat $ respStatus resp) hdrs
-          hdrs = foldr (L.append . hdr)
-                 (L8.pack "Transfer-Encoding: chunked\r\n\r\n")
+enumHttpResp resp = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
+    where fmtresp = L.append (fmtStat $ respStatus resp) hdrs
+          hdrs = foldr (L.append . hdr) (L8.pack "\r\n") $
+                 (if respChunk resp
+                  then ((S8.pack "Transfer-Encoding: chunked") :)
+                  else id)
                  (respHeaders resp)
           hdr h = L.fromChunks [h, S8.pack "\r\n"]
+          maybeChunk = if respChunk resp then inumToChunks else inumNop
 
 --
 -- Request routing
