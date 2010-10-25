@@ -38,7 +38,7 @@ port = 4443
 
 handleRequest :: (MonadIO m) => Iter L m () -> Iter L m ()
 handleRequest out = do
-  req <- httpreqI
+  req <- httpReqI
   case S.unpack $ reqMethod req of
     "GET" ->
       case reqPathLst req of
@@ -93,7 +93,7 @@ inumGzipResponse = mkInumAutoM $ do
 -- Form processing
 --
 
-type Parms = [(Multipart, L, Int)]
+type Parms = [(FormField, L, Int)]
 
 parmsI :: (Monad m) => HttpReq -> Iter L m Parms
 parmsI req = foldForm req getPart []
@@ -107,7 +107,7 @@ withParm :: (MonadIO m) => String -> HttpReq -> Iter L m a -> Iter L m (Maybe a)
 withParm pName req iter = foldForm req handlePart Nothing
  where
   handlePart result part =
-    if mpName part == S.pack pName
+    if ffName part == S.pack pName
       then Just <$> iter
       else nullI >> return result
 
@@ -143,7 +143,7 @@ parms2Html parms =
                    ]
  where
   parm2Html (mp,front,backLen) = toHtml
-    [ strong << (S.unpack (mpName mp) ++ ": ")
+    [ strong << (S.unpack (ffName mp) ++ ": ")
     , thespan << L.unpack front
     , if backLen > 0
         then emphasize << ("... (" ++ show (fromIntegral (L.length front) + backLen) ++ " bytes)")

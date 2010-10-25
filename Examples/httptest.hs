@@ -116,7 +116,7 @@ handle_connection iter0 enum = enum |$ reqloop iter0
         eof <- atEOFI
         unless eof $ doreq iter
       doreq iter = do
-        req <- httpreqI
+        req <- httpReqI
         -- liftIO $ print req
         resp <- handlerI bail $
                 inumHttpbody req .| (process_request req <* nullI)
