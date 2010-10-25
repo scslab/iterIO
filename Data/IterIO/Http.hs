@@ -14,7 +14,8 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , stat100, stat200, stat301, stat302, stat303, stat304
                         , stat400, stat401, stat403, stat404, stat500, stat501
                         , HttpResp(..), defaultHttpResp
-                        , mkHttpHead, mkHttpResp, resp404
+                        , mkHttpHead, mkHttpResp
+                        , resp301, resp404
                         , enumHttpResp
                         -- * For routing
                         , HttpRoute(..), HttpMap
@@ -900,6 +901,9 @@ data HttpResp m = HttpResp {
     -- body).
     }
 
+respAddHeader :: S.ByteString -> HttpResp m -> HttpResp m
+respAddHeader hdr resp = resp { respHeaders = hdr : respHeaders resp }
+
 instance Show (HttpResp m) where
     showsPrec _ resp rest = "HttpResp (" ++ show (respStatus resp)
                             ++ ") " ++ show (respHeaders resp) ++ rest
@@ -934,6 +938,23 @@ mkHttpResp stat mtime html = resp
           resp  = resp0 { respHeaders = respHeaders resp0 ++ [ctype, len]
                         , respBody = enumPure html
                         }
+
+-- | Generate a 301 (redirect) response
+resp301 :: (ChunkData t, MonadIO m) => S.ByteString -> Iter t m (HttpResp m)
+resp301 target = do
+  date <- liftIO getCurrentTime
+  return $ respAddHeader (S8.pack "Location: " `S8.append` target) $
+         mkHttpResp stat301 (Just date) html
+    where html = L8.pack
+                 "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                 \<HTML><HEAD>\n\
+                 \<TITLE>301 Moved Permanently</TITLE>\n\
+                 \</HEAD><BODY>\n\
+                 \<H1>Moved Permanently</H1>\n\
+                 \<P>The document has moved <A HREF=\""
+                 `L.append` (L.fromChunks [target]
+                              `L.append` L8.pack "\">here</A>.</P>\n") 
+
 
 -- | Generate a 404 (not found) response.
 resp404 :: (ChunkData t, MonadIO m) => HttpReq -> Iter t m (HttpResp m)

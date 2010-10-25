@@ -81,19 +81,24 @@ process_request req = do
   home <- liftIO $ getEnv "HOME"
   let urlpath = concatMap (('/':) . S8.unpack) (reqPathLst req)
   let path = home ++ "/.cabal/share/doc" ++ urlpath
-  let resp = defaultHttpResp
+  -- let resp = defaultHttpResp
   estat <- liftIO $ try $ getFileStatus path
   case estat :: Either IOError FileStatus of
     Left e | isDoesNotExistError e -> resp404 req
     Left e                         -> fmt_error $ show e
+    Right stat | isDirectory stat -> resp301 $ S8.pack $
+                                     urlpath ++ "/index.html"
+{-
     Right stat | isDirectory stat ->
                    return resp { respStatus = stat301
                                , respHeaders = map S8.pack
                                  ["Location: " ++ urlpath ++ "/index.html"
                                  , "Content-Type: text/plain"] }
+-}
     _ -> do
        h <- liftIO $ openBinaryFile path ReadMode
-       return resp { respStatus = stat200
+       return (defaultHttpResp :: HttpResp IO) {
+                     respStatus = stat200
                    , respHeaders = [contentType path]
                    , respBody = enumNonBinHandle h
                                 `inumFinally` liftIO (hClose h) }
