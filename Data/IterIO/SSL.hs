@@ -3,7 +3,7 @@ module Data.IterIO.SSL where
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Control.Concurrent
-import Control.Exception (throwIO, ErrorCall(..), finally)
+import Control.Exception (throwIO, ErrorCall(..), finally, onException)
 import Control.Monad
 import Control.Monad.Trans
 import qualified Network.Socket as Net
@@ -46,14 +46,14 @@ iterSSL :: (MonadIO m) =>
         -> IO (Iter L.ByteString m (), Onum L.ByteString m a)
 iterSSL ctx sock server = do
   mc <- newMVar False
-  ssl <- SSL.connection ctx sock
+  ssl <- SSL.connection ctx sock `onException` Net.sClose sock
   if server then SSL.accept ssl else SSL.connect ssl
   let end = modifyMVar mc $ \closeit ->
             do when closeit $ SSL.shutdown ssl SSL.Bidirectional
                                 `finally` Net.sClose sock
                return (True, ())
-      iter = sslI ssl >> liftIO end
-      enum = mkInumM $ withCleanup (liftIO end) $ ipipe (enumSsl ssl)
+      iter = sslI ssl `finallyI` liftIO end
+      enum = enumSsl ssl `inumFinally` liftIO end
   return (iter, enum)
 
 -- | Simplest possible SSL context, loads cert and unencrypted private

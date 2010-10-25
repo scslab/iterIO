@@ -55,8 +55,10 @@ httpAccept hs = do
       h <- Net.socketToHandle s ReadWriteMode
       hSetBuffering h NoBuffering
       return (handleI h, enumHandle h `inumFinally` liftIO (hClose h))
-    mkSecure s ctx = iterSSL ctx s True `catch` \e@(SomeException _) ->
-                     hPutStrLn stderr (show e) >> return (nullI, return)
+    mkSecure s ctx = iterSSL ctx s True `catch` \e@(SomeException _) -> do
+                       hPutStrLn stderr (show e)
+                       Net.sClose s
+                       return (nullI, return)
                   
 mkServer :: Net.PortNumber -> Maybe SSL.SSLContext -> IO HttpServer
 mkServer port mctx = do
