@@ -1022,11 +1022,31 @@ enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
 -- Request routing
 --
 
+-- | Simple HTTP request routing structure for 'inumHttpServer'.  This
+-- is a wrapper around a function on 'HttpReq' structures.  If the
+-- function accepts the 'HttpReq', it returns 'Just' a response
+-- action.  Otherwise it returns 'Nothing'.
+--
+-- @HttpRoute@ form a 'Monoid', and hence can be concatenated with
+-- 'mappend' or 'mconcat'.  For example, you can say something like:
+--
+-- > simpleServer :: Iter L.ByteString IO ()  -- Output to web browser
+-- >              -> Onum L.ByteString IO ()  -- Input from web browser
+-- >              -> IO ()
+-- > simpleServer iter enum = enum |$ inumHttpServer routing .| iter
+-- >     where routing = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
+-- >                             , routeName "cabal" $ routeFn serve_cabal
+-- >                             ]
+--
+-- The above function will redirect requests for @/@ to the URL
+-- @/cabal@ using an HTTP 301 (Moved Permanently) response.  Any
+-- request for a path under @/cabal/@ will then have the first
+-- component (@\"cabal\"@) stripped from 'reqPathLst', have that same
+-- component added to 'reqPathCtx', and finally be routed to the
+-- function @serve_cabal@.
 data HttpRoute m = HttpRoute {
       runHttpRoute :: !(HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
     }
-
-type HttpMap m = [(S.ByteString, HttpRoute m)]
 
 instance Monoid (HttpRoute m) where
     mempty = HttpRoute $ const Nothing
@@ -1043,29 +1063,41 @@ popPath isParm req =
                  }
       _   -> error "Data.IterIO.Http.popPath: empty path"
 
-routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
-routeFn fn = HttpRoute $ Just . fn
-
+-- | Route all requests to a constant response action that does not
+-- depend on the request.
 routeConst :: (Monad m) => HttpResp m -> HttpRoute m
 routeConst resp = HttpRoute $ const $ Just $ return resp
 
+-- | Route all requests to a particular function.
+routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
+routeFn fn = HttpRoute $ Just . fn
+
+-- | Route the root directory (/).
 routeTop :: HttpRoute m -> HttpRoute m
 routeTop (HttpRoute route) = HttpRoute $ \req ->
                              if null $ reqPathLst req then route req
                              else Nothing
 
+-- | Route requests whose \"Host:\" header matches a particular
+-- string.
 routeHost :: String -> HttpRoute m -> HttpRoute m
 routeHost host (HttpRoute route) = HttpRoute check
     where shost = S8.pack $ map toLower host
           check req | reqHost req /= shost = Nothing
                     | otherwise            = route req
 
+-- | Route based on the method (GET, POST, etc.) in a request.
 routeMethod :: String -> HttpRoute m -> HttpRoute m
 routeMethod method (HttpRoute route) = HttpRoute check
     where smethod = S8.pack method
           check req | reqMethod req /= smethod = Nothing
                     | otherwise                = route req
 
+-- | Type alias for the argument of 'routeMap'.
+type HttpMap m = [(String, HttpRoute m)]
+
+-- | @routeMap@ builds an efficient map out of a list of
+-- @(directory_name, 'HttpRoute')@ pairs.
 routeMap :: HttpMap m -> HttpRoute m
 routeMap lst = HttpRoute check
     where
@@ -1074,9 +1106,12 @@ routeMap lst = HttpRoute check
                            (\(HttpRoute route) -> route $ popPath False req)
                            (Map.lookup h rmap)
                     _   -> Nothing
-      rmap = Map.fromListWithKey nocombine lst
+      packfirst (a, b) = (S8.pack a, b)
+      rmap = Map.fromListWithKey nocombine $ map packfirst lst
       nocombine k _ _ = error $ "routeMap: duplicate key for " ++ S8.unpack k
 
+-- | Routes a specific directory name, like 'routeMap' for a singleton
+-- map.
 routeName :: String -> HttpRoute m -> HttpRoute m
 routeName name (HttpRoute route) = HttpRoute check
     where sname = S8.pack name
@@ -1085,13 +1120,18 @@ routeName name (HttpRoute route) = HttpRoute check
           check req | headok (reqPathLst req) = route $ popPath False req
           check _                             = Nothing
 
+-- | Matches any directory name, but additionally pushes it onto the
+-- front of the 'reqPathParams' list in the 'HttpReq' structure.  This
+-- allows the name to serve as a variable argument to the eventual
+-- handling function.
 routeVar :: HttpRoute m -> HttpRoute m
 routeVar (HttpRoute route) = HttpRoute check
     where check req = case reqPathLst req of
                         _:_ -> route $ popPath True req
                         _   -> Nothing
 
-
+-- | An 'Inum' that behaves like an HTTP server.  See 'HttpRoute' for
+-- a simple usage example.
 inumHttpServer :: (MonadIO m) =>
                   HttpRoute m
                -> Inum L.ByteString L.ByteString m ()
