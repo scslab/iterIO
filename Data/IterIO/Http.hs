@@ -856,7 +856,7 @@ foldMultipart req f z = multipartI req >>= doPart
 
 -- | HTTP status code and text description of response, for the first
 -- line of an HTTP response message.  A bunch of pre-defined statuses
--- from RFC2161 are supplied under the names 'stat200', 'stat404',
+-- from RFC 2616 are supplied under the names 'stat200', 'stat404',
 -- 'stat500', etc.
 data HttpStatus = HttpStatus !Int !S.ByteString deriving Show
 
