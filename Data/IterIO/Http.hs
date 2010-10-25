@@ -18,13 +18,14 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , resp301, resp404, resp500
                         , enumHttpResp
                         -- * For routing
-                        , HttpRoute(..), HttpMap
-                        , routeConst, routeMethod, routeHost
-                        , routeFn, routeTop, routeMap, routeName, routeVar
+                        , HttpRoute(..)
+                        , routeConst, routeFn
+                        , routeMethod, routeHost, routeTop
+                        , HttpMap, routeMap, routeName, routeVar
                         , inumHttpServer
-                        -- * For debugging
-                        , postReq, encReq, mptest, mptest'
-                        , formTestMultipart, formTestUrlencoded
+                        -- -- * For debugging
+                        -- , postReq, encReq, mptest, mptest'
+                        -- , formTestMultipart, formTestUrlencoded
                         ) where
 
 import Control.Exception (SomeException(..))
@@ -1027,7 +1028,7 @@ enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
 -- function accepts the 'HttpReq', it returns 'Just' a response
 -- action.  Otherwise it returns 'Nothing'.
 --
--- @HttpRoute@ form a 'Monoid', and hence can be concatenated with
+-- @HttpRoute@ is a 'Monoid', and hence can be concatenated with
 -- 'mappend' or 'mconcat'.  For example, you can say something like:
 --
 -- > simpleServer :: Iter L.ByteString IO ()  -- Output to web browser
@@ -1064,11 +1065,13 @@ popPath isParm req =
       _   -> error "Data.IterIO.Http.popPath: empty path"
 
 -- | Route all requests to a constant response action that does not
--- depend on the request.
+-- depend on the request.  This route always succeeds, so anything
+-- 'mappend'ed will never be used.
 routeConst :: (Monad m) => HttpResp m -> HttpRoute m
 routeConst resp = HttpRoute $ const $ Just $ return resp
 
--- | Route all requests to a particular function.
+-- | Route all requests to a particular function.  This route always
+-- succeeds, so anything 'mappend'ed will never be used.
 routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
 routeFn fn = HttpRoute $ Just . fn
 
@@ -1080,14 +1083,18 @@ routeTop (HttpRoute route) = HttpRoute $ \req ->
 
 -- | Route requests whose \"Host:\" header matches a particular
 -- string.
-routeHost :: String -> HttpRoute m -> HttpRoute m
+routeHost :: String -- ^ String to compare against host (must be lower-case)
+          -> HttpRoute m   -- ^ Target route to follow if host matches
+          -> HttpRoute m
 routeHost host (HttpRoute route) = HttpRoute check
     where shost = S8.pack $ map toLower host
           check req | reqHost req /= shost = Nothing
                     | otherwise            = route req
 
 -- | Route based on the method (GET, POST, etc.) in a request.
-routeMethod :: String -> HttpRoute m -> HttpRoute m
+routeMethod :: String           -- ^ String method should match
+            -> HttpRoute m      -- ^ Target route to take if method matches
+            -> HttpRoute m
 routeMethod method (HttpRoute route) = HttpRoute check
     where smethod = S8.pack method
           check req | reqMethod req /= smethod = Nothing
@@ -1153,6 +1160,8 @@ inumHttpServer (HttpRoute route) = mkInumM loop
       fatal e@(SomeException _) = do
         liftIO $ hPutStrLn stderr $ "Reply error: " ++ show e
 
+
+{-
 
 --
 -- Everything below here is crap for testing
@@ -1275,3 +1284,4 @@ postReqUrlencoded = L8.pack
 encReq :: L
 encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
 
+-}
