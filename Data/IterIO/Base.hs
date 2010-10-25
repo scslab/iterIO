@@ -1638,3 +1638,7 @@ traceI :: (ChunkData t, Monad m) => String -> Iter t m ()
 traceI msg = return $ inlinePerformIO $ do
                tid <- myThreadId
                putTraceMsg $ show tid ++ ": " ++ msg
+
+-- Local Variables:
+-- haskell-program-name: "ghci -lz"
+-- End:

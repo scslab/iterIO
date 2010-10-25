@@ -3,7 +3,7 @@
 
 module Data.IterIO.Http (-- * HTTP Request support
                          HttpReq(..)
-                        , httpReqI, inumHttpbody
+                        , httpReqI, inumHttpBody
                         , inumToChunks, inumFromChunks
                         , http_fmt_time, dateI
                         , FormField(..), foldForm
@@ -14,18 +14,20 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , stat100, stat200, stat301, stat302, stat303, stat304
                         , stat400, stat401, stat403, stat404, stat500, stat501
                         , HttpResp(..), defaultHttpResp
-                        , mkHttpHead, mkHttpResp
-                        , resp301, resp404
+                        , mkHttpHead, mkHtmlResp
+                        , resp301, resp404, resp500
                         , enumHttpResp
                         -- * For routing
                         , HttpRoute(..), HttpMap
-                        , routeMethod, routeHost
+                        , routeConst, routeMethod, routeHost
                         , routeFn, routeTop, routeMap, routeName, routeVar
+                        , inumHttpServer
                         -- * For debugging
                         , postReq, encReq, mptest, mptest'
                         , formTestMultipart, formTestUrlencoded
                         ) where
 
+import Control.Exception (SomeException(..))
 import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.Trans
@@ -48,6 +50,7 @@ import Data.Time
 import Data.Typeable
 import Data.Word
 import System.Locale
+import System.IO
 import Text.Printf
 
 import Data.IterIO
@@ -619,8 +622,8 @@ inumFromChunks = mkInumM $ getchunk
 -- content of a size specified by the Content-Length header,
 -- chunk-encoded content, and content that has been gzipped then
 -- chunk-encoded.
-inumHttpbody :: (MonadIO m) => HttpReq -> Inum L.ByteString L.ByteString m a
-inumHttpbody req =
+inumHttpBody :: (MonadIO m) => HttpReq -> Inum L.ByteString L.ByteString m a
+inumHttpBody req =
     case reqTransferEncoding req of
       lst | null lst || lst == [S8.pack "identity"] ->
               if hasclen then inumTakeExact (fromJust $ reqContentLength req)
@@ -918,70 +921,102 @@ defaultHttpResp = HttpResp { respStatus = stat200
                            }
 
 -- | Generate an 'HttpResp' without a body.
-mkHttpHead :: (Monad m) => HttpStatus -> Maybe UTCTime -> HttpResp m
-mkHttpHead stat mtime = HttpResp { respStatus = stat
-                                 , respHeaders = date
-                                 , respChunk = False
-                                 , respBody = return }
-    where date = maybe [] (\t -> [S8.pack $ "Date: " ++ http_fmt_time t]) mtime
+mkHttpHead :: (Monad m) => HttpStatus -> HttpResp m
+mkHttpHead stat = HttpResp { respStatus = stat
+                           , respHeaders = []
+                           , respChunk = False
+                           , respBody = return }
 
--- | Generate an 'HttpResp' with a body.
-mkHttpResp :: (Monad m) =>
+-- | Generate an 'HttpResp' with a body of type @text/html@.
+mkHtmlResp :: (Monad m) =>
               HttpStatus
-           -> Maybe UTCTime
            -> L.ByteString      -- ^ Body as a pure lazy 'L.ByteString'
            -> HttpResp m
-mkHttpResp stat mtime html = resp
-    where resp0 = mkHttpHead stat mtime `asTypeOf` resp
+mkHtmlResp stat html = resp
+    where resp0 = mkHttpHead stat `asTypeOf` resp
           ctype = S8.pack "Content-Type: text/html"
           len = S8.pack $ "Content-Length: " ++ show (L8.length html)
           resp  = resp0 { respHeaders = respHeaders resp0 ++ [ctype, len]
                         , respBody = enumPure html
                         }
 
+htmlEscapeChar :: Char -> Maybe String
+htmlEscapeChar '<'  = Just "&lt;"
+htmlEscapeChar '>'  = Just "&gt;"
+htmlEscapeChar '&'  = Just "&amp;"
+htmlEscapeChar '"'  = Just "&quot;"
+htmlEscapeChar '\'' = Just "&amp;"
+htmlEscapeChar _   = Nothing
+
+htmlEscape :: String -> L.ByteString
+htmlEscape str = L8.unfoldr next (str, "")
+    where
+      next (s, h:t)  = Just (h, (s, t))
+      next (h:t, "") = maybe (Just (h, (t, ""))) (curry next t) $
+                       htmlEscapeChar h
+      next ("", "")  = Nothing
+
 -- | Generate a 301 (redirect) response
-resp301 :: (ChunkData t, MonadIO m) => S.ByteString -> Iter t m (HttpResp m)
-resp301 target = do
-  date <- liftIO getCurrentTime
-  return $ respAddHeader (S8.pack "Location: " `S8.append` target) $
-         mkHttpResp stat301 (Just date) html
-    where html = L8.pack
-                 "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
-                 \<HTML><HEAD>\n\
-                 \<TITLE>301 Moved Permanently</TITLE>\n\
-                 \</HEAD><BODY>\n\
-                 \<H1>Moved Permanently</H1>\n\
-                 \<P>The document has moved <A HREF=\""
-                 `L.append` (L.fromChunks [target]
-                              `L.append` L8.pack "\">here</A>.</P>\n") 
+resp301 :: (Monad m) => String -> HttpResp m
+resp301 target =
+    respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat301 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>301 Moved Permanently</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>Moved Permanently</H1>\n\
+                  \<P>The document has moved <A HREF=\""
+                 , htmlEscape target
+                 , L8.pack "\">here</A>.</P>\n"]
 
 
 -- | Generate a 404 (not found) response.
-resp404 :: (ChunkData t, MonadIO m) => HttpReq -> Iter t m (HttpResp m)
-resp404 _req = do
-  time <- liftIO getCurrentTime
-  return $ mkHttpResp stat404 (Just time) html
-    where html = L8.pack
-                 "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
-                 \<HTML><HEAD>\n\
-                 \<TITLE>404 Not Found</TITLE>\n\
-                 \</HEAD><BODY>\n\
-                 \<H1>Not Found</H1>\n\
-                 \<P>The requested URL was not found on this server.</P>\n\
-                 \</BODY></HTML>\n"
+resp404 :: (Monad m) => HttpReq -> HttpResp m
+resp404 req = mkHtmlResp stat404 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>404 Not Found</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>Not Found</H1>\n\
+                  \<P>The requested URL "
+                 , htmlEscape $ concatMap (('/':) . S8.unpack) (reqPathLst req)
+                 , L8.pack " was not found on this server.</P>\n\
+                           \</BODY></HTML>\n"]
+
+-- | Generate a 500 (internal server error) response.
+resp500 :: (Monad m) => String -> HttpResp m
+resp500 msg = mkHtmlResp stat500 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>500 Internal Server Error</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>Internal Server Error</H1>\n\
+                  \<P>"
+                 , htmlEscape msg
+                 , L8.pack "</P>\n</BODY></HTML>\n"]
 
 -- | Format and enumerate a response header and body.
 enumHttpResp :: (Monad m) =>
-                HttpResp m -> Onum L.ByteString m ()
-enumHttpResp resp = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
-    where fmtresp = L.append (fmtStat $ respStatus resp) hdrs
-          hdrs = foldr (L.append . hdr) (L8.pack "\r\n") $
-                 (if respChunk resp
-                  then ((S8.pack "Transfer-Encoding: chunked") :)
-                  else id)
-                 (respHeaders resp)
-          hdr h = L.fromChunks [h, S8.pack "\r\n"]
-          maybeChunk = if respChunk resp then inumToChunks else inumNop
+                HttpResp m
+             -> Maybe UTCTime   -- ^ Time for @Date:@ header (if desired)
+             -> Onum L.ByteString m ()
+enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
+    where
+      fmtresp = L.append (fmtStat $ respStatus resp) hdrs
+      hdrs = foldr (L.append . hdr) (L8.pack "\r\n") $
+             (if respChunk resp
+              then ((S8.pack "Transfer-Encoding: chunked") :)
+              else id) $
+             (maybe id (\t -> (S8.pack ("Date: " ++ http_fmt_time t) :)) mdate)
+             (respHeaders resp)
+      hdr h = L.fromChunks [h, S8.pack "\r\n"]
+      maybeChunk = if respChunk resp then inumToChunks else inumNop
 
 --
 -- Request routing
@@ -1010,6 +1045,9 @@ popPath isParm req =
 
 routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
 routeFn fn = HttpRoute $ Just . fn
+
+routeConst :: (Monad m) => HttpResp m -> HttpRoute m
+routeConst resp = HttpRoute $ const $ Just $ return resp
 
 routeTop :: HttpRoute m -> HttpRoute m
 routeTop (HttpRoute route) = HttpRoute $ \req ->
@@ -1052,6 +1090,28 @@ routeVar (HttpRoute route) = HttpRoute check
     where check req = case reqPathLst req of
                         _:_ -> route $ popPath True req
                         _   -> Nothing
+
+
+inumHttpServer :: (MonadIO m) =>
+                  HttpRoute m
+               -> Inum L.ByteString L.ByteString m ()
+inumHttpServer (HttpRoute route) = mkInumM loop
+    where
+      loop = do
+        eof <- atEOFI
+        unless eof doreq
+      doreq = do
+        req <- httpReqI
+        let respaction = fromMaybe (return $ resp404 req) $ route req
+        resp <- liftIterM $ inumHttpBody req .|
+                (catchI respaction handler <* nullI)
+        now <- liftIO getCurrentTime
+        catchOrI (irun $ enumHttpResp resp (Just now)) fatal (const $ loop)
+      handler e@(SomeException _) _ = do
+        liftIO $ hPutStrLn stderr $ "Response error: " ++ show e
+        return $ resp500 $ show e
+      fatal e@(SomeException _) = do
+        liftIO $ hPutStrLn stderr $ "Reply error: " ++ show e
 
 
 --
