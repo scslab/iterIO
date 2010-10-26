@@ -645,6 +645,8 @@ inumHttpBody req =
 -- Support for decoding form data
 --
 
+-- | Data structure representing the name and metadata of a control in
+-- a submitted form.
 data FormField = FormField {
       ffName :: !S.ByteString
     -- ^ Name of the form control being processed
@@ -673,12 +675,12 @@ defaultFormField = FormField {
 -- print it to standard output (without buffering possibly large file
 -- uploads in memory):
 --
--- >   do let docontrol _ field = do
--- >            liftIO $ putStr $
--- >                     "The value of " ++ (S8.unpack ffName field) ++ " is :"
--- >            stdoutI         -- Send form value to standard output
--- >            liftIO $ putStrLn "\n"
--- >      foldform req docontrol
+-- >  do let docontrol _ field = do
+-- >           liftIO $ putStrLn $
+-- >               "The value of " ++ (S8.unpack $ ffName field) ++ " is:"
+-- >           stdoutI                   -- Send form value to standard output
+-- >           liftIO $ putStrLn "\n"
+-- >     foldform req docontrol
 foldForm :: (Monad m) =>
             HttpReq
          -> (a -> FormField -> Iter L.ByteString m a)
@@ -895,14 +897,15 @@ data HttpResp m = HttpResp {
     -- ^ Headers to send back
     , respChunk :: !Bool
     -- ^ True if the message body should be passed through
-    -- 'inumToChunks' and a @Transfer-Encoding: chunked@ header should
-    -- be added.  Generally this should be 'True' unless you have
-    -- added a @Content-Length@ header (or manually set up chunk
-    -- encoding already).
+    -- 'inumToChunks' and a \"@Transfer-Encoding: chunked@\" header
+    -- should be added.  Generally this should be 'True' unless you
+    -- have added a @Content-Length@ header, manually set up chunk
+    -- encoding by fusing it in 'respBody', or are not returning a
+    -- message body with the reply.
     , respBody :: !(Onum L.ByteString m (Iter L.ByteString m ()))
-    -- ^ 'Onum' producing the message body (or just 'return' to
-    -- produce an empty body for responses that do not contain a
-    -- body).
+    -- ^ 'Onum' producing the message body.  Use 'return' (which is an
+    -- empty 'Inum', as described in the documentation of 'cat') to
+    -- produce an empty body for responses that do not contain a body.
     }
 
 respAddHeader :: S.ByteString -> HttpResp m -> HttpResp m
