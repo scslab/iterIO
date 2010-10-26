@@ -3,22 +3,22 @@
 
 module Main where
 
-import Prelude hiding (catch)
-import Control.Applicative
+import Prelude hiding (catch, head, id, div)
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
 import Control.Monad.Trans
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
-import qualified Data.ByteString.Lazy.Char8 as L8
+-- import qualified Data.ByteString.Lazy.Char8 as L8
+import Data.Monoid
 import qualified Network.Socket as Net
 import qualified OpenSSL as SSL
 import qualified OpenSSL.Session as SSL
 import System.Environment
 import System.IO
+import System.IO.Error (isDoesNotExistError)
 import System.Posix.Files
--- import Text.XHtml.Strict
 
 import Data.IterIO
 -- import Data.IterIO.Parse
@@ -55,8 +55,10 @@ httpAccept hs = do
       h <- Net.socketToHandle s ReadWriteMode
       hSetBuffering h NoBuffering
       return (handleI h, enumHandle h `inumFinally` liftIO (hClose h))
-    mkSecure s ctx = iterSSL ctx s True `catch` \e@(SomeException _) ->
-                     hPutStrLn stderr (show e) >> return (nullI, return)
+    mkSecure s ctx = iterSSL ctx s True `catch` \e@(SomeException _) -> do
+                       hPutStrLn stderr (show e)
+                       Net.sClose s
+                       return (nullI, return)
                   
 mkServer :: Net.PortNumber -> Maybe SSL.SSLContext -> IO HttpServer
 mkServer port mctx = do
@@ -64,60 +66,56 @@ mkServer port mctx = do
   h <- openBinaryFile "http.log" WriteMode
   hSetBuffering h NoBuffering
   return $ HttpServer sock mctx (Just h)
-  
 
-process_request :: (MonadIO m) => HttpReq -> Iter L m (HttpResp m)
-process_request req = do
+toPath :: [S8.ByteString] -> String
+toPath = concatMap (('/':) . S8.unpack)
+
+serve_cabal :: (MonadIO m) => HttpReq -> Iter L m (HttpResp m)
+serve_cabal req = do
   home <- liftIO $ getEnv "HOME"
-  let urlpath = concatMap (('/':) . S8.unpack) (reqPathLst req)
+  let urlpath = toPath (reqPathLst req)
   let path = home ++ "/.cabal/share/doc" ++ urlpath
-  resp <- defaultHttpResp
   estat <- liftIO $ try $ getFileStatus path
   case estat :: Either IOError FileStatus of
-    Left e -> return resp { respStatus = stat404
-                          , respHeaders = map S8.pack
-                                          ["Content-Type: text/plain"]
-                          , respBody = enumPure $ L8.pack (show e) }
+    Left e | isDoesNotExistError e -> return $ resp404 req
+    Left e                         -> return $ resp500 $ show e
     Right stat | isDirectory stat ->
-                   return resp { respStatus = stat301
-                               , respHeaders = map S8.pack
-                                 ["Location: " ++ urlpath ++ "/index.html"
-                                 , "Content-Type: text/plain"] }
+                   return $ resp301 $ toPath $
+                          reqPathCtx req ++ reqPathLst req ++ ["index.html"]
     _ -> do
        h <- liftIO $ openBinaryFile path ReadMode
-       return resp { respStatus = stat200
-                   , respHeaders = [S8.pack "Content-Type: text/html"]
-                   , respBody = \i -> enumNonBinHandle h i
-                                `finallyI` liftIO (hClose h) }
+       return (defaultHttpResp :: HttpResp IO) {
+                     respStatus = stat200
+                   , respHeaders = [contentType path]
+                   , respBody = enumNonBinHandle h
+                                `inumFinally` liftIO (hClose h) }
 
-handle_connection :: Iter L IO () -> Onum L IO () -> IO ()
-handle_connection iter0 enum = enum |$ reqloop iter0
-    where
-      reqloop iter = do
-        eof <- atEOFI
-        unless eof $ doreq iter
-      doreq iter = do
-        req <- httpreqI
-        -- liftIO $ print req
-        resp <- handlerI bail $
-                inumHttpbody req .| (process_request req <* nullI)
-        -- liftIO $ print resp
-        runI (enumHttpResp resp iter) >>= reqloop
-      bail e@(SomeException _) _ = do
-        liftIO $ hPutStrLn stderr $ "Error: " ++ show e
-        resp0 <- defaultHttpResp
-        let resp = resp0 {
-                     respStatus = stat500
-                   , respHeaders = [S8.pack "Content-Type: text/plain"]
-                   , respBody = enumPure $ L8.pack $ show e ++ "\r\n"
-                   }
-        liftIO $ print resp
-        liftIO $ print e
-        return resp
+fileExt :: String -> String
+fileExt str = case dropWhile (/= '.') str of
+                []  -> str
+                _:t -> fileExt t
+
+contentType :: String -> S8.ByteString
+contentType file = S8.pack $ "Content-Type: " ++
+                   case fileExt file of
+                     "css"  -> "text/css"
+                     "png"  -> "image/png"
+                     "gif"  -> "image/gif"
+                     "jpg"  -> "image/jpeg"
+                     "jpeg" -> "image/jpeg"
+                     "pdf " -> "application/pdf"
+                     _      -> "text/html"
 
 accept_loop :: HttpServer -> IO ()
 accept_loop srv = loop
-    where loop = httpAccept srv >>= forkIO . uncurry handle_connection >> loop
+    where
+      loop = do
+        (iter, enum) <- httpAccept srv
+        _ <- forkIO $ enum |$ inumHttpServer route .| iter
+        loop
+      route = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
+                      , routeName "cabal" $ routeFn serve_cabal
+                      ]
 
 main :: IO ()
 main = Net.withSocketsDo $ SSL.withOpenSSL $ do

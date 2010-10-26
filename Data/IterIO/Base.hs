@@ -74,8 +74,9 @@ module Data.IterIO.Base
     , IterNoParse(..), IterEOF(..), mkIterEOF, isIterEOF
     , IterExpected(..), IterMiscParseErr(..)
     , throwI, throwEOFI
-    , tryI, tryBI, catchI, finallyI, catchOrI, catchBI, handlerI, handlerBI
-    , inumCatch, inumFinally, inumHandler
+    , tryI, tryBI, catchI, finallyI, onExceptionI, catchOrI
+    , catchBI, handlerI, handlerBI
+    , inumCatch, inumFinally, inumOnException, inumHandler
     , resumeI, verboseResumeI, mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
@@ -834,7 +835,14 @@ catchI iter0 handler = finishI iter0 >>= check
 -- standard library funciton @'finally'@.
 finallyI :: (ChunkData t, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m a
-finallyI iter0 cleanup = finishI iter0 >>= (cleanup >>)
+finallyI iter cleanup = finishI iter >>= (cleanup >>)
+
+-- | Execute an 'Iter' and perform a cleanup action if the 'Iter'
+-- threw an exception.  Analogous to the standard library funciton
+-- @'onException'@.
+onExceptionI :: (ChunkData t, Monad m) =>
+                Iter t m a -> Iter t m b -> Iter t m a
+onExceptionI iter cleanup = catchI iter $ \(SomeException _) -> (cleanup >>)
 
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception
@@ -945,6 +953,13 @@ inumCatch enum handler = finishI . enum >=> check
 inumFinally :: (ChunkData tIn, Monad m) =>
                Inum tIn tOut m a -> Iter tIn m b -> Inum tIn tOut m a
 inumFinally inum cleanup iter = inum iter `finallyI` cleanup
+
+-- | Execute some cleanup action if an 'Inum' fails.  Does not execute
+-- the action if the 'Iter' (or some inner 'Inum') fails.  Has the
+-- same scoping rules as 'inumCatch'.
+inumOnException :: (ChunkData tIn, Monad m) =>
+               Inum tIn tOut m a -> Iter tIn m b -> Inum tIn tOut m a
+inumOnException inum cleanup iter = inum iter `onExceptionI` cleanup
 
 -- | 'inumCatch' with the argument order switched.
 inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
@@ -1638,3 +1653,7 @@ traceI :: (ChunkData t, Monad m) => String -> Iter t m ()
 traceI msg = return $ inlinePerformIO $ do
                tid <- myThreadId
                putTraceMsg $ show tid ++ ": " ++ msg
+
+-- Local Variables:
+-- haskell-program-name: "ghci -lz"
+-- End:

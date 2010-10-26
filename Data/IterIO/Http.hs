@@ -3,35 +3,46 @@
 
 module Data.IterIO.Http (-- * HTTP Request support
                          HttpReq(..)
-                        , httpreqI, inumHttpbody
+                        , httpReqI, inumHttpBody
                         , inumToChunks, inumFromChunks
-                        , comment, qvalue
                         , http_fmt_time, dateI
-                        , urlencodedFormI
-                        , Multipart(..), multipartI, inumMultipart
-                        , foldForm, foldUrlencoded, foldMultipart, foldQuery
+                        , FormField(..), foldForm
+                        -- , urlencodedFormI, multipartI, inumMultipart
+                        -- , foldUrlencoded, foldMultipart, foldQuery
                         -- * HTTP Response support
-                        , HttpStatus(..), HttpResp(..), defaultHttpResp
-                        , stat100, stat200, stat301
-                        , stat400, stat404, stat500
+                        , HttpStatus(..)
+                        , stat100, stat200, stat301, stat302, stat303, stat304
+                        , stat400, stat401, stat403, stat404, stat500, stat501
+                        , HttpResp(..), defaultHttpResp
+                        , mkHttpHead, mkHtmlResp
+                        , resp301, resp404, resp500
                         , enumHttpResp
-                        -- * For debugging
-                        , postReq, encReq, mptest, mptest'
-                        , formTestMultipart, formTestUrlencoded
+                        -- * For routing
+                        , HttpRoute(..)
+                        , routeConst, routeFn
+                        , routeMethod, routeHost, routeTop
+                        , HttpMap, routeMap, routeName, routeVar
+                        , inumHttpServer
+                        -- -- * For debugging
+                        -- , postReq, encReq, mptest, mptest'
+                        -- , formTestMultipart, formTestUrlencoded
                         ) where
 
+import Control.Exception (SomeException(..))
 import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.Trans
 import Data.Array.Unboxed
 import Data.Bits
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.Maybe
+import Data.Monoid
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.ByteString.Internal (w2c, c2w)
-import Data.Map (Map)
-import qualified Data.Map as Map
 -- import Data.Bits
 import Data.Char
 import Data.Int
@@ -40,6 +51,7 @@ import Data.Time
 import Data.Typeable
 import Data.Word
 import System.Locale
+import System.IO
 import Text.Printf
 
 import Data.IterIO
@@ -163,6 +175,7 @@ quoted_string = do char '"'
                    char '"'
                    return $ strictify ret
 
+{-
 -- | 'text' and 'quoted_pair's surrounded by parentheses.
 comment :: (Monad m) => Iter L m L
 comment = char '('
@@ -182,6 +195,7 @@ qvalue = do char 'q'; olws; char '='; olws; frac <|> one
                optional $ do char '.'
                              optional $ whileMinMaxI 0 3 (== eord '0')
                return 1000
+-}
 
 parameter :: (Monad m) => Iter L m (S, S)
 parameter = do
@@ -195,6 +209,7 @@ parameter = do
 -- Date/time
 --
 
+-- | Formats a time in the format specified by RFC 2616.
 http_fmt_time :: UTCTime -> String
 http_fmt_time = formatTime defaultTimeLocale "%a, %_d %b %Y %H:%M:%S GMT"
 
@@ -281,7 +296,9 @@ asctime_time = do
               , localTimeOfDay = tod
               }
 
-dateI :: (Monad m) => Iter L m UTCTime
+-- | Parses a Date/Time string in any one of the three formats
+-- specified by RFC 2616.
+dateI :: (Monad m) => Iter L.ByteString m UTCTime
 dateI = rfc822_time <|> rfc850_time <|> asctime_time <?> "HTTP date/time"
 
 --
@@ -334,7 +351,8 @@ isUnreserved c = rfc3986_syntax ! c .&. rfc3986_unreserved /= 0
 hostI :: (Monad m) => Iter L m (S, Maybe Int)
 hostI = (,) <$> host <*> (Just <$> port <|> return Nothing) <?> "host"
     where
-      host = strictify <$> (bracketed <|> percent_decode regnamechar)
+      host = S8.map toLower <$> strictify <$>
+             (bracketed <|> percent_decode regnamechar)
       port = do _ <- char ':'; whileI (isDigit . w2c) >>= readI
       regnamechar c = (rfc3986_syntax ! c
                        .&. (rfc3986_unreserved .|. rfc3986_sub_delims)) /= 0
@@ -396,28 +414,55 @@ path2list path = runIdentity $ enumPure path |$
 -- HTTP request and header parsing
 --
 
+-- | Data structure representing an HTTP request message.
 data HttpReq = HttpReq {
-      reqMethod :: !S           -- ^ Method (e.g., GET, POST, ...)
-    , reqPath :: !S             -- ^ Path from URL
-    , reqPathLst :: ![S]        -- ^ List of filenames in path
-    , reqPathParms :: ![S]      -- ^ Can be used to save parameters from path
-    , reqPathCtx :: ![S]        -- ^ Can be used to store popped filenames
-    , reqQuery :: !S            -- ^ Part of URL after ?
-    , reqHost :: !S             -- ^ Host header (or from reqline if has absUri)
-    , reqPort :: !(Maybe Int)   -- ^ Port if supplied in Host header
-    , reqVers :: !(Int, Int)    -- ^ HTTP version number from reqline
-    , reqHeaders :: ![(S, S)]   -- ^ Headers, with field names lowercased
-    , reqCookies :: ![(S, S)]   -- ^ Cookies
-    , reqContentType :: !(Maybe (S, [(S,S)])) -- ^ Content-Type + parms
-    , reqContentLength :: !(Maybe Int)        -- ^ Content-Length header
-    , reqTransferEncoding :: ![S]
+      reqMethod :: !S.ByteString
+    -- ^ Method (e.g., GET, POST, ...).
+    , reqPath :: !S.ByteString
+    -- ^ Raw path from the URL (not needed if you use @reqPathList@
+    -- and @reqPathParams@).
+    , reqPathLst :: ![S.ByteString]
+    -- ^ URL request path, broken into a list of directory components,
+    -- and normalized to remove @\".\"@ and process @\"..\"@.
+    , reqPathParams :: ![S.ByteString]
+    -- ^ Used by 'routeVar' to save pathname components that are
+    -- variables (used as a stack, so the last variable saved is the
+    -- first one in the list).
+    , reqPathCtx :: ![S.ByteString]
+    -- ^ Stores pathname components that have been stripped off of
+    -- @reqPathLst@ during routing.
+    , reqQuery :: !S.ByteString
+    -- ^ The portion of the URL after the @?@ character (if any).
+    , reqHost :: !S.ByteString
+    -- ^ Lower-case host header (or the host from the request line, if
+    -- the request is for an absolute URI).
+    , reqPort :: !(Maybe Int)
+    -- ^ Port number if supplied in Host header.
+    , reqVers :: !(Int, Int)
+    -- ^ HTTP version major and minor number from the request line.
+    , reqHeaders :: ![(S.ByteString, S.ByteString)]
+    -- ^ List of all header field names and values in the HTTP
+    -- request.  Field names are converted to lowercase to allow
+    -- easier searching.
+    , reqCookies :: ![(S.ByteString, S.ByteString)]
+    -- ^ List of Cookies supplied in the request.
+    , reqContentType :: !(Maybe (S.ByteString, [(S.ByteString,S.ByteString)]))
+    -- ^ Parsed version of the Content-Type header, if any.  The first
+    -- 'S.ByteString' is the actual content type.  Following this is a
+    -- list of parameter names and values.  The most useful parameter
+    -- is @\"boundary\"@, used with the @multipart/form-data@ content
+    -- type.
+    , reqContentLength :: !(Maybe Int)
+    -- ^ Value of the content-Length header, if any.
+    , reqTransferEncoding :: ![S.ByteString]
+    -- ^ A list of the encodings in the Transfer-Encoding header.
     } deriving (Typeable, Show)
 
 defaultHttpReq :: HttpReq
 defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqPath = S.empty
                          , reqPathLst = []
-                         , reqPathParms = []
+                         , reqPathParams = []
                          , reqPathCtx = []
                          , reqQuery = S.empty
                          , reqHost = S.empty
@@ -527,8 +572,9 @@ any_hdr req = do
                       <?> (S8.unpack field ++ " header"))
       return r
 
-httpreqI :: Monad m => Iter L m HttpReq
-httpreqI = do
+-- | Parse an HTTP header, returning an 'HttpReq' data structure.
+httpReqI :: Monad m => Iter L.ByteString m HttpReq
+httpReqI = do
   -- Section 4.1 of RFC2616:  "In the interest of robustness, servers
   -- SHOULD ignore any empty line(s) received where a Request-Line is
   -- expected. In other words, if the server is reading the protocol
@@ -544,8 +590,8 @@ httpreqI = do
 -- Chunk encoding and decoding (RFC 2616)
 --
 
--- | HTTP Chunk encoder
-inumToChunks :: (Monad m) => Inum L L m a
+-- | An HTTP Chunk encoder (as specified by RFC 2616).
+inumToChunks :: (Monad m) => Inum L.ByteString L.ByteString m a
 inumToChunks = mkInumM loop
     where
       loop = do
@@ -558,8 +604,8 @@ inumToChunks = mkInumM loop
         ifeed $ L8.concat [chunksize, s, trailer]
         unless eof loop
 
--- | HTTP Chunk decoder
-inumFromChunks :: (Monad m) => Inum L L m a
+-- | An HTTP Chunk decoder (as specified by RFC 2616).
+inumFromChunks :: (Monad m) => Inum L.ByteString L.ByteString m a
 inumFromChunks = mkInumM $ getchunk
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
@@ -572,27 +618,82 @@ inumFromChunks = mkInumM $ getchunk
                       skipMany (noctl >> crlf)
                       skipI crlf
 
-inumHttpbody :: (MonadIO m) => HttpReq -> Inum L L m a
-inumHttpbody req =
+
+-- | This 'Inum' reads to the end of an HTTP message body (and not
+-- beyond) and decodes the Transfer-Encoding.  It handles straight
+-- content of a size specified by the Content-Length header,
+-- chunk-encoded content, and content that has been gzipped then
+-- chunk-encoded.
+inumHttpBody :: (MonadIO m) => HttpReq -> Inum L.ByteString L.ByteString m a
+inumHttpBody req =
     case reqTransferEncoding req of
-      []                              -> notc
-      [tc] | tc == S8.pack "identity" -> notc
-      [tc]                            -> tclookup tc
-      tclist                          -> tcfold tclist
+      lst | null lst || lst == [S8.pack "identity"] ->
+              if hasclen then inumTakeExact (fromJust $ reqContentLength req)
+                         else return -- No message body present
+      lst | lst == [S8.pack "chunked"] -> inumFromChunks
+      lst -> inumFromChunks |. tcfold (reverse lst)
     where
-      tclookup :: (MonadIO m) => S -> Inum L L m a
-      tclookup tc
-          | tc == S8.pack "identity" = inumNop
-          | tc == S8.pack "chunked"  = inumFromChunks
-          | tc == S8.pack "gzip"     = inumGunzip
-          | otherwise = mkInum $ fail "unknown Transfer-Coding " $ chunkShow tc
-      tcfold [a, b] = tclookup a |. tclookup b
-      tcfold (h:t)  = tclookup h |. tcfold t
-      tcfold _      = error "inumHttpbody"
-      notc = maybe nocl inumTakeExact $ reqContentLength req
-      nocl = case lookup (S8.pack "connection") $ reqHeaders req of
-               Just c | c == S8.pack "close" -> inumNop
-               _                             -> return -- assume no body
+      hasclen = isJust $ reqContentLength req
+      tcfold [] = inumNop
+      tcfold (h:t) 
+          | h == S8.pack "identity" = tcfold t
+          | h == S8.pack "chunked"  = tcfold t -- Has to be first one
+          | h == S8.pack "gzip"     = inumGunzip |. tcfold t
+          | otherwise = mkInum $ fail $ "unknown Transfer-Coding "
+                        ++ chunkShow h
+
+--
+-- Support for decoding form data
+--
+
+-- | Data structure representing the name and metadata of a control in
+-- a submitted form.
+data FormField = FormField {
+      ffName :: !S.ByteString
+    -- ^ Name of the form control being processed
+    , ffParams :: ![(S.ByteString, S.ByteString)]
+    -- ^ Parameters from the @Content-Disposition:@ header.  This only
+    -- applies to @Content-Type: multipart/form-data@, and will be
+    -- empty for forms of type application/x-www-form-urlencoded or
+    -- forms submitted in the URL parameters of a GET request.
+    , ffHeaders :: ![(S.ByteString, S.ByteString)]
+    -- ^ Extra headers following the @Content-Disposition:@ header of
+    -- a @multipart/form-data@ post.  Empty for other kinds of form
+    -- submission.
+    } deriving (Show)
+
+defaultFormField :: FormField
+defaultFormField = FormField {
+                     ffName = S.empty
+                   , ffParams = []
+                   , ffHeaders = []
+                   }
+
+-- | Parses a form, and folds a function over each control.  The value
+-- of each control is available through Iteratee input.  Thus, you can
+-- extract the submitted value with 'pureI', or redirect it elsewhere
+-- by executing another 'Iter'.  For example, to parse a form and
+-- print it to standard output (without buffering possibly large file
+-- uploads in memory):
+--
+-- >  do let docontrol _ field = do
+-- >           liftIO $ putStrLn $
+-- >               "The value of " ++ (S8.unpack $ ffName field) ++ " is:"
+-- >           stdoutI                   -- Send form value to standard output
+-- >           liftIO $ putStrLn "\n"
+-- >     foldform req docontrol
+foldForm :: (Monad m) =>
+            HttpReq
+         -> (a -> FormField -> Iter L.ByteString m a)
+         -> a
+         -> Iter L.ByteString m a
+foldForm req = case reqContentType req of
+                 Nothing -> foldQuery req
+                 Just (mt, _) | mt == urlencoded -> foldUrlencoded req
+                 Just (mt, _) | mt == multipart  -> foldMultipart req
+                 _ -> \_ _ -> throwI $ IterMiscParseErr $
+                      "foldForm: invalid Content-Type"
+
 
 --
 -- application/x-www-form-urlencoded decoding
@@ -652,18 +753,20 @@ controlI = flip (<?>) "form control NAME=VALUE" $ do
                someI (percent_decode (urlencTab !))
                <|> L8.singleton ' ' <$ char '+'
 
+{-
 urlencodedFormI :: (Monad m) => Iter L m [(S,S)]
 urlencodedFormI = sepBy controlI (char '&')
+-}
 
-foldControls :: (Monad m) => (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+foldControls :: (Monad m) => (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldControls f z =
     controlI \/ return z $ \(k, v) ->
     enumPure (L.fromChunks [v]) .|
-             f z defaultMultipart { mpName = k } `inumBind` \a ->
+             f z defaultFormField { ffName = k } `inumBind` \a ->
     char '&' \/ return a $ \_ -> foldControls f a
 
 foldUrlencoded :: (Monad m) =>
-                  HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+                  HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldUrlencoded req f z =
     case reqContentLength req of
       Just len -> inumTakeExact len .| foldControls f z
@@ -671,7 +774,7 @@ foldUrlencoded req f z =
                   "foldUrlencoded: Missing Content-legth"
 
 foldQuery :: (Monad m) =>
-             HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+             HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldQuery req f z = enumPure (L.fromChunks [reqQuery req]) .| foldControls f z
 
 --
@@ -698,26 +801,13 @@ bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
 multipart :: S
 multipart = S8.pack "multipart/form-data"
 
-data Multipart = Multipart {
-      mpName :: !S
-    , mpParams :: ![(S, S)]
-    , mpHeaders :: ![(S, S)]
-    } deriving (Show)
-
-defaultMultipart :: Multipart
-defaultMultipart = Multipart {
-                     mpName = S.empty
-                   , mpParams = []
-                   , mpHeaders = []
-                   }
-
 reqBoundary :: HttpReq -> Maybe S
 reqBoundary req = case reqContentType req of
                     Just (typ, parms) | typ == multipart ->
                                           lookup (S8.pack "boundary") parms
                     _ -> Nothing
 
-multipartI :: (Monad m) => HttpReq -> Iter L m (Maybe (Multipart))
+multipartI :: (Monad m) => HttpReq -> Iter L m (Maybe (FormField))
 multipartI req = case reqBoundary req of
                    Just b  -> findpart $ S8.pack "--" `S8.append` b
                    Nothing -> return Nothing
@@ -737,10 +827,10 @@ multipartI req = case reqBoundary req of
                      (olws >> char ';')
       hdrs <- many hdr_field_val
       crlf
-      return Multipart {
-                   mpName = maybe S.empty id $ lookup (S8.pack "name") parms
-                 , mpParams = parms
-                 , mpHeaders = cdhdr:hdrs
+      return FormField {
+                   ffName = maybe S.empty id $ lookup (S8.pack "name") parms
+                 , ffParams = parms
+                 , ffHeaders = cdhdr:hdrs
                  }
 
 inumMultipart :: (Monad m) => HttpReq -> Inum L L m a
@@ -754,7 +844,7 @@ inumMultipart req iter = flip mkInumM (iter <* nullI) $ do
                Nothing -> throwI $ IterMiscParseErr "inumMultipart: no parts"
 
 foldMultipart :: (Monad m) =>
-                 HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
+                 HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldMultipart req f z = multipartI req >>= doPart
     where
       doPart Nothing = return z
@@ -764,23 +854,14 @@ foldMultipart req f z = multipartI req >>= doPart
 
 
 --
--- Fold either type of form
---
-
-foldForm :: (Monad m) =>
-            HttpReq -> (a -> Multipart -> Iter L m a) -> a -> Iter L m a
-foldForm req = case reqContentType req of
-                 Nothing -> foldQuery req
-                 Just (mt, _) | mt == urlencoded -> foldUrlencoded req
-                 Just (mt, _) | mt == multipart  -> foldMultipart req
-                 _ -> \_ _ -> throwI $ IterMiscParseErr $
-                      "foldForm: invalid Content-Type"
-
---
 -- HTTP Response support
 --
 
-data HttpStatus = HttpStatus !Int !S deriving Show
+-- | HTTP status code and text description of response, for the first
+-- line of an HTTP response message.  A bunch of pre-defined statuses
+-- from RFC 2616 are supplied under the names 'stat200', 'stat404',
+-- 'stat500', etc.
+data HttpStatus = HttpStatus !Int !S.ByteString deriving Show
 
 mkStat :: Int -> String -> HttpStatus
 mkStat n s = HttpStatus n $ S8.pack s
@@ -790,39 +871,301 @@ fmtStat (HttpStatus n s) = L.fromChunks [
                             S8.pack $ "HTTP/1.1 " ++ show n ++ " "
                            , s, S8.pack "\r\n"]
 
-stat100, stat200, stat301, stat400, stat404, stat500 :: HttpStatus
+stat100, stat200
+           , stat301, stat302, stat303, stat304
+           , stat400, stat401, stat403, stat404
+           , stat500, stat501 :: HttpStatus
 stat100 = mkStat 100 "Continue"
 stat200 = mkStat 200 "OK"
 stat301 = mkStat 301 "Moved Permanently"
+stat302 = mkStat 302 "Found"
+stat303 = mkStat 303 "See Other"
+stat304 = mkStat 304 "Not Modified"
 stat400 = mkStat 400 "Bad Request"
+stat401 = mkStat 401 "Unauthorized"
+stat403 = mkStat 403 "Forbidden"
 stat404 = mkStat 404 "Not Found"
 stat500 = mkStat 500 "Internal Server Error"
+stat501 = mkStat 501 "Not Implemented"
 
+-- | A data structure describing an HTTP response message to be sent,
+-- parameterized by the Monad in which the response will be written to
+-- the network.
 data HttpResp m = HttpResp {
       respStatus :: !HttpStatus
-    , respHeaders :: ![S]
-    , respBody :: !(Onum L m (Iter L m ()))
+    -- ^ The response status.
+    , respHeaders :: ![S.ByteString]
+    -- ^ Headers to send back
+    , respChunk :: !Bool
+    -- ^ True if the message body should be passed through
+    -- 'inumToChunks' and a \"@Transfer-Encoding: chunked@\" header
+    -- should be added.  Generally this should be 'True' unless you
+    -- have added a @Content-Length@ header, manually set up chunk
+    -- encoding by fusing it in 'respBody', or are not returning a
+    -- message body with the reply.
+    , respBody :: !(Onum L.ByteString m (Iter L.ByteString m ()))
+    -- ^ 'Onum' producing the message body.  Use 'return' (which is an
+    -- empty 'Inum', as described in the documentation of 'cat') to
+    -- produce an empty body for responses that do not contain a body.
     }
+
+respAddHeader :: S.ByteString -> HttpResp m -> HttpResp m
+respAddHeader hdr resp = resp { respHeaders = hdr : respHeaders resp }
 
 instance Show (HttpResp m) where
     showsPrec _ resp rest = "HttpResp (" ++ show (respStatus resp)
                             ++ ") " ++ show (respHeaders resp) ++ rest
 
-defaultHttpResp :: (ChunkData t, Monad m) => Iter t m (HttpResp m)
-defaultHttpResp = return $ HttpResp { respStatus = stat200
-                                    , respHeaders = []
-                                    , respBody = return
-                                    }
+-- | An empty HTTP response, to which you must add headers and
+-- possibly a message body.
+defaultHttpResp :: (Monad m) => HttpResp m
+defaultHttpResp = HttpResp { respStatus = stat200
+                           , respHeaders = []
+                           , respChunk = True
+                           , respBody = return
+                           }
 
+-- | Generate an 'HttpResp' without a body.
+mkHttpHead :: (Monad m) => HttpStatus -> HttpResp m
+mkHttpHead stat = HttpResp { respStatus = stat
+                           , respHeaders = []
+                           , respChunk = False
+                           , respBody = return }
+
+-- | Generate an 'HttpResp' with a body of type @text/html@.
+mkHtmlResp :: (Monad m) =>
+              HttpStatus
+           -> L.ByteString      -- ^ Body as a pure lazy 'L.ByteString'
+           -> HttpResp m
+mkHtmlResp stat html = resp
+    where resp0 = mkHttpHead stat `asTypeOf` resp
+          ctype = S8.pack "Content-Type: text/html"
+          len = S8.pack $ "Content-Length: " ++ show (L8.length html)
+          resp  = resp0 { respHeaders = respHeaders resp0 ++ [ctype, len]
+                        , respBody = enumPure html
+                        }
+
+htmlEscapeChar :: Char -> Maybe String
+htmlEscapeChar '<'  = Just "&lt;"
+htmlEscapeChar '>'  = Just "&gt;"
+htmlEscapeChar '&'  = Just "&amp;"
+htmlEscapeChar '"'  = Just "&quot;"
+htmlEscapeChar '\'' = Just "&amp;"
+htmlEscapeChar _   = Nothing
+
+htmlEscape :: String -> L.ByteString
+htmlEscape str = L8.unfoldr next (str, "")
+    where
+      next (s, h:t)  = Just (h, (s, t))
+      next (h:t, "") = maybe (Just (h, (t, ""))) (curry next t) $
+                       htmlEscapeChar h
+      next ("", "")  = Nothing
+
+-- | Generate a 301 (redirect) response
+resp301 :: (Monad m) => String -> HttpResp m
+resp301 target =
+    respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat301 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>301 Moved Permanently</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>Moved Permanently</H1>\n\
+                  \<P>The document has moved <A HREF=\""
+                 , htmlEscape target
+                 , L8.pack "\">here</A>.</P>\n"]
+
+
+-- | Generate a 404 (not found) response.
+resp404 :: (Monad m) => HttpReq -> HttpResp m
+resp404 req = mkHtmlResp stat404 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>404 Not Found</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>Not Found</H1>\n\
+                  \<P>The requested URL "
+                 , htmlEscape $ concatMap (('/':) . S8.unpack) (reqPathLst req)
+                 , L8.pack " was not found on this server.</P>\n\
+                           \</BODY></HTML>\n"]
+
+-- | Generate a 500 (internal server error) response.
+resp500 :: (Monad m) => String -> HttpResp m
+resp500 msg = mkHtmlResp stat500 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>500 Internal Server Error</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>Internal Server Error</H1>\n\
+                  \<P>"
+                 , htmlEscape msg
+                 , L8.pack "</P>\n</BODY></HTML>\n"]
+
+-- | Format and enumerate a response header and body.
 enumHttpResp :: (Monad m) =>
-                HttpResp m -> Onum L m ()
-enumHttpResp resp = enumPure fmtresp `cat` (respBody resp |. inumToChunks)
-    where fmtresp :: L
-          fmtresp = L.append (fmtStat $ respStatus resp) hdrs
-          hdrs = foldr (L.append . hdr)
-                 (L8.pack "Transfer-Encoding: chunked\r\n\r\n")
-                 (respHeaders resp)
-          hdr h = L.fromChunks [h, S8.pack "\r\n"]
+                HttpResp m
+             -> Maybe UTCTime   -- ^ Time for @Date:@ header (if desired)
+             -> Onum L.ByteString m ()
+enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
+    where
+      fmtresp = L.append (fmtStat $ respStatus resp) hdrs
+      hdrs = foldr (L.append . hdr) (L8.pack "\r\n") $
+             (if respChunk resp
+              then ((S8.pack "Transfer-Encoding: chunked") :)
+              else id) $
+             (maybe id (\t -> (S8.pack ("Date: " ++ http_fmt_time t) :)) mdate)
+             (respHeaders resp)
+      hdr h = L.fromChunks [h, S8.pack "\r\n"]
+      maybeChunk = if respChunk resp then inumToChunks else inumNop
+
+--
+-- Request routing
+--
+
+-- | Simple HTTP request routing structure for 'inumHttpServer'.  This
+-- is a wrapper around a function on 'HttpReq' structures.  If the
+-- function accepts the 'HttpReq', it returns 'Just' a response
+-- action.  Otherwise it returns 'Nothing'.
+--
+-- @HttpRoute@ is a 'Monoid', and hence can be concatenated with
+-- 'mappend' or 'mconcat'.  For example, you can say something like:
+--
+-- > simpleServer :: Iter L.ByteString IO ()  -- Output to web browser
+-- >              -> Onum L.ByteString IO ()  -- Input from web browser
+-- >              -> IO ()
+-- > simpleServer iter enum = enum |$ inumHttpServer routing .| iter
+-- >     where routing = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
+-- >                             , routeName "cabal" $ routeFn serve_cabal
+-- >                             ]
+--
+-- The above function will redirect requests for @/@ to the URL
+-- @/cabal@ using an HTTP 301 (Moved Permanently) response.  Any
+-- request for a path under @/cabal/@ will then have the first
+-- component (@\"cabal\"@) stripped from 'reqPathLst', have that same
+-- component added to 'reqPathCtx', and finally be routed to the
+-- function @serve_cabal@.
+data HttpRoute m = HttpRoute {
+      runHttpRoute :: !(HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
+    }
+
+instance Monoid (HttpRoute m) where
+    mempty = HttpRoute $ const Nothing
+    mappend (HttpRoute a) (HttpRoute b) =
+        HttpRoute $ \req -> a req `mplus` b req
+
+popPath :: Bool -> HttpReq -> HttpReq
+popPath isParm req =
+    case reqPathLst req of
+      h:t -> req { reqPathLst = t
+                 , reqPathCtx = reqPathCtx req ++ [h]
+                 , reqPathParams = if isParm then h : reqPathParams req
+                                             else reqPathParams req
+                 }
+      _   -> error "Data.IterIO.Http.popPath: empty path"
+
+-- | Route all requests to a constant response action that does not
+-- depend on the request.  This route always succeeds, so anything
+-- 'mappend'ed will never be used.
+routeConst :: (Monad m) => HttpResp m -> HttpRoute m
+routeConst resp = HttpRoute $ const $ Just $ return resp
+
+-- | Route all requests to a particular function.  This route always
+-- succeeds, so anything 'mappend'ed will never be used.
+routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
+routeFn fn = HttpRoute $ Just . fn
+
+-- | Route the root directory (/).
+routeTop :: HttpRoute m -> HttpRoute m
+routeTop (HttpRoute route) = HttpRoute $ \req ->
+                             if null $ reqPathLst req then route req
+                             else Nothing
+
+-- | Route requests whose \"Host:\" header matches a particular
+-- string.
+routeHost :: String -- ^ String to compare against host (must be lower-case)
+          -> HttpRoute m   -- ^ Target route to follow if host matches
+          -> HttpRoute m
+routeHost host (HttpRoute route) = HttpRoute check
+    where shost = S8.pack $ map toLower host
+          check req | reqHost req /= shost = Nothing
+                    | otherwise            = route req
+
+-- | Route based on the method (GET, POST, etc.) in a request.
+routeMethod :: String           -- ^ String method should match
+            -> HttpRoute m      -- ^ Target route to take if method matches
+            -> HttpRoute m
+routeMethod method (HttpRoute route) = HttpRoute check
+    where smethod = S8.pack method
+          check req | reqMethod req /= smethod = Nothing
+                    | otherwise                = route req
+
+-- | Type alias for the argument of 'routeMap'.
+type HttpMap m = [(String, HttpRoute m)]
+
+-- | @routeMap@ builds an efficient map out of a list of
+-- @(directory_name, 'HttpRoute')@ pairs.
+routeMap :: HttpMap m -> HttpRoute m
+routeMap lst = HttpRoute check
+    where
+      check req = case reqPathLst req of
+                    h:_ -> maybe Nothing
+                           (\(HttpRoute route) -> route $ popPath False req)
+                           (Map.lookup h rmap)
+                    _   -> Nothing
+      packfirst (a, b) = (S8.pack a, b)
+      rmap = Map.fromListWithKey nocombine $ map packfirst lst
+      nocombine k _ _ = error $ "routeMap: duplicate key for " ++ S8.unpack k
+
+-- | Routes a specific directory name, like 'routeMap' for a singleton
+-- map.
+routeName :: String -> HttpRoute m -> HttpRoute m
+routeName name (HttpRoute route) = HttpRoute check
+    where sname = S8.pack name
+          headok (h:_) | h == sname = True
+          headok _                  = False
+          check req | headok (reqPathLst req) = route $ popPath False req
+          check _                             = Nothing
+
+-- | Matches any directory name, but additionally pushes it onto the
+-- front of the 'reqPathParams' list in the 'HttpReq' structure.  This
+-- allows the name to serve as a variable argument to the eventual
+-- handling function.
+routeVar :: HttpRoute m -> HttpRoute m
+routeVar (HttpRoute route) = HttpRoute check
+    where check req = case reqPathLst req of
+                        _:_ -> route $ popPath True req
+                        _   -> Nothing
+
+-- | An 'Inum' that behaves like an HTTP server.  See 'HttpRoute' for
+-- a simple usage example.
+inumHttpServer :: (MonadIO m) =>
+                  HttpRoute m
+               -> Inum L.ByteString L.ByteString m ()
+inumHttpServer (HttpRoute route) = mkInumM loop
+    where
+      loop = do
+        eof <- atEOFI
+        unless eof doreq
+      doreq = do
+        req <- httpReqI
+        let respaction = fromMaybe (return $ resp404 req) $ route req
+        resp <- liftIterM $ inumHttpBody req .|
+                (catchI respaction handler <* nullI)
+        now <- liftIO getCurrentTime
+        catchOrI (irun $ enumHttpResp resp (Just now)) fatal (const $ loop)
+      handler e@(SomeException _) _ = do
+        liftIO $ hPutStrLn stderr $ "Response error: " ++ show e
+        return $ resp500 $ show e
+      fatal e@(SomeException _) = do
+        liftIO $ hPutStrLn stderr $ "Reply error: " ++ show e
+
+
+{-
 
 --
 -- Everything below here is crap for testing
@@ -832,7 +1175,7 @@ formTest :: L -> IO ()
 formTest b = enumPure b |$ handleReq
  where
   handleReq = do
-    req <- httpreqI
+    req <- httpReqI
     parts <- foldForm req getPart []
     liftIO $ putStrLn $ "### Summary\n" ++ show parts
   getPart result mp = do
@@ -850,7 +1193,7 @@ formTestUrlencoded = formTest postReqUrlencoded
 {-
 dumpCtl :: () -> Multipart -> Iter L IO ()
 dumpCtl () mp = do
-  liftIO $ S.putStr (mpName mp) >> putStrLn ":"
+  liftIO $ S.putStr (ffName mp) >> putStrLn ":"
   stdoutI
   liftIO $ putStrLn "\n"
 
@@ -859,7 +1202,7 @@ x = L8.pack "p1=v1&p2=v2"
 -}
 
 mptest :: IO ()
-mptest = enumPure postReq |$ (httpreqI >>= getHead)
+mptest = enumPure postReq |$ (httpReqI >>= getHead)
     where
       getHead req = do
         mmp <- multipartI req
@@ -876,7 +1219,7 @@ mptest = enumPure postReq |$ (httpreqI >>= getHead)
                         getHead req
 
 mptest' :: IO ()
-mptest' = enumPure postReq |$ (httpreqI >>= getParts 0)
+mptest' = enumPure postReq |$ (httpReqI >>= getParts 0)
     where
       getParts :: (MonadIO m) => Integer -> HttpReq -> Iter L m ()
       getParts n req = do
@@ -945,3 +1288,4 @@ postReqUrlencoded = L8.pack
 encReq :: L
 encReq = L8.pack "justatestkey=nothing&hate=666&file1=mtab"
 
+-}
