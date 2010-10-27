@@ -109,9 +109,10 @@ contentType file = S8.pack $ "Content-Type: " ++
 accept_loop :: HttpServer -> IO ()
 accept_loop srv = loop
     where
+      logger = liftIO . hPutStrLn stderr
       loop = do
         (iter, enum) <- httpAccept srv
-        _ <- forkIO $ enum |$ inumHttpServer route .| iter
+        _ <- forkIO $ enum |$ inumHttpServer logger route .| iter
         loop
       route = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
                       , routeName "cabal" $ routeFn serve_cabal

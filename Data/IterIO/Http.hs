@@ -51,13 +51,12 @@ import Data.Time
 import Data.Typeable
 import Data.Word
 import System.Locale
-import System.IO
+-- import System.IO
 import Text.Printf
 
 import Data.IterIO
 import Data.IterIO.Parse
 import Data.IterIO.Search
-import Data.IterIO.Zlib
 
 -- import System.IO
 
@@ -617,14 +616,36 @@ inumFromChunks = mkInumM $ getchunk
                       skipMany (noctl >> crlf)
                       skipI crlf
 
+-- | This 'Inum' reads to the end of an HTTP message body (and not
+-- beyond) and decodes the Transfer-Encoding.  It handles straight
+-- content of a size specified by the Content-Length header and
+-- chunk-encoded content.
+inumHttpBody :: (Monad m) => HttpReq -> Inum L.ByteString L.ByteString m a
+inumHttpBody req =
+    case reqTransferEncoding req of
+      lst | null lst || lst == [S8.pack "identity"] ->
+              if hasclen then inumTakeExact (fromJust $ reqContentLength req)
+                         else return -- No message body present
+      lst | lst == [S8.pack "chunked"] -> inumFromChunks
+      lst -> inumFromChunks |. tcfold (reverse lst)
+    where
+      hasclen = isJust $ reqContentLength req
+      tcfold [] = inumNop
+      tcfold (h:t) 
+          | h == S8.pack "identity" = tcfold t
+          | h == S8.pack "chunked"  = tcfold t -- Has to be first one
+          --- | h == S8.pack "gzip"     = inumGunzip |. tcfold t
+          | otherwise = mkInum $ fail $ "unknown Transfer-Coding "
+                        ++ chunkShow h
 
+{-
 -- | This 'Inum' reads to the end of an HTTP message body (and not
 -- beyond) and decodes the Transfer-Encoding.  It handles straight
 -- content of a size specified by the Content-Length header,
 -- chunk-encoded content, and content that has been gzipped then
 -- chunk-encoded.
-inumHttpBody :: (MonadIO m) => HttpReq -> Inum L.ByteString L.ByteString m a
-inumHttpBody req =
+inumHttpBodyZ :: (MonadIO m) => HttpReq -> Inum L.ByteString L.ByteString m a
+inumHttpBodyZ req =
     case reqTransferEncoding req of
       lst | null lst || lst == [S8.pack "identity"] ->
               if hasclen then inumTakeExact (fromJust $ reqContentLength req)
@@ -640,6 +661,7 @@ inumHttpBody req =
           | h == S8.pack "gzip"     = inumGunzip |. tcfold t
           | otherwise = mkInum $ fail $ "unknown Transfer-Coding "
                         ++ chunkShow h
+-}
 
 --
 -- Support for decoding form data
@@ -680,7 +702,21 @@ defaultFormField = FormField {
 -- >               "The value of " ++ (S8.unpack $ ffName field) ++ " is:"
 -- >           stdoutI                   -- Send form value to standard output
 -- >           liftIO $ putStrLn "\n"
--- >     foldform req docontrol
+-- >     foldform req docontrol ()
+--
+-- Or to produce a list of (field, value) pairs, you can say something
+-- like:
+-- 
+-- >  do let docontrol acc field = do
+-- >           val <- pureI
+-- >           return $ (ffName field, val) : acc
+-- >     foldform req docontrol []
+--
+-- Note that for POSTed forms of enctype
+-- @application/x-www-form-urlencoded@, @foldForm@ will read to the
+-- end of its input.  Thus, it is important to ensure @foldForm@ is
+-- called from within an 'inumHttpBody' enumerator (which is
+-- guaranteed by 'inumHttpServer').
 foldForm :: (Monad m) =>
             HttpReq
          -> (a -> FormField -> Iter L.ByteString m a)
@@ -766,11 +802,13 @@ foldControls f z =
 
 foldUrlencoded :: (Monad m) =>
                   HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
-foldUrlencoded req f z =
+foldUrlencoded _req f z = foldControls f z
+{-
     case reqContentLength req of
       Just len -> inumTakeExact len .| foldControls f z
       Nothing  -> throwI $ IterMiscParseErr $
                   "foldUrlencoded: Missing Content-legth"
+-}
 
 foldQuery :: (Monad m) =>
              HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
@@ -1143,9 +1181,10 @@ routeVar (HttpRoute route) = HttpRoute check
 -- | An 'Inum' that behaves like an HTTP server.  See 'HttpRoute' for
 -- a simple usage example.
 inumHttpServer :: (MonadIO m) =>
-                  HttpRoute m
+                  (String -> Iter L.ByteString m ()) -- ^ Logger function
+               -> HttpRoute m   -- ^ Request Routing instructions
                -> Inum L.ByteString L.ByteString m ()
-inumHttpServer (HttpRoute route) = mkInumM loop
+inumHttpServer logger (HttpRoute route) = mkInumM loop
     where
       loop = do
         eof <- atEOFI
@@ -1158,10 +1197,11 @@ inumHttpServer (HttpRoute route) = mkInumM loop
         now <- liftIO getCurrentTime
         catchOrI (irun $ enumHttpResp resp (Just now)) fatal (const $ loop)
       handler e@(SomeException _) _ = do
-        liftIO $ hPutStrLn stderr $ "Response error: " ++ show e
+        logger $ "Response error: " ++ show e
         return $ resp500 $ show e
       fatal e@(SomeException _) = do
-        liftIO $ hPutStrLn stderr $ "Reply error: " ++ show e
+        liftIterM $ logger $ "Reply error: " ++ show e
+        return ()
 
 
 {-
