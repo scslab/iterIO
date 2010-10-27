@@ -22,6 +22,7 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , routeConst, routeFn
                         , routeMethod, routeHost, routeTop
                         , HttpMap, routeMap, routeName, routeVar
+                        , HttpServerConf(..), nullHttpServer, ioHttpServer
                         , inumHttpServer
                         -- -- * For debugging
                         -- , postReq, encReq, mptest, mptest'
@@ -51,7 +52,7 @@ import Data.Time
 import Data.Typeable
 import Data.Word
 import System.Locale
--- import System.IO
+import System.IO
 import Text.Printf
 
 import Data.IterIO
@@ -1178,29 +1179,55 @@ routeVar (HttpRoute route) = HttpRoute check
                         _:_ -> route $ popPath True req
                         _   -> Nothing
 
+-- | Data structure describing the configuration of an HTTP server for
+-- 'inumHttpServer'.
+data HttpServerConf m = HttpServerConf {
+      srvLogger :: !(String -> Iter L.ByteString m ())
+    , srvDate :: !(Iter L.ByteString m (Maybe UTCTime))
+    , srvRoute :: !(HttpRoute m)
+    }
+
+-- | Generate a null 'HttpServerConf' structure with no logging and no
+-- Date header.
+nullHttpServer :: (Monad m) => HttpRoute m -> HttpServerConf m
+nullHttpServer route = HttpServerConf {
+                         srvLogger = const $ return ()
+                       , srvDate = return Nothing
+                       , srvRoute = route
+                       }
+
+-- | Generate an 'HttpServerConf' structure that uses IO calls to log to
+-- standard error and get the current time for the Date header.
+ioHttpServer :: (MonadIO m) => HttpRoute m -> HttpServerConf m
+ioHttpServer route = HttpServerConf {
+                       srvLogger = liftIO . hPutStrLn stderr
+                     , srvDate = liftIO $ Just `liftM` getCurrentTime
+                     , srvRoute = route
+                     }
+
 -- | An 'Inum' that behaves like an HTTP server.  See 'HttpRoute' for
 -- a simple usage example.
 inumHttpServer :: (MonadIO m) =>
-                  (String -> Iter L.ByteString m ()) -- ^ Logger function
-               -> HttpRoute m   -- ^ Request Routing instructions
+                  HttpServerConf m  -- ^ Server configuration
                -> Inum L.ByteString L.ByteString m ()
-inumHttpServer logger (HttpRoute route) = mkInumM loop
+inumHttpServer server = mkInumM loop
     where
       loop = do
         eof <- atEOFI
         unless eof doreq
       doreq = do
         req <- httpReqI
-        let respaction = fromMaybe (return $ resp404 req) $ route req
+        let respaction = fromMaybe (return $ resp404 req) $
+                         runHttpRoute (srvRoute server) req
         resp <- liftIterM $ inumHttpBody req .|
                 (catchI respaction handler <* nullI)
-        now <- liftIO getCurrentTime
-        catchOrI (irun $ enumHttpResp resp (Just now)) fatal (const $ loop)
+        now <- liftIterM $ srvDate server
+        catchOrI (irun $ enumHttpResp resp now) fatal (const $ loop)
       handler e@(SomeException _) _ = do
-        logger $ "Response error: " ++ show e
+        srvLogger server $ "Response error: " ++ show e
         return $ resp500 $ show e
       fatal e@(SomeException _) = do
-        liftIterM $ logger $ "Reply error: " ++ show e
+        liftIterM $ srvLogger server $ "Reply error: " ++ show e
         return ()
 
 

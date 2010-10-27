@@ -60,7 +60,7 @@ instance (MonadIO m) => MonadIO (IterStateT s m) where
 
 -- | Runs an @'IterStateT' s m@ computation on some state @s@.
 -- Returns the state of the 'Iter' and the state of @s@ as a pair.
--- Pull residual input up to the enclosing 'Iter' monad the same way
+-- Pulls residual input up to the enclosing 'Iter' monad the same way
 -- that 'finishI' does.
 runIterStateT :: (ChunkData t, Monad m) => 
                  Iter t (IterStateT s m) a -> s -> Iter t m (Iter t m a, s)
