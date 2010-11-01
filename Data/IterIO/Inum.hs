@@ -93,7 +93,7 @@ ordinary 'Iter' actions.  However, to keep track of the state of the
 target 'Iter', 'InumM' wraps its inner monadic type with an
 'IterStateT' transformer.  Specifically, when creating an enumerator
 of type @'Inum' tIn tOut m a@, the 'InumM' action is of a type like
-@'Iter' tIn ('IterStateT' (InumStateT ...) m) ()@.  That means that to
+@'Iter' tIn ('IterStateT' (InumState ...) m) ()@.  That means that to
 execute actions of type @'Iter' tIn m a@ that are not polymorphic in
 @m@, you have to transform them with the 'liftIterM' function.
 

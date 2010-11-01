@@ -111,7 +111,7 @@ accept_loop srv = loop
     where
       loop = do
         (iter, enum) <- httpAccept srv
-        _ <- forkIO $ enum |$ inumHttpServer route .| iter
+        _ <- forkIO $ enum |$ inumHttpServer (ioHttpServer route) .| iter
         loop
       route = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
                       , routeName "cabal" $ routeFn serve_cabal
