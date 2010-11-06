@@ -214,28 +214,24 @@ data Iter t m a = Iter { runIter :: !(Chunk t -> IterR t m a) }
 -- Note that @Iter t@ is a 'MonadTrans' and @Iter t m@ is a a 'Monad'
 -- (as discussed in the documentation for module "Data.IterIO").
 data IterR t m a = IterF !(Iter t m a)
-                -- ^ The iteratee requires more input.  Do not call
-                -- this function directly; use 'feedI' to feed a
-                -- 'Chunk' to an Iter.  Also you should usually use
-                -- 'iterF' instead of the 'IterF' constructor
-                -- directly.
-                | IterM !(m (IterR t m a))
-                -- ^ The iteratee must execute monadic bind in monad @m@
-                | forall carg cres. (CtlCmd carg cres) =>
-                  IterC !carg !(Maybe cres -> IterR t m a)
-                -- ^ A control request for enclosing enumerators
-                | Done a (Chunk t)
-                -- ^ Sufficient input was received; the 'Iter' is
-                -- returning a result of type @a@.  In adition, the
-                -- 'Iter' has a 'Chunk' containing any residual input
-                -- that was not consumed in producing the result.
-                | IterFail !SomeException (Chunk t)
-                -- ^ The 'Iter' failed.
-                | InumFail !SomeException a (Chunk t)
-                -- ^ An 'Inum' failed; this result includes status of
-                -- the `Inum`'s target 'Iter' at the time of the
-                -- failure.  (The type @a@ will generally be @'Iter'
-                -- t' m a\'@ for some @t'@ and @a'@.)
+                 -- ^ The iteratee requires more input.
+                 | IterM !(m (IterR t m a))
+                 -- ^ The iteratee must execute monadic bind in monad @m@
+                 | forall carg cres. (CtlCmd carg cres) =>
+                   IterC !carg !(Maybe cres -> IterR t m a)
+                 -- ^ A control request for enclosing enumerators
+                 | Done a (Chunk t)
+                 -- ^ Sufficient input was received; the 'Iter' is
+                 -- returning a result of type @a@.  In adition, the
+                 -- 'Iter' has a 'Chunk' containing any residual input
+                 -- that was not consumed in producing the result.
+                 | IterFail !SomeException (Chunk t)
+                 -- ^ The 'Iter' failed.
+                 | InumFail !SomeException a (Chunk t)
+                 -- ^ An 'Inum' failed; this result includes status of
+                 -- the `Inum`'s target 'Iter' at the time of the
+                 -- failure.  (The type @a@ will generally be @'Iter'
+                 -- t' m a\'@ for some @t'@ and @a'@.)
 
 -- | Builds an 'Iter' in the 'IterF' state.  The difference between
 -- this and using 'IterF' directly is that @iterF@ keeps requesting
@@ -725,28 +721,24 @@ throwEOFI = throwI . mkIterEOF
 -- the overall types of those two funcitons work out, a 'Right'
 -- constructor needs to be wrapped around the returned failing
 -- iteratee.)
-errToEither :: (ChunkData t, Monad m, Exception e) =>
-               (e -> Iter t m a -> b) -> IterR t m a -> IterR t m (Either b a)
-errToEither f = check
-    where
-      err e i = Left $ f e $ Iter $ stripChunk i
-      check (Done a c) = Done (Right a) c
-      check i          = case fromException $ getIterError i
-      check i@(IterFail e0 c)   = case fromException e0 of
-                                    Nothing -> IterFail e0 c
-                                    Just e  -> Done (Left $ f e $ stripChunk i) c
-      check i@(InumFail e0 a c) = case fromException e0 of
-                                  Nothing -> InumFail e0 (Right a) c
-                                  Just e  -> Done (Left $ f e $ stripChunk i) c
-      check _                 = error "errToEither: not done"
+addRightToFail :: IterR t m a -> IterR t m (Either e a)
+addRightToFail (InumFail e a c) = InumFail e (Right a) c
+addRightToFail (IterFail e c)   = IterFail e c
+addRightToFail _                = error "addRightToFail"
 
 -- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
 -- the 'Iter' throws an exception @e@, returns @'Left' (e, i)@ where
 -- @i@ is the state of the failing 'Iter'.
 tryI :: (ChunkData t, Monad m, Exception e) =>
-        Iter t m a
-     -> Iter t m (Either (e, Iter t m a) a)
-tryI iter = onDone $ errToEither (,)
+        Iter t m a -> Iter t m (Either (e, Iter t m a) a)
+tryI = onDone errToEither
+    where
+      errToEither (Done a c) = Done (Right a) c
+      errToEither iter =
+          case fromException $ getIterError iter of
+            Nothing -> addRightToFail iter
+            Just e  -> Done (Left (e, Iter $ setResid iter)) (getResid iter)
+              
 
 -- | Run an 'Iter'.  Catch any exception it throws, or feed the result
 -- to a continuation.
@@ -767,15 +759,16 @@ catchOrI iter handler cont = finishI iter >>= check
 -- any residual data returned in the 'Done' state).
 copyInput :: (ChunkData t, Monad m) =>
           Iter t m a
-       -> Iter t m (Iter t m a, Chunk t)
-copyInput iter0 = doit id iter0
+       -> Iter t m (IterR t m a, Chunk t)
+copyInput iter0 = next id iter0
     where
       -- Use function to mappend in a right-associative way, like ShowS
-      doit acc iter@(IterF _)  = iterF $ \c@(Chunk t _) ->
-                                 doit (acc . mappend t) (feedI iter c)
-      doit acc (IterM m)       = IterM $ doit acc `liftM` m
-      doit acc (IterC carg fr) = IterC carg $ doit acc . fr
-      doit acc iter            = return (setEOF iter False, chunk $ acc mempty)
+      next acc iter = Iter $ \c@(Chunk t _) ->
+                      check (acc . mappend t) $ runIter iter c
+      check acc (IterF i)    = next acc i
+      check acc (IterM m)    = IterM $ check acc `lift` m
+      check acc (IterC a fr) = IterC a $ check acc . fr
+      check acc i            = Done (setEOF i False, chunk $ acc mempty) mempty
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -790,17 +783,14 @@ copyInput iter0 = doit id iter0
 -- memory and should only be used when the 'Iter' argument is known to
 -- consume a bounded amount of data.
 tryBI :: (ChunkData t, Monad m, Exception e) =>
-         Iter t m a
-      -> Iter t m (Either e a)
-tryBI iter = onDone errToEither (copyInput iter)
-{-
-tryBI iter1 = copyInput iter1 >>= errToEither
+         Iter t m a -> Iter t m (Either e a)
+tryBI = onDone errToEither . copyInput
     where
       errToEither (Done a c, _) = Done (Right a) c
-      errToEither (iter, c)     = case fromException $ getIterError iter of
-                                   Just e  -> Done (Left e) c
-                                   Nothing -> fixError iter
--}
+      errToEither (iter, c) =
+          case fromException $ getIterError iter of
+            Nothing -> addRightToFail iter
+            Just e  -> Done (Left e) c
 
 -- | Catch an exception thrown by an 'Iter' or an enclosing 'Inum'
 -- (for instance one applied with '.|$').  If you wish to catch just
@@ -839,18 +829,19 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
        -- ^ Exception handler, which gets as arguments both the
        -- exception and the failing 'Iter' state.
        -> Iter t m a
-catchI iter0 handler = finishI iter0 >>= check
-    where check iter@(Done _ _) = iter
-          check iter            = case fromException $ getIterError iter of
-                                    Just e  -> handler e iter
-                                    Nothing -> iter
+catchI iter0 handler = onDone check iter0
+    where check r@(Done _ _) = r
+          check r            =
+              case fromException $ getIterError r of
+                Nothing -> r
+                Just e  -> runIter (handler e $ Iter $ setResid r) $ getResid r
 
 -- | Execute an 'Iter', then perform a cleanup action regardless of
 -- whether the 'Iter' threw an exception or not.  Analogous to the
 -- standard library funciton @'finally'@.
 finallyI :: (ChunkData t, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m a
-finallyI iter cleanup = finishI iter >>= (cleanup >>)
+finallyI iter cleanup = finishI iter >>= (cleanup >>) . rerunI
 
 -- | Execute an 'Iter' and perform a cleanup action if the 'Iter'
 -- threw an exception.  Analogous to the standard library funciton
@@ -873,6 +864,13 @@ catchBI :: (Exception e, ChunkData t, Monad m) =>
         -> (e -> Iter t m a)
         -- ^ Exception handler
         -> Iter t m a
+catchBI iter0 handler = onDone check $ copyInput iter0
+    where check (Done (a, _) c) = 
+          check r            =
+              case fromException $ getIterError r of
+                Nothing -> r
+                Just e  -> runIter (handler e $ Iter $ setResid r) $ getResid r
+
 catchBI iter0 handler = copyInput iter0 >>= uncurry check
     where check iter@(Done _ _) _ = iter
           check iter input        = case fromException $ getIterError iter of
@@ -1234,17 +1232,29 @@ ungetI = Done () . chunk
 -- Iter manipulation functions
 --
 
-setEOF :: Iter t m a -> Bool -> Iter t m a
+setEOF :: IterR t m a -> Bool -> IterR t m a
 setEOF (Done a (Chunk t _)) eof       = Done a (Chunk t eof)
 setEOF (IterFail e (Chunk t _)) eof   = IterFail e (Chunk t eof)
 setEOF (InumFail e a (Chunk t _)) eof = InumFail e a (Chunk t eof)
 setEOF iter _                         = iter
 
-getEOF :: Iter t m a -> Bool
+getEOF :: IterR t m a -> Bool
 getEOF (Done _ (Chunk _ eof))       = eof
 getEOF (IterFail _ (Chunk _ eof))   = eof
 getEOF (InumFail _ _ (Chunk _ eof)) = eof
 getEOF _                            = False
+
+getResid :: IterR t m a -> Chunk t
+getResid (Done _ c)     = c
+getResid (IterFail _ c) = c
+getResid (InumFail _ c) = c
+getResid _              = mempty
+
+setResid :: IterR t1 m1 a -> Chunk t2 -> IterR t2 m2 a
+setResid (Done a _)       = Done a
+setResid (IterFail e _)   = IterFail e
+setResid (InumFail e a _) = InumFail e a
+setResid _                = error "setResid: not done"
 
 -- | Turn an 'IterR' back into an 'Iter'.
 rerunI :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
@@ -1254,12 +1264,6 @@ rerunI (IterM m)         = Iter $ \c -> IterM m >>= flip runIter c
 rerunI (IterC a fr)      = Iter $ \c -> IterC a $ flip runIter c . fr
 rerunI (IterFail e c0)   = Iter $ \c1 -> IterFail e (mappend c0 c1)
 rerunI (InumFail e a c0) = Iter $ \c1 -> InumFail e a (mappend c0 c1)
-
-stripChunk :: IterR t1 m1 a -> IterR t2 m2 a
-stripChunk (Done a _)       = Done a
-stripChunk (IterFail e _)   = IterFail e
-stripChunk (InumFail e a _) = InumFail e a
-stripChunk _                = error "stripChunk: not done"
 
 -- | Feeds an 'Iter' by passing it a 'Chunk' of data.  When the 'Iter'
 -- is already 'Done', or in some error condition, simulates the
@@ -1371,10 +1375,7 @@ onDone f i = Iter $ check . runIter i
 -- 'Iter' or another 'Inum'.  See the documentation of these two
 -- functions for more discussion.
 pullupI :: (ChunkData t) => IterR t m1 a -> IterR t m2 (IterR t m3 a)
-pullupI (Done a c)       = Done (Done a mempty) c
-pullupI (IterFail e c)   = Done (IterFail e mempty) c
-pullupI (InumFail e a c) = Done (InumFail e a mempty) c
-pullupI _                = error "pullupI: Iter still active"
+pullupI i = Done (setResid i mempty) (getResid i)
 
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
 -- 'IterF', 'IterM', or 'IterC' states), then 'return's the 'Iter'
