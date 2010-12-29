@@ -18,7 +18,7 @@ minusOne expect iout = do
   if x <= 0 then runI iout' else minusOne (x - 1) iout'
 
 inumPrintList :: Inum [Int] [Int] IO a
-inumPrintList = mkInum' $ do
+inumPrintList = mkInum $ do
                   x <- dataI
                   liftIO $ S8.putStrLn $ S8.pack (show x)
                   return x
