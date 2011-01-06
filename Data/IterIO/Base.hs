@@ -30,7 +30,7 @@
      iteratee.
 
      'Inum's are generally constructed using the functions @'mkInum'@
-     and @'mkInumM'@ in module "Data.IterIO.Inum".  The first funciton
+     and @'mkInumM'@ in module "Data.IterIO.Inum".  The first function
      uses a simple @'Iter' tIn m tOut@ to translate between input type
      @tIn@ and output type @tOut@.  The second function, @'mkInumM'@,
      allows construction of more complex 'Inum's.
@@ -714,7 +714,7 @@ throwEOFI = throwI . mkIterEOF
 
 -- | Internal function used by 'tryI' and 'tryBI' when re-propagating
 -- exceptions that don't match the requested exception type.  (To make
--- the overall types of those two funcitons work out, a 'Right'
+-- the overall types of those two functions work out, a 'Right'
 -- constructor needs to be wrapped around the returned failing
 -- iteratee.)
 fixError :: (ChunkData t, Monad m) =>
@@ -832,13 +832,13 @@ catchI iter0 handler = finishI iter0 >>= check
 
 -- | Execute an 'Iter', then perform a cleanup action regardless of
 -- whether the 'Iter' threw an exception or not.  Analogous to the
--- standard library funciton @'finally'@.
+-- standard library function @'finally'@.
 finallyI :: (ChunkData t, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m a
 finallyI iter cleanup = finishI iter >>= (cleanup >>)
 
 -- | Execute an 'Iter' and perform a cleanup action if the 'Iter'
--- threw an exception.  Analogous to the standard library funciton
+-- threw an exception.  Analogous to the standard library function
 -- @'onException'@.
 onExceptionI :: (ChunkData t, Monad m) =>
                 Iter t m a -> Iter t m b -> Iter t m a
@@ -847,7 +847,7 @@ onExceptionI iter cleanup = catchI iter $ \(SomeException _) -> (cleanup >>)
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception
 -- is caught, the input is re-wound before running the exception
--- handler.  Because this funciton saves a copy of all input, it
+-- handler.  Because this function saves a copy of all input, it
 -- should not be used on Iteratees that consume unbounded amounts of
 -- input.  Note that unlike 'catchI', this function does not return
 -- the failing Iteratee, because it doesn't make sense to call
@@ -1107,7 +1107,7 @@ combineExpected (IterNoParse e) iter =
 -- last 'Iter' executed on the input stream.  Otherwise, before
 -- throwing the parse error, @parseAndSumIntegerList@ would need to
 -- ensure the input is at some reasonable boundary point for whatever
--- comes next.  (The 'ungetI' funciton is sometimes helpful for this
+-- comes next.  (The 'ungetI' function is sometimes helpful for this
 -- purpose.)
 multiParse :: (ChunkData t, Monad m) =>
               Iter t m a -> Iter t m a -> Iter t m a

@@ -104,7 +104,7 @@ imodify f = lift $ IterStateT $ \s -> return ((), f s)
 -- >              Iter s m a -> Iter s (t m) a
 -- > liftIterM = adaptIter id $ lift . lift >=> liftIterM
 --
--- Note that in general the coputation adapter must invoke itself
+-- Note that in general the computation adapter must invoke itself
 -- recursively.  @adaptIter@ is designed this way because the result
 -- adapter function may need to change.  An example is 'runStateTI',
 -- which could be implemented as follows:
