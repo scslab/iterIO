@@ -276,10 +276,7 @@ handleConnection :: Net.Socket -> IO ()
 handleConnection s = do
   h <- Net.socketToHandle s IO.ReadWriteMode
   IO.hSetBuffering h IO.NoBuffering
-  enumHandle' h
-     -- |. stderrLog (L.pack "< ")
-     -- |$ req2Html .| html2L .| handleI h
-     |$ handleRequest h
+  enumHandle' h |$ handleRequest h
   IO.hClose h
 
 

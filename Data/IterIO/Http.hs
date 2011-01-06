@@ -522,11 +522,12 @@ host_hdr req = do
   return req { reqHost = host, reqPort = mport }
 
 cookie_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
-cookie_hdr req = do
-  cookies <- sepBy1 parameter sep
-  return req { reqCookies = cookies }
-    where
-      sep = do olws; char ';' <|> char ','
+cookie_hdr req = ifParse cookiesI setCookies ignore
+  where
+    cookiesI = sepBy1 parameter sep <* eofI
+    sep = do olws; char ';' <|> char ','
+    setCookies cookies = return $ req { reqCookies = cookies }
+    ignore = nullI >> return req
 
 content_type_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 content_type_hdr req = do
