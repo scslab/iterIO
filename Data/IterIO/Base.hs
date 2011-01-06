@@ -193,6 +193,8 @@ chunkEOF = Chunk mempty True
 -- binds each control argument type to a unique result type.
 class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
+-- | An @Iter@ is a function from an input 'Chunk' to a result of type
+-- 'IterR'.
 newtype Iter t m a = Iter { runIter :: Chunk t -> IterR t m a }
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
@@ -237,7 +239,7 @@ data IterR t m a = IterF !(Iter t m a)
 -- this and using 'IterF' directly is that @iterF@ keeps requesting
 -- input until it receives a non-'null' chunk.  If you use 'IterF' and
 -- do things like invoke 'liftIO' in a tail-recursive 'Iter', you can
--- easily cause an infinite loop with 'IterF', which @iterF@ prevents.
+-- easily cause an infinite loop, while @iterF@ prevents this.
 --
 -- As an example of what not to do, consider the following code:
 --
@@ -500,13 +502,13 @@ runI i = Iter $ \c ->
              check (IterF i)        = check $ runIter i chunkEOF
              check (IterM m)        = IterM $ m >>= return . check
              check (IterC _ fr)     = check $ fr Nothing
-             check (IterFail e _)   = IterFail e mempty
-             check (InumFail e i _) = InumFail e i mempty
-        in check $ runIter i chunkEOF
+             check (IterFail e _)   = IterFail e c
+             check (InumFail e i _) = InumFail e i c
+         in check $ runIter i chunkEOF
 
 -- | Run an 'Onum' on an 'Iter'.  This is the main way of actually
--- executing IO with 'Iter's.  @|$@ is equivalent to a type-restricted
--- version of the following code, in which @inum@ must be an 'Onum':
+-- executing IO with 'Iter's.  @|$@ is a type-restricted version of
+-- the following code, in which @inum@ must be an 'Onum':
 --
 -- @
 --  inum |$ iter = 'run' (inum .| iter)
@@ -678,10 +680,6 @@ instance Exception IterEOF where
     toException = noParseToException
     fromException = noParseFromException
 
--- | Make an 'IterEOF' from a String.
-mkIterEOF :: String -> IterEOF
-mkIterEOF loc = IterEOF $ mkIOError eofErrorType loc Nothing Nothing
-
 -- | True if and only if an exception is of type 'IterEOF'.
 isIterEOF :: SomeException -> Bool
 isIterEOF err = maybe False (\(IterEOF _) -> True) $ fromException err
@@ -721,6 +719,10 @@ instance Exception IterMiscParseErr where
 throwI :: (ChunkData t, Exception e) => e -> Iter t m a
 throwI e = Iter $ IterFail (toException e)
 
+-- | Make an 'IterEOF' from a String.
+mkIterEOF :: String -> IterEOF
+mkIterEOF loc = IterEOF $ mkIOError eofErrorType loc Nothing Nothing
+
 -- | Throw an exception of type 'IterEOF'.  This will be interpreted
 -- by 'mkInum' as an end of file chunk when thrown by the codec.  It
 -- will also be interpreted by 'ifParse' and 'multiParse' as an
@@ -746,11 +748,12 @@ addRightToFail i                = error $ "addRightToFail: " ++ show i
 tryI :: (ChunkData t, Monad m, Exception e) =>
         Iter t m a -> Iter t m (Either (e, Iter t m a) a)
 tryI = onDone errToEither
-    where errToEither (Done a c) = Done (Right a) c
-          errToEither iter =
-              case fromException $ getIterError iter of
-                Nothing -> addRightToFail iter
-                Just e  -> Done (Left (e, Iter $ setResid iter)) (getResid iter)
+    where
+      errToEither (Done a c) = Done (Right a) c
+      errToEither iter =
+          case fromException $ getIterError iter of
+            Nothing -> addRightToFail iter
+            Just e  -> Done (Left (e, Iter $ setResid iter)) (getResid iter)
 
 -- | Run an 'Iter'.  Catch any exception it throws, or feed the result
 -- to a continuation.
@@ -1286,13 +1289,13 @@ getResid :: IterR t m a -> Chunk t
 getResid (Done _ c)     = c
 getResid (IterFail _ c) = c
 getResid (InumFail _ c) = c
-getResid _              = mempty
+getResid r              = error $ "getResid: not done (" ++ show r ++ ")"
 
 setResid :: IterR t1 m1 a -> Chunk t2 -> IterR t2 m2 a
 setResid (Done a _)       = Done a
 setResid (IterFail e _)   = IterFail e
 setResid (InumFail e a _) = InumFail e a
-setResid _                = error "setResid: not done"
+setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
 
 -- | Turn an 'IterR' back into an 'Iter'.
 reRunI :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
