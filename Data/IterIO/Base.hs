@@ -193,7 +193,7 @@ chunkEOF = Chunk mempty True
 -- binds each control argument type to a unique result type.
 class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
-data Iter t m a = Iter { runIter :: !(Chunk t -> IterR t m a) }
+newtype Iter t m a = Iter { runIter :: Chunk t -> IterR t m a }
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
 -- input (in class 'ChunkData'), @m@ is a monad in which the iteratee
@@ -232,9 +232,6 @@ data IterR t m a = IterF !(Iter t m a)
                  -- the `Inum`'s target 'Iter' at the time of the
                  -- failure.  (The type @a@ will generally be @'Iter'
                  -- t' m a\'@ for some @t'@ and @a'@.)
-
-runIterAfter :: IterR t m b -> Iter t m a -> IterR t b a
-runIterAfter i r = runIter i $ getResid r
 
 -- | Builds an 'Iter' in the 'IterF' state.  The difference between
 -- this and using 'IterF' directly is that @iterF@ keeps requesting
@@ -316,16 +313,30 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
     (*>)   = (>>)
     a <* b = do r <- a; b >> return r
 
+-- | Transform an 'IterR' with a function, once it enters one of the
+-- completed states ('Done', 'IterFail', or 'InumFail').
+onDoneR :: (ChunkData t, Monad m) =>
+           (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
+onDoneR f = check
+    where check (IterF (Iter i)) = IterF $ Iter $ check . i
+          check (IterM m)        = IterM $ liftM check m
+          check (IterC a fr)     = IterC a $ check . fr
+          check r                = f r
+
+-- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
+-- 'InumFail' state, then use a function to transform the 'IterR'.
+onDone :: (ChunkData t, Monad m) =>
+          (IterR t m a -> IterR t m b) -> Iter t m a -> Iter t m b
+onDone f i = Iter $ onDoneR f . runIter i
+
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Iter $ Done a
 
-    m >>= k = Iter $ check . runIter m
+    m >>= k = onDone check m
         where check (Done a c)       = runIter (k a) c
-              check (IterF i)        = IterF $ Iter $ check . runIter i
-              check (IterM mm)       = IterM $ mm >>= return . check
-              check (IterC a fr)     = IterC a $ check . fr
               check (IterFail e c)   = IterFail e c
               check (InumFail e _ c) = IterFail e c
+              check _                = error "Iter >>="
 
     fail msg = throwI $ ErrorCall msg
 
@@ -846,11 +857,12 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
        -- exception and the failing 'Iter' state.
        -> Iter t m a
 catchI iter0 handler = onDone check iter0
-    where check r@(Done _ _) = r
-          check r =
-              case fromException $ getIterError r of
-                Nothing -> r
-                Just e  -> runIterAfter (handler e $ Iter $ setResid r) r
+    where
+      check r@(Done _ _) = r
+      check r =
+          case fromException $ getIterError r of
+            Nothing -> r
+            Just e  -> runIter (handler e $ Iter $ setResid r) (getResid r)
 
 -- | Execute an 'Iter', then perform a cleanup action regardless of
 -- whether the 'Iter' threw an exception or not.  Analogous to the
@@ -859,7 +871,8 @@ finallyI :: (ChunkData t, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m a
 finallyI iter cleanup = onDone clean iter
     where
-      clean r = runIterAfter (onDone (setResid r . getResid) cleanup) r
+      clean r = onDoneR (setResid r . getResid) runIter cleanup (getResid r)
+
 -- finallyI iter cleanup = finishI iter >>= (cleanup >>) . rerunI
 
 -- | Execute an 'Iter' and perform a cleanup action if the 'Iter'
@@ -1368,20 +1381,6 @@ feedI (Done a c) c'               = Done a (mappend c c')
 feedI (IterFail e c) c'           = IterFail e (mappend c c')
 feedI (InumFail e a c) c'         = InumFail e a (mappend c c')
 -}
-
-onDoneR :: (ChunkData t, Monad m) =>
-           (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
-onDoneR f = check
-    where check (IterF (Iter i)) = IterF $ Iter $ check . i
-          check (IterM m)        = IterM $ liftM check m
-          check (IterC a fr)     = IterC a $ check . fr
-          check r                = f r
-
--- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
--- 'InumFail' state, then use a function to transform the 'IterR'.
-onDone :: (ChunkData t, Monad m) =>
-          (IterR t m a -> IterR t m b) -> Iter t m a -> Iter t m b
-onDone f i = Iter $ onDoneR f . runIter i
 
 -- | This function takes a non-active 'Iter' and returns it into
 -- another 'Iter' of the same input type.  Any residual data from the
