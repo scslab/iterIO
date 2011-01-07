@@ -768,25 +768,6 @@ catchOrI iter handler cont = onDone check iter
                                Just e  -> runIter (handler e) (getResid err)
                                Nothing -> err
 
-{-
--- | Runs an 'Iter' until it no longer requests input, keeping a copy
--- of all input that was fed to it (which might be longer than the
--- input that the 'Iter' actually consumed, because fed input includes
--- any residual data returned in the 'Done' state).
-copyInput :: (ChunkData t, Monad m) =>
-          Iter t m a
-       -> Iter t m (IterR t m a, Chunk t)
-copyInput iter0 = next id iter0
-    where
-      -- Use function to mappend in a right-associative way, like ShowS
-      next acc iter = Iter $ \c@(Chunk t _) ->
-                      check (acc . mappend t) $ runIter iter c
-      check acc (IterF i)    = next acc i
-      check acc (IterM m)    = IterM $ check acc `lift` m
-      check acc (IterC a fr) = IterC a $ check acc . fr
-      check acc i            = Done (setEOF i False, chunk $ acc mempty) mempty
--}
-
 -- | Like 'onDone', but also keeps a copy of all input consumed.  (The
 -- residual input on the 'IterR' returned will be a suffix of the
 -- input returned.)
@@ -859,24 +840,15 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
        -- ^ Exception handler, which gets as arguments both the
        -- exception and the failing 'Iter' state.
        -> Iter t m a
-catchI iter0 handler = onDone check iter0
-    where
-      check r@(Done _ _) = r
-      check r =
-          case fromException $ getIterError r of
-            Nothing -> r
-            Just e  -> runIter (handler e $ Iter $ setResid r) (getResid r)
+catchI iter handler = tryI iter >>= either (curry handler) return
 
 -- | Execute an 'Iter', then perform a cleanup action regardless of
 -- whether the 'Iter' threw an exception or not.  Analogous to the
 -- standard library function @'finally'@.
 finallyI :: (ChunkData t, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m a
-finallyI iter cleanup = onDone clean iter
-    where
-      clean r = onDoneR (setResid r . getResid) runIter cleanup (getResid r)
-
--- finallyI iter cleanup = finishI iter >>= (cleanup >>) . rerunI
+finallyI iter cleanup = onDone runclean iter
+    where runclean r = runIter (cleanup >> Iter (setResid r)) (getResid r)
 
 -- | Execute an 'Iter' and perform a cleanup action if the 'Iter'
 -- threw an exception.  Analogous to the standard library function
@@ -901,7 +873,7 @@ catchBI :: (Exception e, ChunkData t, Monad m) =>
         -> Iter t m a
 catchBI iter0 handler = onDoneInput check iter0
     where check r@(Done _ _) _ = r
-          check err c          = case fromException $ getIterError r of
+          check r c            = case fromException $ getIterError r of
                                    Nothing -> r
                                    Just e  -> runIter (handler e) c
 
@@ -984,12 +956,12 @@ inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
            -> (e -> Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a))
            -- ^ Exception handler
            -> Inum tIn tOut m a
-inumCatch enum handler = finishI . enum >=> check
-    where check iter@(InumFail e _ _) =
-              case fromException e of
-                Just e' -> handler e' $ Iter $ setResid iter
-                Nothing -> iter
-          check iter                  = iter
+inumCatch enum handler = onDone check . enum
+    where check r@(InumFail err a c) =
+              case fromException err of
+                Just e -> runIter (handler e $ Iter $ InumFail err a) c
+                Nothing -> r
+          check r                    = r
 
 -- | Execute some cleanup action when an 'Inum' finishes.
 inumFinally :: (ChunkData tIn, Monad m) =>
@@ -1012,25 +984,26 @@ inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
             -> Inum tIn tOut m a
 inumHandler = flip inumCatch
 
-{-
 -- | Used in an exception handler, after an 'Inum' failure, to resume
 -- processing of the 'Iter' by the next enumerator in a 'cat'ed
 -- series.  See 'inumCatch' for an example.
 resumeI :: (ChunkData tIn, Monad m) =>
            Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a)
-resumeI (InumFail _ iter (Chunk t _)) = Done iter (chunk t)
-resumeI iter                          = iter
+resumeI = onDone check
+    where check (InumFail _ a c) = Done a c
+          check _                = error "resumeI: not InumFail"
 
 -- | Like 'resumeI', but if the 'Iter' is resumable, also prints an
 -- error message to standard error before running it.
 verboseResumeI :: (ChunkData tIn, MonadIO m) =>
                   Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a)
-verboseResumeI (InumFail err iter (Chunk t _)) = do
-  prog <- liftIO $ getProgName
-  liftIO $ hPutStrLn stderr $ prog ++ ": " ++ show err
-  Done iter (chunk t)
-verboseResumeI iter = iter
--}
+verboseResumeI = onDone check
+    where check (InumFail e a c) =
+              flip runIter c $ liftIO $ do
+                prog <- getProgName
+                hPutStrLn stderr $ prog ++ ": " ++ show err
+                return a
+          check _                = error "verboseResumeI: not InumFail"
 
 mapExceptionR :: (Exception e1, Exception e2) =>
                  (e1 -> e2) -> IterR t m a -> IterR t m a
@@ -1297,6 +1270,7 @@ setResid (IterFail e _)   = IterFail e
 setResid (InumFail e a _) = InumFail e a
 setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
 
+{-
 -- | Turn an 'IterR' back into an 'Iter'.
 reRunI :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
 reRunI (Done a c0)       = Iter $ \c1 -> Done a (mappend c0 c1)
@@ -1305,6 +1279,7 @@ reRunI (IterM m)         = Iter $ \c -> IterM m >>= flip runIter c
 reRunI (IterC a fr)      = Iter $ \c -> IterC a $ flip runIter c . fr
 reRunI (IterFail e c0)   = Iter $ \c1 -> IterFail e (mappend c0 c1)
 reRunI (InumFail e a c0) = Iter $ \c1 -> InumFail e a (mappend c0 c1)
+-}
 
 -- | Feeds an 'Iter' by passing it a 'Chunk' of data.  When the 'Iter'
 -- is already 'Done', or in some error condition, simulates the
