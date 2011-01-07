@@ -1137,6 +1137,7 @@ multiParse a b = Iter $ \c -> check (runIter a c) (runIter b c)
     where
       check ra@(Done _ _) _ = ra
       check (IterF ia) (IterF ib) = multiParse ia ib
+      check (IterF ia) rb = onDoneInput 
       check ra rb | not (isIterActive ra) = 
                       maybe ra (flip combineExpected rb) $
                       fromException $ getIterError $ ra
@@ -1270,16 +1271,19 @@ setResid (IterFail e _)   = IterFail e
 setResid (InumFail e a _) = InumFail e a
 setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
 
-{-
+runIterR :: (ChunkData t, Monad m) => Chunk t -> IterR t m a -> IterR t m a
+runIterR c = check
+    where check (Done a c0)       = Done a (mappend c0 c)
+          check (IterF (Iter i))  = i c
+          check (IterM m)         = IterM $ liftM check m
+          check (IterC a fr)      = IterC a $ check . fr
+          check (IterFail e c0)   = IterFail e (mappend c0 c)
+          check (InumFail e a c0) = InumFail e a (mappend c0 c)
+
 -- | Turn an 'IterR' back into an 'Iter'.
 reRunI :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
-reRunI (Done a c0)       = Iter $ \c1 -> Done a (mappend c0 c1)
-reRunI (IterF i)         = i
-reRunI (IterM m)         = Iter $ \c -> IterM m >>= flip runIter c
-reRunI (IterC a fr)      = Iter $ \c -> IterC a $ flip runIter c . fr
-reRunI (IterFail e c0)   = Iter $ \c1 -> IterFail e (mappend c0 c1)
-reRunI (InumFail e a c0) = Iter $ \c1 -> InumFail e a (mappend c0 c1)
--}
+reRunI (IterF i) = i
+reRunI r         = Iter $ \c -> runIterR c r
 
 -- | Feeds an 'Iter' by passing it a 'Chunk' of data.  When the 'Iter'
 -- is already 'Done', or in some error condition, simulates the
