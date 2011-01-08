@@ -466,7 +466,7 @@ isIterActive _           = False
 -- hides most of the error handling details.  Most @Inum@s are
 -- polymorphic in the last type, @a@, in order to work with iteratees
 -- returning any type.
-type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (Iter tOut m a)
+type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (IterR tOut m a)
 
 -- | An @Onum t m a@ is just an 'Inum' in which the input is
 -- @()@--i.e., @'Inum' () t m a@--so that there is no meaningful input
@@ -1458,6 +1458,18 @@ joinI iter             = finishI iter >>= joinI
 --
 -- Basic Inums
 --
+
+genInum :: (ChunkData t, Monad m) =>
+           (IterR t1 m1 a -> Iter t2 m2 (IterR t1 m1 a))
+        -> (IterR t1 m1 a -> Iter t2 m2 (IterR t1 m1 a))
+        -> (IterR t1 m1 a -> Iter t2 m2 (IterR t1 m1 a))
+        -> Iter t1 m1 a -> Iter t2 m2 (IterR t1 m1 a)
+genInum doF doM doC i0 = next $ IterF i0
+    where next r@(IterF _)   = doF r
+          next r@(IterM _)   = doM r
+          next r@(IterC _ _) = doC r
+
+$ \c0 -> step (runIter iter mempty)
 
 -- | An 'Inum' that will feed pure data to 'Iter's.
 enumPure :: (Monad m, ChunkData tIn, ChunkData tOut) =>
