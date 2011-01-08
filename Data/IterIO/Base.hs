@@ -1201,7 +1201,8 @@ ifNoParse iter no yes = ifParse iter yes no
 
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, ChunkData t) => Iter t m ()
-nullI = Iter $ \(Chunk _ eof) -> if eof then return () else nullI
+nullI = Iter $ \(Chunk _ eof) ->
+        if eof then Done mempty chunkEOF else IterF nullI
 
 -- | Returns any non-empty amount of input data, or throws an
 -- exception if EOF is encountered and there is no data.
