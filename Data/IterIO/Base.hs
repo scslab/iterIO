@@ -799,11 +799,11 @@ onDoneInput :: (ChunkData t, Monad m) =>
             -> Iter t m b
 onDoneInput f = Iter . next id
     where
-      next acc iter c@(Chunk t _) = check $ runIter iter c
-          where check (IterF i)      = IterF $ Iter $ next (acc . mappend t) i
+      next acc iter c = check $ runIter iter c
+          where check (IterF i)      = IterF $ Iter $ next (acc . mappend c) i
                 check r
                     | isIterActive r = stepR r check
-                    | otherwise      = f (setEOF i False) (chunk $ acc t)
+                    | otherwise      = f r (chunk $ acc c)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -1023,7 +1023,7 @@ verboseResumeI = onDone check
     where check (InumFail e a c) =
               flip runIter c $ liftIO $ do
                 prog <- getProgName
-                hPutStrLn stderr $ prog ++ ": " ++ show err
+                hPutStrLn stderr $ prog ++ ": " ++ show e
                 return a
           check _                = error "verboseResumeI: not InumFail"
 
@@ -1244,6 +1244,7 @@ ungetI t = Iter $ IterF $ \c -> Done () (mappend (chunk t) c)
 -- Iter manipulation functions
 --
 
+{-
 setEOF :: IterR t m a -> Bool -> IterR t m a
 setEOF (Done a (Chunk t _)) eof       = Done a (Chunk t eof)
 setEOF (IterFail e (Chunk t _)) eof   = IterFail e (Chunk t eof)
@@ -1255,6 +1256,7 @@ getEOF (Done _ (Chunk _ eof))       = eof
 getEOF (IterFail _ (Chunk _ eof))   = eof
 getEOF (InumFail _ _ (Chunk _ eof)) = eof
 getEOF _                            = False
+-}
 
 getResid :: IterR t m a -> Chunk t
 getResid (Done _ c)     = c
@@ -1428,12 +1430,10 @@ finishI i = Iter $ check . runIter i
 -- > infixl 1 `inumBind`
 inumBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
-inumBind m k = onDone m
+inumBind m k = onDone m check
+    where check (Done a c) = runIter (k a) c
+          check r          = r
 infixl 1 `inumBind`
-
-inumBind iter0 next = finishI iter0 >>= check
-    where check iter@(InumFail _ _ _) = iter
-          check iter                  = iter >>= next
 
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The
 -- behavior of @joinI@ is similar to what one would obtain by defining
