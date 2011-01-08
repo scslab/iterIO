@@ -1238,20 +1238,6 @@ ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 -- Iter manipulation functions
 --
 
-{-
-setEOF :: IterR t m a -> Bool -> IterR t m a
-setEOF (Done a (Chunk t _)) eof       = Done a (Chunk t eof)
-setEOF (IterFail e (Chunk t _)) eof   = IterFail e (Chunk t eof)
-setEOF (InumFail e a (Chunk t _)) eof = InumFail e a (Chunk t eof)
-setEOF iter _                         = iter
-
-getEOF :: IterR t m a -> Bool
-getEOF (Done _ (Chunk _ eof))       = eof
-getEOF (IterFail _ (Chunk _ eof))   = eof
-getEOF (InumFail _ _ (Chunk _ eof)) = eof
-getEOF _                            = False
--}
-
 getResid :: (ChunkData t) => IterR t m a -> Chunk t
 getResid (Done _ c)       = c
 getResid (IterFail _ c)   = c
@@ -1272,6 +1258,9 @@ runIterR iter0 c = if null c then iter0 else check iter0
           check (IterC a fr)      = IterC a $ check . fr
           check (IterFail e c0)   = IterFail e (mappend c0 c)
           check (InumFail e a c0) = InumFail e a (mappend c0 c)
+
+unRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
+unRunIter = Iter . runIterR
 
 -- | Feeds an 'Iter' by passing it a 'Chunk' of data.  When the 'Iter'
 -- is already 'Done', or in some error condition, simulates the
@@ -1374,8 +1363,10 @@ feedI (InumFail e a c) c'         = InumFail e a (mappend c c')
 -- prevents residual data from being lost when 'inumF' is fused to an
 -- 'Iter' or another 'Inum'.  See the documentation of these two
 -- functions for more discussion.
+{-
 pullupI :: (ChunkData t) => IterR t m1 a -> IterR t m2 (IterR t m3 a)
 pullupI i = Done (setResid i mempty) (getResid i)
+-}
 
 -- | Runs an 'Iter' until it is no longer active (meaning not in the
 -- 'IterF', 'IterM', or 'IterC' states), then 'return's the 'Iter'
@@ -1407,14 +1398,9 @@ pullupI i = Done (setResid i mempty) (getResid i)
 -- This makes it safe to ignore the residual data from the inner
 -- 'Done', as with @Done a _ -> ...@ in the example above, as the
 -- ignored 'Chunk' will always be 'null'.
+{-
 finishI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m (IterR t m a)
 finishI = onDone pullupI
-{-
-finishI i = Iter $ check . runIter i
-    where check (IterF i)    = IterF $ check . runIter i
-          check (IterM m)    = IterM $ m >>= return . check
-          check (IterC a fr) = IterC a $ check . fr
-          check iter         = pullupI iter
 -}
 
 -- | A function that mostly acts like '>>=', but preserves 'InumFail'
@@ -1457,6 +1443,28 @@ joinI = onDone check
 --
 -- Basic Inums
 --
+
+inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+          -- CtlHandler (Iter tIn m) ->
+          Inum tIn tOut m a
+inumMC i0 = Iter $ \c ->
+            let check r@(IterM _)   = stepM r check
+                check r@(IterC _ _) = stepC r check
+                check r             = Done (unRunIter r) c
+            in check $ runIter i0 mempty
+
+-- XXX doesn't handle EOF properly
+inumNop :: (ChunkData t, Monad m) => Inum t t m a
+inumNop i0 = Iter $ \c@(Chunk t eof) ->
+             let setEOF (Chunk t' _) = Chunk t' eof
+                 check (IterF i) | eof       = Done i chunkEOF
+                                 | otherwise = IterF $ inumNop i
+                 check r@(IterM _) = stepM r check
+                 check r@(IterC _ _) = stepC r check
+                 check r = Done (unRunIter $ setResid r mempty)
+                           (setEOF $ getResid r)
+             in check $ runIter i0 (chunk t)
+
 
 {-
 genInum :: (ChunkData t, Monad m) =>
@@ -1699,6 +1707,7 @@ consCtl :: (CtlCmd carg cres, Monad m) =>
 consCtl fn fallback arg@(CtlArg carg) =
     maybe (fallback arg) (fn >=> return . CtlRes) (cast carg)
 infixr 9 `consCtl`
+
 
 --
 -- Debugging
