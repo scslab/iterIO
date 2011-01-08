@@ -315,15 +315,37 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
     (*>)   = (>>)
     a <* b = do r <- a; b >> return r
 
+-- | Step an 'IterF' to its next state, and apply a function to the
+-- result.
+stepF :: (ChunkData t, Monad m1, Monad m2) =>
+         IterR t m1 a -> (IterR t m1 a -> IterR t m2 b) -> IterR t m2 b
+stepF (IterF (Iter i)) f = IterF $ Iter $ f . i
+stepF r f                = f r
+
+stepM :: (ChunkData t1, ChunkData t2, Monad m) =>
+         IterR t1 m a -> (IterR t1 m a -> IterR t2 m b) -> IterR t2 m b
+stepM (IterM m) f = IterM $ liftM f m
+stepM r f         = r f
+
+stepC :: (ChunkData t1, ChunkData t2, Monad m1, Monad m2) =>
+         IterR t1 m1 a -> (IterR t1 m1 a -> IterR t2 m1 b) -> IterR t2 m2 b
+stepC (IterC a fr) f = IterC a $ f . fr
+stepC r f         = r f
+
+stepR :: (ChunkData t, Monad m) =>
+         IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
+stepR r@(IterF i) f    = IterF $ Iter $ f . i
+stepR r@(IterM m) f    = IterM $ liftM f m
+stepR r@(IterC a fr) f = IterC a $ f . fr
+stepR r f              = f r
+
 -- | Transform an 'IterR' with a function, once it enters one of the
 -- completed states ('Done', 'IterFail', or 'InumFail').
 onDoneR :: (ChunkData t, Monad m) =>
            (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
 onDoneR f = check
-    where check (IterF (Iter i)) = IterF $ Iter $ check . i
-          check (IterM m)        = IterM $ liftM check m
-          check (IterC a fr)     = IterC a $ check . fr
-          check r                = f r
+    where check r | isIterActive r = stepR r check
+                  | otherwise      = f r
 
 -- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
 -- 'InumFail' state, then use a function to transform the 'IterR'.
@@ -778,10 +800,10 @@ onDoneInput :: (ChunkData t, Monad m) =>
 onDoneInput f = Iter . next id
     where
       next acc iter c@(Chunk t _) = check $ runIter iter c
-          where check (IterF i)    = IterF $ Iter $ next (acc . mappend t) i
-                check (IterM m)    = IterM $ check `liftM` m
-                check (IterC a fr) = IterC a $ check . fr
-                check i            = f (setEOF i False) (chunk $ acc t)
+          where check (IterF i)      = IterF $ Iter $ next (acc . mappend t) i
+                check r
+                    | isIterActive r = stepR r check
+                    | otherwise      = f (setEOF i False) (chunk $ acc t)
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -1027,13 +1049,13 @@ mapExceptionI = onDone . mapExceptionR
 -- 'expectedI', then combine the exptected tokens with those of a
 -- previous parse error.
 combineExpected :: (ChunkData t, Monad m) =>
-                   IterNoParse
-                -- ^ Previous parse error
-                -> IterR t m a
+                   IterR t m a
                 -- ^ Iteratee to run and, if it fails, combine with
                 -- previous error
+                -> IterNoParse
+                -- ^ Previous parse error
                 -> IterR t m a
-combineExpected (IterNoParse e) r =
+combineExpected r (IterNoParse e) =
     case cast e of
       Just (IterExpected saw1 e1) -> mapExceptionR (combine saw1 e1) r
       _                           -> r
@@ -1137,37 +1159,11 @@ multiParse a b = Iter $ \c -> check (runIter a c) (runIter b c)
     where
       check ra@(Done _ _) _ = ra
       check (IterF ia) (IterF ib) = multiParse ia ib
-      check (IterF ia) rb = onDoneInput 
-      check ra rb | not (isIterActive ra) = 
-                      maybe ra (flip combineExpected rb) $
-                      fromException $ getIterError $ ra
-
-multiParse a@(IterF _) b
-    | useIfParse b = ifParse a return b
-    | otherwise    = do c <- chunkI
-                        multiParse (feedI a c) (feedI b c)
-    where
-      -- If b is IterM, IterC, or Done, we will just accumulate all
-      -- the input anyway inside 'feedI', so we might as well do it
-      -- efficiently with 'copyInput' (which is what 'ifParse' uses,
-      -- indirectly, via 'tryBI').
-      useIfParse (Done _ _)  = True
-      useIfParse (IterM _)   = True
-      useIfParse (IterC _ _) = True
-      useIfParse _           = False
-multiParse a b
-    | isIterActive a = inumMC passCtl a >>= flip multiParse b
-    -- If there is an error, we flush the residual input, since we
-    -- have been feeding it to b all along.  It's not obvious from the
-    -- following line of code, but because of the way >>= is defined,
-    -- we know that the IterF is only going to be fed a's residual
-    -- input, and thus it will not consume anything that hasn't
-    -- already been fed to b.  The only way to fetch new input from an
-    -- enumerator (as opposed to getting the residual input of the
-    -- last iteratee to execute) is to return an IterF from an IterF,
-    -- so that the m in an (m >>= k) statement is of type IterF.
-    | otherwise      = setEOF a False `catchI` \err _ ->
-                       IterF $ \_ -> combineExpected err $ setEOF b False
+      check (IterF ia) rb = onDoneInput (\ra c -> check ra (runIterR rb c)) ia
+      check ra rb
+          | isIterActive ra = stepR ra $ flip check rb
+          | otherwise       = maybe ra (combineExpected rb) $
+                              fromException $ getIterError ra
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
 -- all input consumed using 'tryBI'.  (This means @iter@ must not
@@ -1190,7 +1186,7 @@ ifParse :: (ChunkData t, Monad m) =>
         -- ^ @failure@ action
         -> Iter t m b
         -- ^ result
-ifParse iter yes no = tryBI iter >>= either (\e -> combineExpected e no) yes
+ifParse iter yes no = tryBI iter >>= either (combineExpected no) yes
 
 -- | @ifNoParse@ is just 'ifParse' with the second and third arguments
 -- reversed.
@@ -1205,7 +1201,7 @@ ifNoParse iter no yes = ifParse iter yes no
 
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, ChunkData t) => Iter t m ()
-nullI = IterF $ \(Chunk _ eof) -> if eof then return () else nullI
+nullI = Iter $ \(Chunk _ eof) -> if eof then return () else nullI
 
 -- | Returns any non-empty amount of input data, or throws an
 -- exception if EOF is encountered and there is no data.
@@ -1271,19 +1267,14 @@ setResid (IterFail e _)   = IterFail e
 setResid (InumFail e a _) = InumFail e a
 setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
 
-runIterR :: (ChunkData t, Monad m) => Chunk t -> IterR t m a -> IterR t m a
-runIterR c = check
+runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
+runIterR iter0 c | null c    = iter0
+                 | otherwise = check iter0
     where check (Done a c0)       = Done a (mappend c0 c)
           check (IterF (Iter i))  = i c
-          check (IterM m)         = IterM $ liftM check m
-          check (IterC a fr)      = IterC a $ check . fr
           check (IterFail e c0)   = IterFail e (mappend c0 c)
           check (InumFail e a c0) = InumFail e a (mappend c0 c)
-
--- | Turn an 'IterR' back into an 'Iter'.
-reRunI :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
-reRunI (IterF i) = i
-reRunI r         = Iter $ \c -> runIterR c r
+          check r                 = stepR r check
 
 -- | Feeds an 'Iter' by passing it a 'Chunk' of data.  When the 'Iter'
 -- is already 'Done', or in some error condition, simulates the
