@@ -1453,18 +1453,18 @@ inumMC i0 = Iter $ \c ->
                 check r             = Done (unRunIter r) c
             in check $ runIter i0 mempty
 
--- XXX doesn't handle EOF properly
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop i0 = Iter $ \c@(Chunk t eof) ->
-             let setEOF (Chunk t' _) = Chunk t' eof
-                 check (IterF i) | eof       = Done i chunkEOF
-                                 | otherwise = IterF $ inumNop i
-                 check r@(IterM _) = stepM r check
-                 check r@(IterC _ _) = stepC r check
-                 check r = Done (unRunIter $ setResid r mempty)
-                           (setEOF $ getResid r)
-             in check $ runIter i0 (chunk t)
-
+inumNop = Iter . nextChunk
+    where
+      nextChunk i0 c@(Chunk t eof) = check $ runIter i0 $ chunk t
+          where
+            setEOF (Chunk t' _) = Chunk t' eof
+            check (IterF i) | eof       = Done i chunkEOF
+                            | otherwise = IterF $ Iter $ nextChunk i
+            check r@(IterM _)           = stepM r check
+            check r@(IterC _ _)         = stepC r check
+            check r                     = Done (unRunIter $ setResid r mempty)
+                                          (setEOF $ getResid r)
 
 {-
 genInum :: (ChunkData t, Monad m) =>
