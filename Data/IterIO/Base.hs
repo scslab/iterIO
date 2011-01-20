@@ -358,12 +358,36 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
 
     fail msg = throwI $ ErrorCall msg
 
+instance (ChunkData t, Monad m) => Monad (IterR t m) where
+    return a = Done a mempty
+
+    (Done a c) >>= k       = runIterR (k a) c
+    (IterF (Iter i)) >>= k = IterF $ Iter $ i >=> k
+    (IterM m) >>= k        = IterM $ liftM (>>= k) m
+    (IterC a fr) >>= k     = IterC a $ fr >=> k
+    err >>= _              = IterFail (getIterError err) (getResid err)
+
+    fail msg = IterFail (toException $ ErrorCall msg) mempty
+
+instance (ChunkData t) => MonadTrans (IterR t) where
+    lift m = IterM $ m >>= return . return
+
 instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
     mzero = throwI $ IterMiscParseErr "mzero"
     mplus a b = ifParse a return b
 
 instance (ChunkData t) => MonadTrans (Iter t) where
     lift m = Iter $ \c -> IterM $ m >>= return . flip Done c
+
+translateIterEOF :: (ChunkData t) => IO a -> IO (IterR t m a)
+translateIterEOF m = do
+  result <- try m
+  case result of
+    Right ok -> return $ Done ok mempty
+    Left err -> return $ flip IterFail mempty $
+        case fromException err of
+          Just ioerr | isEOFError ioerr -> toException $ IterEOF ioerr
+          _                             -> err
 
 -- | The 'Iter' instance of 'MonadIO' handles errors specially.  If the
 -- lifted operation throws an exception, 'liftIO' catches the
@@ -387,7 +411,7 @@ instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
                  _                             -> err
 
 -- | This is a generalization of 'fixIO' for arbitrary members of the
--- 'MonadIO' class.  
+-- 'MonadIO' class.
 fixMonadIO :: (MonadIO m) =>
               (a -> m a) -> m a
 fixMonadIO f = do
