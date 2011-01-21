@@ -14,12 +14,12 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , stat100, stat200, stat301, stat302, stat303, stat304
                         , stat400, stat401, stat403, stat404, stat500, stat501
                         , HttpResp(..), defaultHttpResp
-                        , mkHttpHead, mkHtmlResp
-                        , resp301, resp404, resp500
+                        , mkHttpHead, mkHtmlResp, mkContentLenResp, mkOnumResp
+                        , resp301, resp303, resp404, resp500
                         , enumHttpResp
                         -- * For routing
                         , HttpRoute(..)
-                        , routeConst, routeFn
+                        , routeConst, routeFn, routeReq
                         , routeMethod, routeHost, routeTop
                         , HttpMap, routeMap, routeName, routeVar
                         , HttpServerConf(..), nullHttpServer, ioHttpServer
@@ -704,7 +704,7 @@ defaultFormField = FormField {
 -- >               "The value of " ++ (S8.unpack $ ffName field) ++ " is:"
 -- >           stdoutI                   -- Send form value to standard output
 -- >           liftIO $ putStrLn "\n"
--- >     foldform req docontrol ()
+-- >     foldForm req docontrol ()
 --
 -- Or to produce a list of (field, value) pairs, you can say something
 -- like:
@@ -712,7 +712,7 @@ defaultFormField = FormField {
 -- >  do let docontrol acc field = do
 -- >           val <- pureI
 -- >           return $ (ffName field, val) : acc
--- >     foldform req docontrol []
+-- >     foldForm req docontrol []
 --
 -- Note that for POSTed forms of enctype
 -- @application/x-www-form-urlencoded@, @foldForm@ will read to the
@@ -984,6 +984,23 @@ mkHtmlResp stat html = resp
                         , respBody = enumPure html
                         }
 
+mkContentLenResp stat ctype body =
+  HttpResp { respStatus = stat
+           , respHeaders = [contentType, contentLength]
+           , respChunk = False
+           , respBody = enumPure body }
+ where
+  contentType = S8.pack $ "Content-Type: " ++ ctype
+  contentLength = S8.pack $ "Content-Length: " ++ show (L8.length body)
+
+mkOnumResp stat ctype body =
+  HttpResp { respStatus = stat
+           , respHeaders = [contentType]
+           , respChunk = True
+           , respBody = body }
+ where
+  contentType = S8.pack $ "Content-Type: " ++ ctype
+
 htmlEscapeChar :: Char -> Maybe String
 htmlEscapeChar '<'  = Just "&lt;"
 htmlEscapeChar '>'  = Just "&gt;"
@@ -1015,6 +1032,20 @@ resp301 target =
                  , htmlEscape target
                  , L8.pack "\">here</A>.</P>\n"]
 
+-- | Generate a 303 (see other) response
+resp303 :: (Monad m) => String -> HttpResp m
+resp303 target =
+    respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat303 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>303 See Other</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>See Other</H1>\n\
+                  \<P>The document has moved <A HREF=\""
+                 , htmlEscape target
+                 , L8.pack "\">here</A>.</P>\n"]
 
 -- | Generate a 404 (not found) response.
 resp404 :: (Monad m) => HttpReq -> HttpResp m
@@ -1117,6 +1148,11 @@ routeConst resp = HttpRoute $ const $ Just $ return resp
 -- succeeds, so anything 'mappend'ed will never be used.
 routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
 routeFn fn = HttpRoute $ Just . fn
+
+routeReq :: (HttpReq -> HttpRoute m) -> HttpRoute m
+routeReq fn = HttpRoute $ \req ->
+                let (HttpRoute route) = fn req
+                in route req
 
 -- | Route the root directory (/).
 routeTop :: HttpRoute m -> HttpRoute m
