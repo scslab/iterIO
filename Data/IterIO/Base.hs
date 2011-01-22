@@ -315,12 +315,14 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
     (*>)   = (>>)
     a <* b = do r <- a; b >> return r
 
+{-
 -- | Step an 'IterF' to its next state, and apply a function to the
 -- result.
 stepF :: (ChunkData t, Monad m1, Monad m2) =>
          IterR t m1 a -> (IterR t m1 a -> IterR t m2 b) -> IterR t m2 b
 stepF (IterF (Iter i)) f = IterF $ Iter $ f . i
 stepF r f                = f r
+-}
 
 stepM :: (ChunkData t1, ChunkData t2, Monad m) =>
          IterR t1 m a -> (IterR t1 m a -> IterR t2 m b) -> IterR t2 m b
@@ -1457,12 +1459,9 @@ joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
 joinI = onDone check
     where check (Done i c)       = runIter (runI i) c
           check (IterFail e c)   = IterFail e c
-          check (InumFail e i c) = step $ runIter i chunkEOF
-              where step (Done a _)        = InumFail e a c
-                    step (InumFail e' a _) = InumFail e' a c
-                    step (IterFail e' _)   = IterFail e' c
-                    step r@(IterM _)       = stepM r step
-                    step r@(IterC _ _)     = stepC r step
+          check (InumFail e i c0) = runIter (onDone setErr $ runI i) c0
+              where setErr (Done a c) = InumFail e a c
+                    setErr err        = err
 
 --
 -- Basic Inums
@@ -1733,6 +1732,8 @@ consCtl fn fallback arg@(CtlArg carg) =
 infixr 9 `consCtl`
 
 
+-}
+
 --
 -- Debugging
 --
@@ -1740,7 +1741,7 @@ infixr 9 `consCtl`
 -- | For debugging, print a tag along with the current residual input.
 -- Not referentially transparent.
 traceInput :: (ChunkData t, Monad m) => String -> Iter t m ()
-traceInput tag = IterF $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
+traceInput tag = Iter $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
 
 -- | For debugging.  Print the current thread ID and a message.  Not
 -- referentially transparent.
@@ -1748,5 +1749,3 @@ traceI :: (ChunkData t, Monad m) => String -> Iter t m ()
 traceI msg = return $ inlinePerformIO $ do
                tid <- myThreadId
                putTraceMsg $ show tid ++ ": " ++ msg
-
--}
