@@ -339,7 +339,7 @@ stepR :: (ChunkData t, Monad m) =>
 stepR (IterF (Iter i)) f = IterF $ Iter $ f . i
 stepR (IterM m) f        = IterM $ liftM f m
 stepR (IterC a fr) f     = IterC a $ f . fr
-stepR r f                = error $ "stepR: " ++ show r
+stepR r f                = f r
 
 -- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
 -- 'InumFail' state, then use a function to transform the 'IterR'.
@@ -522,7 +522,7 @@ unIterEOF e = case fromException e of
 -- state, feed it an EOF to extract a result.  Throws an exception if
 -- there has been a failure.
 run :: (ChunkData t, Monad m) => Iter t m a -> m a
-run i = check $ runIter i chunkEOF
+run i0 = check $ runIter i0 chunkEOF
     where check (Done a _)       = return a
           check (IterF i)        = run i
           check (IterM m)        = m >>= check
@@ -539,14 +539,14 @@ run i = check $ runIter i chunkEOF
 -- whenever possible.  See a more detailed discussion of the same
 -- issue in the documentation for '.|$'.
 runI :: (ChunkData t1, ChunkData t2, Monad m) => Iter t1 m a -> Iter t2 m a
-runI i = Iter $ \c ->
+runI i0 = Iter $ \c ->
          let check (Done a _)       = Done a c
              check (IterF i)        = check $ runIter i chunkEOF
              check (IterM m)        = IterM $ m >>= return . check
              check (IterC _ fr)     = check $ fr Nothing
              check (IterFail e _)   = IterFail e c
              check (InumFail e i _) = InumFail e i c
-         in check $ runIter i chunkEOF
+         in check $ runIter i0 chunkEOF
 
 -- | Run an 'Onum' on an 'Iter'.  This is the main way of actually
 -- executing IO with 'Iter's.  @|$@ is a type-restricted version of
@@ -1457,11 +1457,12 @@ joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
          Iter tIn m (Iter tOut m a)
       -> Iter tIn m a
 joinI = onDone check
-    where check (Done i c)       = runIter (runI i) c
-          check (IterFail e c)   = IterFail e c
+    where check (Done i c)        = runIter (runI i) c
+          check (IterFail e c)    = IterFail e c
           check (InumFail e i c0) = runIter (onDone setErr $ runI i) c0
               where setErr (Done a c) = InumFail e a c
                     setErr err        = err
+          check _                 = error "joinI"
 
 --
 -- Basic Inums
@@ -1479,7 +1480,7 @@ inumMC i0 = Iter $ \c ->
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = Iter . nextChunk
     where
-      nextChunk i0 c@(Chunk t eof) = check $ runIter i0 $ chunk t
+      nextChunk i0 (Chunk t eof) = check $ runIter i0 $ chunk t
           where
             setEOF (Chunk t' _) = Chunk t' eof
             check (IterF i) | eof       = Done i chunkEOF
