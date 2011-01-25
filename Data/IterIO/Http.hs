@@ -984,6 +984,11 @@ mkHtmlResp stat html = resp
                         , respBody = enumPure html
                         }
 
+mkContentLenResp :: (Monad m)
+                 => HttpStatus
+                 -> String
+                 -> L.ByteString
+                 -> HttpResp m
 mkContentLenResp stat ctype body =
   HttpResp { respStatus = stat
            , respHeaders = [contentType, contentLength]
@@ -993,6 +998,11 @@ mkContentLenResp stat ctype body =
   contentType = S8.pack $ "Content-Type: " ++ ctype
   contentLength = S8.pack $ "Content-Length: " ++ show (L8.length body)
 
+mkOnumResp :: (Monad m)
+           => HttpStatus
+           -> String
+           -> Onum L.ByteString m (Iter L.ByteString m ())
+           -> HttpResp m
 mkOnumResp stat ctype body =
   HttpResp { respStatus = stat
            , respHeaders = [contentType]
@@ -1149,6 +1159,7 @@ routeConst resp = HttpRoute $ const $ Just $ return resp
 routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
 routeFn fn = HttpRoute $ Just . fn
 
+-- | Construct a route by inspecting the request.
 routeReq :: (HttpReq -> HttpRoute m) -> HttpRoute m
 routeReq fn = HttpRoute $ \req ->
                 let (HttpRoute route) = fn req
