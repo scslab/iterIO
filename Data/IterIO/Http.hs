@@ -510,7 +510,7 @@ request_headers = Map.fromList $
                   map (\(a, b) -> (S8.map toLower $ S8.pack a, b)) $
     [
       ("Host", host_hdr)
-    -- , ("Cookie", cookie_hdr)
+    , ("Cookie", cookie_hdr)
     , ("Content-Type", content_type_hdr)
     , ("Content-Length", content_length_hdr)
     , ("Transfer-Encoding", transfer_encoding_hdr)
