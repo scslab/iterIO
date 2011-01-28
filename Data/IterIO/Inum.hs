@@ -7,7 +7,7 @@
 -- The second, 'mkInumM', creates an 'Inum' out of a computation in
 -- the 'InumM' monad.  'InumM' is an 'Iter' that wraps its inner
 -- monadic type with an 'IterStateT' to keep track of the state of the
--- 'Iter' being feed data.  'InumM' computations can consume input by
+-- 'Iter' being fed data.  'InumM' computations can consume input by
 -- invoking 'Iter' computations (though 'Iter's that are not
 -- polymorphic in their monad may need to be transformed with the
 -- 'liftIterM' function).  The 'InumM' computation can produce output

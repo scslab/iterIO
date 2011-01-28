@@ -22,6 +22,8 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , routeConst, routeFn, routeReq
                         , routeMethod, routeHost, routeTop
                         , HttpMap, routeMap, routeName, routeVar
+                        -- * HTTP Server
+                        , HttpRequestHandler
                         , HttpServerConf(..), nullHttpServer, ioHttpServer
                         , inumHttpServer
                         -- -- * For debugging
@@ -1227,31 +1229,33 @@ routeVar (HttpRoute route) = HttpRoute check
                         _:_ -> route $ popPath True req
                         _   -> Nothing
 
+type HttpRequestHandler m = HttpReq -> Iter L.ByteString m (HttpResp m)
+
 -- | Data structure describing the configuration of an HTTP server for
 -- 'inumHttpServer'.
 data HttpServerConf m = HttpServerConf {
       srvLogger :: !(String -> Iter L.ByteString m ())
     , srvDate :: !(Iter L.ByteString m (Maybe UTCTime))
-    , srvRoute :: !(HttpRoute m)
+    , srvHandler :: !(HttpRequestHandler m)
     }
 
 -- | Generate a null 'HttpServerConf' structure with no logging and no
 -- Date header.
-nullHttpServer :: (Monad m) => HttpRoute m -> HttpServerConf m
-nullHttpServer route = HttpServerConf {
-                         srvLogger = const $ return ()
-                       , srvDate = return Nothing
-                       , srvRoute = route
-                       }
+nullHttpServer :: (Monad m) => HttpRequestHandler m -> HttpServerConf m
+nullHttpServer handler = HttpServerConf {
+                           srvLogger = const $ return ()
+                         , srvDate = return Nothing
+                         , srvHandler = handler
+                         }
 
 -- | Generate an 'HttpServerConf' structure that uses IO calls to log to
 -- standard error and get the current time for the Date header.
-ioHttpServer :: (MonadIO m) => HttpRoute m -> HttpServerConf m
-ioHttpServer route = HttpServerConf {
-                       srvLogger = liftIO . hPutStrLn stderr
-                     , srvDate = liftIO $ Just `liftM` getCurrentTime
-                     , srvRoute = route
-                     }
+ioHttpServer :: (MonadIO m) => HttpRequestHandler m -> HttpServerConf m
+ioHttpServer handler = HttpServerConf {
+                         srvLogger = liftIO . hPutStrLn stderr
+                       , srvDate = liftIO $ Just `liftM` getCurrentTime
+                       , srvHandler = handler
+                       }
 
 -- | An 'Inum' that behaves like an HTTP server.  See 'HttpRoute' for
 -- a simple usage example.
@@ -1265,13 +1269,12 @@ inumHttpServer server = mkInumM loop
         unless eof doreq
       doreq = do
         req <- httpReqI
-        let respaction = fromMaybe (return $ resp404 req) $
-                         runHttpRoute (srvRoute server) req
+        let handler = srvHandler server req
         resp <- liftIterM $ inumHttpBody req .|
-                (catchI respaction handler <* nullI)
+                (catchI handler errHandler <* nullI)
         now <- liftIterM $ srvDate server
         catchOrI (irun $ enumHttpResp resp now) fatal (const $ loop)
-      handler e@(SomeException _) _ = do
+      errHandler e@(SomeException _) _ = do
         srvLogger server $ "Response error: " ++ show e
         return $ resp500 $ show e
       fatal e@(SomeException _) = do
