@@ -22,7 +22,7 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , routeConst, routeFn, routeReq
                         , routeMethod, routeHost, routeTop
                         , HttpMap, routeMap, routeName, routeVar
-                        -- * HTTP Server
+                        -- * HTTP connection handling
                         , HttpRequestHandler
                         , HttpServerConf(..), nullHttpServer, ioHttpServer
                         , inumHttpServer
@@ -1109,7 +1109,7 @@ enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
 -- Request routing
 --
 
--- | Simple HTTP request routing structure for 'inumHttpServer'.  This
+-- | Simple HTTP request-routing structure.  This
 -- is a wrapper around a function on 'HttpReq' structures.  If the
 -- function accepts the 'HttpReq', it returns 'Just' a response
 -- action.  Otherwise it returns 'Nothing'.
@@ -1120,8 +1120,9 @@ enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
 -- > simpleServer :: Iter L.ByteString IO ()  -- Output to web browser
 -- >              -> Onum L.ByteString IO ()  -- Input from web browser
 -- >              -> IO ()
--- > simpleServer iter enum = enum |$ inumHttpServer routing .| iter
--- >     where routing = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
+-- > simpleServer iter enum = enum |$ inumHttpServer (ioHttpServer handler) .| iter
+-- >     where handler req = fromMaybe (resp404 req) $ runHttpRoute routing req
+-- >           routing = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
 -- >                             , routeName "cabal" $ routeFn serve_cabal
 -- >                             ]
 --
@@ -1130,7 +1131,8 @@ enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
 -- request for a path under @/cabal/@ will then have the first
 -- component (@\"cabal\"@) stripped from 'reqPathLst', have that same
 -- component added to 'reqPathCtx', and finally be routed to the
--- function @serve_cabal@.
+-- function @serve_cabal@.  Any other request will result in
+-- HTTP 404 (Not Found).
 data HttpRoute m = HttpRoute {
       runHttpRoute :: !(HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
     }
@@ -1229,6 +1231,8 @@ routeVar (HttpRoute route) = HttpRoute check
                         _:_ -> route $ popPath True req
                         _   -> Nothing
 
+-- | Given the headers of an HTTP request, provides an iteratee that
+-- will process the request body (if any) and return a response.
 type HttpRequestHandler m = HttpReq -> Iter L.ByteString m (HttpResp m)
 
 -- | Data structure describing the configuration of an HTTP server for
