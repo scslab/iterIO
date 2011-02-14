@@ -24,6 +24,7 @@ import System.Posix.Files
 import Data.IterIO
 -- import Data.IterIO.Parse
 import Data.IterIO.Http
+import Data.IterIO.HttpRoute
 import Data.IterIO.SSL
 -- import Data.IterIO.ListLike
 
