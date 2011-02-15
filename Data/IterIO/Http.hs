@@ -1128,8 +1128,7 @@ ioHttpServer handler = HttpServerConf {
                        , srvHandler = handler
                        }
 
--- | An 'Inum' that behaves like an HTTP server.  See 'HttpRoute' for
--- a simple usage example.
+-- | An 'Inum' that behaves like an HTTP server.
 inumHttpServer :: (MonadIO m) =>
                   HttpServerConf m  -- ^ Server configuration
                -> Inum L.ByteString L.ByteString m ()
