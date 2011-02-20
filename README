@@ -6,5 +6,6 @@ commands to install required packages:
 	cabal update
 	cabal install ListLike HSOpenSSL stringsearch
 	cabal install blaze-html regex-posix xhtml utf8-string
+	cabal install binary
 
 Then run "make" or "gmake" to build the example programs.
