@@ -391,6 +391,9 @@ translateIterEOF m = do
           Just ioerr | isEOFError ioerr -> toException $ IterEOF ioerr
           _                             -> err
 
+instance (ChunkData t, MonadIO m) => MonadIO (IterR t m) where
+    liftIO m = IterM $ liftIO $ translateIterEOF m
+
 -- | The 'Iter' instance of 'MonadIO' handles errors specially.  If the
 -- lifted operation throws an exception, 'liftIO' catches the
 -- exception and returns it as an 'IterFail' failure.  Moreover, an IO
@@ -403,14 +406,7 @@ translateIterEOF m = do
 -- nested calls to 'lift'.  See the documentation of '.|$' for an
 -- example.
 instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
-    liftIO m = do
-      result <- lift $ liftIO $ try m
-      case result of
-        Right ok -> return ok
-        Left err -> Iter $ \c -> flip IterFail c $
-               case fromException err of
-                 Just ioerr | isEOFError ioerr -> toException $ IterEOF ioerr
-                 _                             -> err
+    liftIO m = Iter $ runIterR $ IterM $ liftIO $ translateIterEOF m
 
 -- | This is a generalization of 'fixIO' for arbitrary members of the
 -- 'MonadIO' class.
@@ -1212,7 +1208,7 @@ ifParse iter yes no =
 -- reversed.
 ifNoParse :: (ChunkData t, Monad m) =>
              Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
-ifNoParse iter no yes = ifParse iter yes no
+ifNoParse = flip . ifParse
 
 
 --

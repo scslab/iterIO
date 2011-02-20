@@ -12,6 +12,7 @@
 module Data.IterIO.Trans (-- * Iter-specific state monad transformer
                           IterStateT(..), runIterStateT
                          , iget, igets, iput, imodify
+{-
                           -- * Functions for building Iter monad adapters
                          , adaptIter, adaptIterM
                          -- * Adapters for Iters of mtl transformers
@@ -19,9 +20,11 @@ module Data.IterIO.Trans (-- * Iter-specific state monad transformer
                          , runContTI, runErrorTI, runListTI, runReaderTI
                          , runRWSI, runRWSLI, runStateTI, runStateTLI
                          , runWriterTI, runWriterTLI
+-}
                          )
     where
 
+{-
 import Control.Monad.Cont
 import Control.Monad.Error
 import Control.Monad.List
@@ -32,6 +35,10 @@ import Control.Monad.Writer.Strict
 import qualified Control.Monad.RWS.Lazy as Lazy
 import qualified Control.Monad.State.Lazy as Lazy
 import qualified Control.Monad.Writer.Lazy as Lazy
+-}
+import Control.Monad
+import Control.Monad.Trans
+import Data.Monoid
 
 import Data.IterIO.Base
 
@@ -61,15 +68,16 @@ instance (MonadIO m) => MonadIO (IterStateT s m) where
 -- | Runs an @'IterStateT' s m@ computation on some state @s@.
 -- Returns the state of the 'Iter' and the state of @s@ as a pair.
 -- Pulls residual input up to the enclosing 'Iter' monad the same way
--- that 'finishI' does.
+-- that 'inumNop' does.
 runIterStateT :: (ChunkData t, Monad m) => 
-                 Iter t (IterStateT s m) a -> s -> Iter t m (Iter t m a, s)
-runIterStateT iter0 s = adapt iter0
+                 Iter t (IterStateT s m) a -> s -> Iter t m (IterR t m a, s)
+runIterStateT i0 s0 = Iter $ adapt s0 . runIter i0
     where
-      adapt iter@(IterF _)         = IterF $ adapt . feedI iter
-      adapt (IterM (IterStateT f)) = lift (f s) >>= uncurry runIterStateT
-      adapt (IterC a fr)           = IterC a $ adapt . fr
-      adapt inactive               = liftM (\a -> (a, s)) $ pullupI inactive
+      adapt s (IterM (IterStateT f)) = IterM $
+                                       liftM (uncurry $ flip adapt) (f s)
+      adapt s (IterF i)              = IterF $ runIterStateT i s
+      adapt s r@(IterC _ _)          = stepC r $ adapt s
+      adapt s r                      = Done (setResid r mempty, s) (getResid r)
 
 -- | Returns the state in an @'Iter' t ('IterStateT' s m)@ monad.
 -- Analogous to @'get'@ for a @'StateT' s m@ monad.
@@ -90,6 +98,8 @@ iput s = lift $ IterStateT $ \_ -> return ((), s)
 -- @'StateT'@.
 imodify :: (ChunkData t, Monad m) => (s -> s) -> Iter t (IterStateT s m) ()
 imodify f = lift $ IterStateT $ \s -> return ((), f s)
+
+{-
 
 --
 -- Adapter utility functions
@@ -126,8 +136,9 @@ adaptIter :: (ChunkData t, Monad m1, Monad m2) =>
           -> (m1 (Iter t m1 a) -> Iter t m2 b) -- ^ How to adapt computations
           -> Iter t m1 a                       -- ^ Input computation
           -> Iter t m2 b                       -- ^ Output computation
-adaptIter f mf = adapt
+adaptIter f mf = Iter . runAdapt
     where
+      runAdapt m = adapt . runIter m
       adapt iter@(IterF _)   = IterF $ adapt . feedI iter
       adapt (IterM m)        = mf m
       adapt (Done a c)       = Done (f a) c
@@ -329,3 +340,5 @@ instance (MonadWriter w m) => MonadWriter w (IterStateT s m) where
     pass   m = IterStateT $ \s -> pass $ do
                  ((a, f), s') <- unIterStateT m s
                  return ((a, s'), f)
+
+-}
