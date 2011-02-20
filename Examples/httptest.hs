@@ -11,6 +11,7 @@ import Control.Monad.Trans
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 -- import qualified Data.ByteString.Lazy.Char8 as L8
+import Data.Maybe (fromMaybe)
 import Data.Monoid
 import qualified Network.Socket as Net
 import qualified OpenSSL as SSL
@@ -23,6 +24,7 @@ import System.Posix.Files
 import Data.IterIO
 -- import Data.IterIO.Parse
 import Data.IterIO.Http
+import Data.IterIO.HttpRoute
 import Data.IterIO.SSL
 -- import Data.IterIO.ListLike
 
@@ -111,8 +113,9 @@ accept_loop srv = loop
     where
       loop = do
         (iter, enum) <- httpAccept srv
-        _ <- forkIO $ enum |$ inumHttpServer (ioHttpServer route) .| iter
+        _ <- forkIO $ enum |$ inumHttpServer (ioHttpServer handler) .| iter
         loop
+      handler req = fromMaybe (return $ resp404 req) $ runHttpRoute route req
       route = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
                       , routeName "cabal" $ routeFn serve_cabal
                       ]

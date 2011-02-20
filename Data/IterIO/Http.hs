@@ -14,14 +14,11 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , stat100, stat200, stat301, stat302, stat303, stat304
                         , stat400, stat401, stat403, stat404, stat500, stat501
                         , HttpResp(..), defaultHttpResp
-                        , mkHttpHead, mkHtmlResp
-                        , resp301, resp404, resp500
+                        , mkHttpHead, mkHtmlResp, mkContentLenResp, mkOnumResp
+                        , resp301, resp303, resp404, resp500
                         , enumHttpResp
-                        -- * For routing
-                        , HttpRoute(..)
-                        , routeConst, routeFn
-                        , routeMethod, routeHost, routeTop
-                        , HttpMap, routeMap, routeName, routeVar
+                        -- * HTTP connection handling
+                        , HttpRequestHandler
                         , HttpServerConf(..), nullHttpServer, ioHttpServer
                         , inumHttpServer
                         -- -- * For debugging
@@ -38,7 +35,6 @@ import Data.Bits
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
-import Data.Monoid
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
@@ -62,7 +58,6 @@ import Data.IterIO.Search
 -- import System.IO
 
 type L = L8.ByteString
-
 type S = S.ByteString
 
 strictify :: L -> S
@@ -704,7 +699,7 @@ defaultFormField = FormField {
 -- >               "The value of " ++ (S8.unpack $ ffName field) ++ " is:"
 -- >           stdoutI                   -- Send form value to standard output
 -- >           liftIO $ putStrLn "\n"
--- >     foldform req docontrol ()
+-- >     foldForm req docontrol ()
 --
 -- Or to produce a list of (field, value) pairs, you can say something
 -- like:
@@ -712,7 +707,7 @@ defaultFormField = FormField {
 -- >  do let docontrol acc field = do
 -- >           val <- pureI
 -- >           return $ (ffName field, val) : acc
--- >     foldform req docontrol []
+-- >     foldForm req docontrol []
 --
 -- Note that for POSTed forms of enctype
 -- @application/x-www-form-urlencoded@, @foldForm@ will read to the
@@ -984,6 +979,33 @@ mkHtmlResp stat html = resp
                         , respBody = enumPure html
                         }
 
+mkContentLenResp :: (Monad m)
+                 => HttpStatus
+                 -> String
+                 -> L.ByteString
+                 -> HttpResp m
+mkContentLenResp stat ctype body =
+  HttpResp { respStatus = stat
+           , respHeaders = [contentType, contentLength]
+           , respChunk = False
+           , respBody = enumPure body }
+ where
+  contentType = S8.pack $ "Content-Type: " ++ ctype
+  contentLength = S8.pack $ "Content-Length: " ++ show (L8.length body)
+
+mkOnumResp :: (Monad m)
+           => HttpStatus
+           -> String
+           -> Onum L.ByteString m (Iter L.ByteString m ())
+           -> HttpResp m
+mkOnumResp stat ctype body =
+  HttpResp { respStatus = stat
+           , respHeaders = [contentType]
+           , respChunk = True
+           , respBody = body }
+ where
+  contentType = S8.pack $ "Content-Type: " ++ ctype
+
 htmlEscapeChar :: Char -> Maybe String
 htmlEscapeChar '<'  = Just "&lt;"
 htmlEscapeChar '>'  = Just "&gt;"
@@ -1015,6 +1037,20 @@ resp301 target =
                  , htmlEscape target
                  , L8.pack "\">here</A>.</P>\n"]
 
+-- | Generate a 303 (see other) response
+resp303 :: (Monad m) => String -> HttpResp m
+resp303 target =
+    respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat303 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>303 See Other</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>See Other</H1>\n\
+                  \<P>The document has moved <A HREF=\""
+                 , htmlEscape target
+                 , L8.pack "\">here</A>.</P>\n"]
 
 -- | Generate a 404 (not found) response.
 resp404 :: (Monad m) => HttpReq -> HttpResp m
@@ -1062,152 +1098,37 @@ enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
       hdr h = L.fromChunks [h, S8.pack "\r\n"]
       maybeChunk = if respChunk resp then inumToChunks else inumNop
 
---
--- Request routing
---
-
--- | Simple HTTP request routing structure for 'inumHttpServer'.  This
--- is a wrapper around a function on 'HttpReq' structures.  If the
--- function accepts the 'HttpReq', it returns 'Just' a response
--- action.  Otherwise it returns 'Nothing'.
---
--- @HttpRoute@ is a 'Monoid', and hence can be concatenated with
--- 'mappend' or 'mconcat'.  For example, you can say something like:
---
--- > simpleServer :: Iter L.ByteString IO ()  -- Output to web browser
--- >              -> Onum L.ByteString IO ()  -- Input from web browser
--- >              -> IO ()
--- > simpleServer iter enum = enum |$ inumHttpServer routing .| iter
--- >     where routing = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
--- >                             , routeName "cabal" $ routeFn serve_cabal
--- >                             ]
---
--- The above function will redirect requests for @/@ to the URL
--- @/cabal@ using an HTTP 301 (Moved Permanently) response.  Any
--- request for a path under @/cabal/@ will then have the first
--- component (@\"cabal\"@) stripped from 'reqPathLst', have that same
--- component added to 'reqPathCtx', and finally be routed to the
--- function @serve_cabal@.
-data HttpRoute m = HttpRoute {
-      runHttpRoute :: !(HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
-    }
-
-instance Monoid (HttpRoute m) where
-    mempty = HttpRoute $ const Nothing
-    mappend (HttpRoute a) (HttpRoute b) =
-        HttpRoute $ \req -> a req `mplus` b req
-
-popPath :: Bool -> HttpReq -> HttpReq
-popPath isParm req =
-    case reqPathLst req of
-      h:t -> req { reqPathLst = t
-                 , reqPathCtx = reqPathCtx req ++ [h]
-                 , reqPathParams = if isParm then h : reqPathParams req
-                                             else reqPathParams req
-                 }
-      _   -> error "Data.IterIO.Http.popPath: empty path"
-
--- | Route all requests to a constant response action that does not
--- depend on the request.  This route always succeeds, so anything
--- 'mappend'ed will never be used.
-routeConst :: (Monad m) => HttpResp m -> HttpRoute m
-routeConst resp = HttpRoute $ const $ Just $ return resp
-
--- | Route all requests to a particular function.  This route always
--- succeeds, so anything 'mappend'ed will never be used.
-routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
-routeFn fn = HttpRoute $ Just . fn
-
--- | Route the root directory (/).
-routeTop :: HttpRoute m -> HttpRoute m
-routeTop (HttpRoute route) = HttpRoute $ \req ->
-                             if null $ reqPathLst req then route req
-                             else Nothing
-
--- | Route requests whose \"Host:\" header matches a particular
--- string.
-routeHost :: String -- ^ String to compare against host (must be lower-case)
-          -> HttpRoute m   -- ^ Target route to follow if host matches
-          -> HttpRoute m
-routeHost host (HttpRoute route) = HttpRoute check
-    where shost = S8.pack $ map toLower host
-          check req | reqHost req /= shost = Nothing
-                    | otherwise            = route req
-
--- | Route based on the method (GET, POST, etc.) in a request.
-routeMethod :: String           -- ^ String method should match
-            -> HttpRoute m      -- ^ Target route to take if method matches
-            -> HttpRoute m
-routeMethod method (HttpRoute route) = HttpRoute check
-    where smethod = S8.pack method
-          check req | reqMethod req /= smethod = Nothing
-                    | otherwise                = route req
-
--- | Type alias for the argument of 'routeMap'.
-type HttpMap m = [(String, HttpRoute m)]
-
--- | @routeMap@ builds an efficient map out of a list of
--- @(directory_name, 'HttpRoute')@ pairs.
-routeMap :: HttpMap m -> HttpRoute m
-routeMap lst = HttpRoute check
-    where
-      check req = case reqPathLst req of
-                    h:_ -> maybe Nothing
-                           (\(HttpRoute route) -> route $ popPath False req)
-                           (Map.lookup h rmap)
-                    _   -> Nothing
-      packfirst (a, b) = (S8.pack a, b)
-      rmap = Map.fromListWithKey nocombine $ map packfirst lst
-      nocombine k _ _ = error $ "routeMap: duplicate key for " ++ S8.unpack k
-
--- | Routes a specific directory name, like 'routeMap' for a singleton
--- map.
-routeName :: String -> HttpRoute m -> HttpRoute m
-routeName name (HttpRoute route) = HttpRoute check
-    where sname = S8.pack name
-          headok (h:_) | h == sname = True
-          headok _                  = False
-          check req | headok (reqPathLst req) = route $ popPath False req
-          check _                             = Nothing
-
--- | Matches any directory name, but additionally pushes it onto the
--- front of the 'reqPathParams' list in the 'HttpReq' structure.  This
--- allows the name to serve as a variable argument to the eventual
--- handling function.
-routeVar :: HttpRoute m -> HttpRoute m
-routeVar (HttpRoute route) = HttpRoute check
-    where check req = case reqPathLst req of
-                        _:_ -> route $ popPath True req
-                        _   -> Nothing
+-- | Given the headers of an HTTP request, provides an iteratee that
+-- will process the request body (if any) and return a response.
+type HttpRequestHandler m = HttpReq -> Iter L.ByteString m (HttpResp m)
 
 -- | Data structure describing the configuration of an HTTP server for
 -- 'inumHttpServer'.
 data HttpServerConf m = HttpServerConf {
       srvLogger :: !(String -> Iter L.ByteString m ())
     , srvDate :: !(Iter L.ByteString m (Maybe UTCTime))
-    , srvRoute :: !(HttpRoute m)
+    , srvHandler :: !(HttpRequestHandler m)
     }
 
 -- | Generate a null 'HttpServerConf' structure with no logging and no
 -- Date header.
-nullHttpServer :: (Monad m) => HttpRoute m -> HttpServerConf m
-nullHttpServer route = HttpServerConf {
-                         srvLogger = const $ return ()
-                       , srvDate = return Nothing
-                       , srvRoute = route
-                       }
+nullHttpServer :: (Monad m) => HttpRequestHandler m -> HttpServerConf m
+nullHttpServer handler = HttpServerConf {
+                           srvLogger = const $ return ()
+                         , srvDate = return Nothing
+                         , srvHandler = handler
+                         }
 
 -- | Generate an 'HttpServerConf' structure that uses IO calls to log to
 -- standard error and get the current time for the Date header.
-ioHttpServer :: (MonadIO m) => HttpRoute m -> HttpServerConf m
-ioHttpServer route = HttpServerConf {
-                       srvLogger = liftIO . hPutStrLn stderr
-                     , srvDate = liftIO $ Just `liftM` getCurrentTime
-                     , srvRoute = route
-                     }
+ioHttpServer :: (MonadIO m) => HttpRequestHandler m -> HttpServerConf m
+ioHttpServer handler = HttpServerConf {
+                         srvLogger = liftIO . hPutStrLn stderr
+                       , srvDate = liftIO $ Just `liftM` getCurrentTime
+                       , srvHandler = handler
+                       }
 
--- | An 'Inum' that behaves like an HTTP server.  See 'HttpRoute' for
--- a simple usage example.
+-- | An 'Inum' that behaves like an HTTP server.
 inumHttpServer :: (MonadIO m) =>
                   HttpServerConf m  -- ^ Server configuration
                -> Inum L.ByteString L.ByteString m ()
@@ -1218,13 +1139,12 @@ inumHttpServer server = mkInumM loop
         unless eof doreq
       doreq = do
         req <- httpReqI
-        let respaction = fromMaybe (return $ resp404 req) $
-                         runHttpRoute (srvRoute server) req
+        let handler = srvHandler server req
         resp <- liftIterM $ inumHttpBody req .|
-                (catchI respaction handler <* nullI)
+                (catchI handler errHandler <* nullI)
         now <- liftIterM $ srvDate server
         catchOrI (irun $ enumHttpResp resp now) fatal (const $ loop)
-      handler e@(SomeException _) _ = do
+      errHandler e@(SomeException _) _ = do
         srvLogger server $ "Response error: " ++ show e
         return $ resp500 $ show e
       fatal e@(SomeException _) = do
