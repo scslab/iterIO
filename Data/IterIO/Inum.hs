@@ -4,6 +4,7 @@
 {-# LANGUAGE FunctionalDependencies #-}
 
 module Data.IterIO.Inum
+{-
     (-- * Base types
      Inum, Onum
     -- * concatenation and fusing operators
@@ -14,7 +15,7 @@ module Data.IterIO.Inum
     -- * Some basic Inums
     , inumNop
     -- , enumPure, inumF, inumC, inumFC, inumMC, inumLazy, inumRepeat
-    ) where
+    ) -} where
 
 import Prelude hiding (null)
 import qualified Prelude
@@ -64,7 +65,7 @@ import System.IO
 -- hides most of the error handling details.  Most @Inum@s are
 -- polymorphic in the last type, @a@, in order to work with iteratees
 -- returning any type.
-type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (Iter tOut m a)
+type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (IterR tOut m a)
 
 -- | An @Onum t m a@ is just an 'Inum' in which the input is
 -- @()@--i.e., @'Inum' () t m a@--so that there is no meaningful input
@@ -96,9 +97,11 @@ type Onum t m a = Inum () t m a
 --  inum |$ iter = 'run' (inum .| iter)
 --  infixr 2 |$
 -- @
+{-
 (|$) :: (ChunkData t, Monad m) => Onum t m a -> Iter t m a -> m a
 (|$) inum iter = run (inum .| iter)
 infixr 2 |$
+-}
 
 -- | @.|$@ is a variant of '|$' that allows you to apply an 'Onum'
 -- from within an 'Iter' monad.  This is often useful in conjuction
@@ -147,10 +150,12 @@ infixr 2 |$
 -- >     where
 -- >       iter = liftIO (enumPure "test2" |$ fail "error")
 -- >       handler (SomeException _) _ = return "caught error"
+{-
 (.|$) :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Onum tOut m a -> Iter tOut m a -> Iter tIn m a
 (.|$) enum iter = runI (enum .| iter)
 infixr 2 .|$
+-}
 
 -- | A function that mostly acts like '>>=', but preserves 'InumFail'
 -- failures.  (By contrast, @m '>>=' k@ will translate an 'InumFail'
@@ -198,11 +203,11 @@ infixl 1 `inumBind`
 -- @cat@ has fixity:
 --
 -- > infixr 3 `cat`
-cat :: (ChunkData tIn, Monad m) =>
+cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-cat a b iter = a iter `inumBind` b
+cat a b iter = a iter `inumBind` b . unRunIter
 infixr 3 `cat`
 
 -- | Fuse two 'Inum's when the output type of the first 'Inum' is the
@@ -220,19 +225,35 @@ infixr 3 `cat`
 -- Has fixity:
 --
 -- > infixl 4 |.
+{-
 (|.) :: (ChunkData tIn, ChunkData tOut, Monad m) => 
-        Inum tIn tOut m b
+        Inum tIn tOut m (Iter t m a)
      -- ^ 'Inum' translating from @tIn@ to @tOut@.
-     -> (b -> Iter tOut m b)
+     -> (Iter t m' a -> Iter tOut m (IterR t m' a))
      -- ^ 'Inum' translating from @tOut@ to something else.  Typically
      -- @b@ is @'Iter' tOut2 m a@, making the overall type of this
      -- argument equivalent to @'Inum' tOut tOut2 m a@.
-     -> (b -> Iter tIn m b)
+     -> (Iter t m' a -> Iter tIn m (IterR t m' a))
      -- ^ Returns a function of type @b -> 'Iter' tIn m b@, which,
      -- when @b@ is @'Iter' tOut2 m a@, is equivalent to an @'Inum'
      -- tIn tOut2 m a@.
 (|.) outer inner iter = joinI $ outer $ inner iter
+-}
+{-
+(|.) :: (ChunkData tIn, ChunkData tOut, Monad m) => 
+        Inum t1 t2 m x -> Inum t2 t3 m y -> Inum t1 t3 m z
+-}
+(|.) outer inner iter = onDone joinR $ outer (inner iter)
 infixl 4 |.
+
+joinR :: (ChunkData t1, ChunkData t2, Monad m) =>
+         IterR t1 m (IterR t2 m a) -> IterR t1 m a
+joinR (Done r c)       = runIterR (runR r) c
+joinR (IterFail e c)   = IterFail e c
+joinR (InumFail e i c) = InumFail e i c
+joinR _                = error "joinR: not done"
+
+{-
 
 -- | Fuse an 'Inum' that transcodes @tIn@ to @tOut@ with an 'Iter'
 -- taking type @tOut@ to produce an 'Iter' taking type @tIn@.  Has
@@ -382,3 +403,5 @@ inumNop = Iter . nextChunk
             check r@(IterM _)           = stepM r check
             check r                     = Done (unRunIter $ setResid r mempty)
                                           (setEOF $ getResid r)
+
+-}

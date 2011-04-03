@@ -22,7 +22,7 @@ module Data.IterIO.Iter
     -- * Some basic Iters
     , nullI, dataI, pureI, chunkI, peekI, atEOFI, ungetI, joinI
     -- * Internal functions
-    , onDone, stepM, stepR, unRunIter, setResid, getResid
+    , onDone, stepM, stepR, runR, unRunIter, runIterR, setResid, getResid
     -- * Misc debugging functions
     , traceInput, traceI
     ) where
@@ -325,6 +325,13 @@ run i0 = check $ runIter i0 chunkEOF
           check (IterFail e _)   = throw $ unIterEOF e
           check (InumFail e _ _) = throw $ unIterEOF e
 
+runR :: (ChunkData t1, ChunkData t2, Monad m) => IterR t1 m a -> IterR t2 m a
+runR (Done a _)       = Done a mempty
+runR (IterF i)        = runR $ runIter i chunkEOF
+runR (IterM m)        = IterM $ liftM runR m
+runR (IterFail e _)   = IterFail e mempty
+runR (InumFail e i _) = InumFail e i mempty
+
 -- | Runs an 'Iter' from within a different 'Iter' monad.  If
 -- successful, @runI iter@ will produce the same result as @'lift'
 -- ('run' iter)@.  However, if @iter@ fails, 'run' throws a
@@ -334,6 +341,8 @@ run i0 = check $ runIter i0 chunkEOF
 -- whenever possible.  See a more detailed discussion of the same
 -- issue in the documentation for '.|$'.
 runI :: (ChunkData t1, ChunkData t2, Monad m) => Iter t1 m a -> Iter t2 m a
+runI i = Iter $ runIterR (runR $ runIter i chunkEOF)
+{-
 runI i0 = Iter $ \c ->
           let check (Done a _)       = Done a c
               check (IterF i)        = check $ runIter i chunkEOF
@@ -341,6 +350,7 @@ runI i0 = Iter $ \c ->
               check (IterFail e _)   = IterFail e c
               check (InumFail e i _) = InumFail e i c
           in check $ runIter i0 chunkEOF
+-}
 
 --
 -- Exceptions
