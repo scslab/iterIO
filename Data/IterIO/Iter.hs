@@ -24,7 +24,7 @@ module Data.IterIO.Iter
     -- * Internal functions
     , onDone
     , onDoneR, stepR, runR, reRunIter, runIterR
-    , getResid, setResid, flushResid
+    , getResid, setResid
     -- * Misc debugging functions
     , traceInput, traceI
     ) where
@@ -459,12 +459,12 @@ genCatchI :: (ChunkData t, Monad m, Exception e) =>
           -> (e -> IterR t m a -> Iter t m b) 
           -- ^ Exception handler
           -> (a -> b)
-          -- ^ Conversion function for 'InumFail' errors.
+          -- ^ Conversion function for result and 'InumFail' errors.
           -> Iter t m b
 genCatchI iter0 handler conv = onDone check iter0
     where check (Done a c) = Done (conv a) c
           check iter = case fromException $ getIterError iter of
-                         Just e  -> runIter (handler e (flushResid iter))
+                         Just e  -> runIter (handler e (setResid iter mempty))
                                     (getResid iter)
                          Nothing -> fixup iter
           fixup (IterFail e c)   = IterFail e c
@@ -800,7 +800,7 @@ ifNoParse = flip . ifParse
 -- | Sinks data like @\/dev\/null@, returning @()@ on EOF.
 nullI :: (Monad m, ChunkData t) => Iter t m ()
 nullI = Iter $ \(Chunk _ eof) ->
-        if eof then Done mempty chunkEOF else IterF nullI
+        if eof then Done () chunkEOF else IterF nullI
 
 -- | Returns any non-empty amount of input data, or throws an
 -- exception if EOF is encountered and there is no data.
@@ -808,7 +808,7 @@ dataI :: (Monad m, ChunkData t) => Iter t m t
 dataI = iterF nextChunk
     where eoferr = toException $ mkIterEOF "dataI"
           nextChunk c@(Chunk d True) | null d = IterFail eoferr c
-          nextChunk (Chunk d _)               = Done d mempty
+          nextChunk (Chunk d eof)             = Done d (Chunk mempty eof)
 
 -- | A variant of 'dataI' that reads the whole input up to an
 -- end-of-file and returns it.
@@ -821,7 +821,7 @@ pureI = loop id
 -- | Returns the next 'Chunk' that either contains non-'null' data or
 -- has the EOF bit set.
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
-chunkI = iterF $ \c -> Done c mempty
+chunkI = iterF $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
 
 -- | Runs an 'Iter' without consuming any input.  (See 'tryBI' if you
 -- want to avoid consuming input just when the 'Iter' fails.)
@@ -853,19 +853,13 @@ getResid :: (ChunkData t) => IterR t m a -> Chunk t
 getResid (Done _ c)       = c
 getResid (IterFail _ c)   = c
 getResid (InumFail _ _ c) = c
-getResid _                = mempty
+getResid r                = error $ "getResid: " ++ show r
 
 setResid :: (ChunkData t1) => IterR t1 m1 a -> Chunk t2 -> IterR t2 m2 a
 setResid (Done a _)       = Done a
 setResid (IterFail e _)   = IterFail e
 setResid (InumFail e a _) = InumFail e a
 setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
-
-flushResid :: (ChunkData t) => IterR t m a -> IterR t m a
-flushResid (Done a _)       = Done a mempty
-flushResid (IterFail e _)   = IterFail e mempty
-flushResid (InumFail e a _) = InumFail e a mempty
-flushResid r                = r
 
 runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
 runIterR iter0 c = if null c then iter0 else check iter0

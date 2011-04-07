@@ -21,7 +21,7 @@ import Prelude hiding (null)
 import qualified Prelude
 import Data.IterIO.Iter
 
-import Control.Exception (Exception(..))
+import Control.Exception (SomeException(..), Exception(..))
 import Control.Monad
 import Control.Monad.Trans
 import Data.Monoid
@@ -154,34 +154,6 @@ infixr 2 |$
 (.|$) enum iter = runI (enum .| iter)
 infixr 2 .|$
 
--- | A function that allows construction of an 'IterR' based on the
--- result of another 'IterR' of the same type.  If the first 'IterR'
--- is in a failed state, simply returns it and ignores the second
--- argument.  This behavior ensures that 'InumFail' states are
--- preserved.  Has fixity:
---
--- > infixl 1 `inumBindR`
-inumBindR :: (ChunkData t, Monad m) =>
-             IterR t m a -> (a -> IterR t m a) -> IterR t m a
-inumBindR (Done a c) k       = runIterR (k a) c
-inumBindR (IterF (Iter f)) k = IterF $ Iter $ \c -> inumBindR (f c) k
-inumBindR (IterM m) k        = IterM $ liftM (`inumBindR` k) m
-inumBindR r _                = r
-infixl 1 `inumBindR`
-
--- | A function that mostly acts like '>>=', but preserves 'InumFail'
--- failures.  (By contrast, @m '>>=' k@ will translate an 'InumFail'
--- in @m@ into an 'IterFail'.)  Has fixity:
---
--- > infixl 1 `inumBind`
-inumBind :: (ChunkData t, Monad m) =>
-            Iter t m a -> (a -> Iter t m a) -> Iter t m a
-inumBind m k = onDone check m
-    where check (Done a c) = runIter (k a) c
-          check r          = r
-infixl 1 `inumBind`
-
-
 -- | Concatenate the outputs of two enumerators.  For example,
 -- @'enumFile' \"file1\" \`cat\` 'enumFile' \"file2\"@ produces an
 -- 'Onum' that outputs the concatenation of files \"file1\" and
@@ -220,18 +192,30 @@ cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-cat a b iter = a iter `inumBind` b . reRunIter
+cat a b iter = do
+  er <- tryI $ a iter
+  case er of
+    Right r                   -> b $ reRunIter r
+    Left (SomeException _, r) -> reRunIter r -- Re-throw exception
+-- Note this was carefully constructed to preserve InumFail errors.
+-- Something like:  cat a b iter = a iter >>= b . reRunIter
+-- would not preserve InumFail errors; since the input and output
+-- types of >>= do not have to be the same, >>= must convert InumFail
+-- errors into IterFail ones).
 infixr 3 `cat`
 
 -- | Transforms the result of an 'Inum' into the result of the 'Iter'
 -- that it contains.  Used by '|.' and '.|' to collapse their result
 -- types.
 joinR :: (ChunkData tIn, ChunkData tMid, Monad m) =>
-         IterR tIn m (IterR tMid m a) -- First m could be m'
+         IterR tIn m (IterR tMid m a)
       -> IterR tIn m a
-joinR (Done r c)       = runIterR (runR r) c
+joinR (Done i c)       = runIterR (runR i) c
 joinR (IterFail e c)   = IterFail e c
-joinR (InumFail e i c) = runR i `inumBindR` \i' -> InumFail e i' c
+joinR (InumFail e i c) = flip onDoneR (runR i) $ \r ->
+                          case r of
+                            Done a _ -> InumFail e a c
+                            _        -> setResid r c
 joinR _                = error "joinR: not done"
 
 -- | Fuse two 'Inum's when the output type of the first 'Inum' is the
@@ -242,7 +226,7 @@ joinR _                = error "joinR: not done"
 --
 -- Typically @i@ and @iR@ are types @'Iter' tOut2 m a@ and
 -- @'IterR' tOut2 m a@ respectively, in which case the second
--- argument and result are also 'Inum's.
+-- argument and result of @|.@ are also 'Inum's.
 --
 -- Has fixity:
 --
@@ -396,18 +380,17 @@ mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
 mkInum adjustResid codec iter0 = doIter iter0
     where
       doIter iter = catchOrI codec (inputErr iter) (doInput iter)
+      inputErr iter e | isIterEOF e = return $ IterF iter
+                      | otherwise   = Iter $ InumFail e (IterF iter)
 
       doInput iter input = do
-        stop <- Iter $ \c@(Chunk t eof) -> Done (eof && null t) c
         r <- runIterM iter (Chunk input False)
+        stop <- Iter $ \c@(Chunk t eof) -> Done (eof && null t) c
         case (stop, r) of
           (False, IterF i) -> doIter i
           _ -> Iter $ \c ->
                case runResid (c, getResid r) of
                  (tIn, tOut) -> Done (setResid r tOut) tIn
-
-      inputErr iter e | isIterEOF e = return $ IterF iter
-                      | otherwise   = Iter $ InumFail e (IterF iter)
 
       runResid (Chunk tIn0 eofIn, Chunk tOut0 eofOut) =
           case adjustResid (tIn0, tOut0) of
