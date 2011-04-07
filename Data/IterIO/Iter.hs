@@ -15,15 +15,15 @@ module Data.IterIO.Iter
     , IterExpected(..), IterMiscParseErr(..)
     -- * Exception-related functions
     , throwI, throwEOFI
-    , tryI, tryBI, catchI, finallyI, onExceptionI, catchOrI
-    , catchBI, handlerI, handlerBI
+    , genCatchI, catchI, catchOrI, handlerI, tryI, finallyI, onExceptionI
+    , catchBI, handlerBI, tryBI 
     , mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
     , nullI, dataI, pureI, chunkI, peekI, atEOFI, ungetI
     -- * Internal functions
     , onDone
-    , onDoneR, stepR, runR, unRunIter, runIterR, setResid, getResid
+    , onDoneR, stepR, runR, reRunIter, runIterR, setResid, getResid
     -- * Misc debugging functions
     , traceInput, traceI
     ) where
@@ -214,19 +214,11 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
     (*>)   = (>>)
     a <* b = do r <- a; b >> return r
 
-{-
-stepM :: (ChunkData t1, ChunkData t2, Monad m) =>
-         IterR t1 m a -> (IterR t1 m a -> IterR t2 m b) -> IterR t2 m b
-stepM (IterM m) f = IterM $ liftM f m
-stepM r f         = f r
--}
-
 stepR :: (ChunkData t, Monad m) =>
          IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
 stepR (IterF (Iter i)) f = IterF $ Iter $ f . i
 stepR (IterM m) f        = IterM $ liftM f m
 stepR i _                = error $ "stepR " ++ show i
--- stepR r f                = f r
 
 onDoneR :: (ChunkData t, Monad m) =>
            (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
@@ -251,6 +243,7 @@ instance (ChunkData t, Monad m) => Monad (Iter t m) where
 
     fail msg = Iter $ IterFail (toException $ ErrorCall msg)
 
+{-
 instance (ChunkData t, Monad m) => Monad (IterR t m) where
     return a = Done a mempty
 
@@ -263,6 +256,7 @@ instance (ChunkData t, Monad m) => Monad (IterR t m) where
 
 instance (ChunkData t) => MonadTrans (IterR t) where
     lift m = IterM $ m >>= return . return
+-}
 
 instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
     mzero = throwI $ IterMiscParseErr "mzero"
@@ -281,8 +275,10 @@ translateIterEOF m = do
           Just ioerr | isEOFError ioerr -> toException $ IterEOF ioerr
           _                             -> err
 
+{-
 instance (ChunkData t, MonadIO m) => MonadIO (IterR t m) where
     liftIO m = IterM $ liftIO $ translateIterEOF m
+-}
 
 -- | The 'Iter' instance of 'MonadIO' handles errors specially.  If the
 -- lifted operation throws an exception, 'liftIO' catches the
@@ -442,95 +438,57 @@ throwI e = Iter $ IterFail (toException e)
 throwEOFI :: (ChunkData t) => String -> Iter t m a
 throwEOFI = throwI . mkIterEOF
 
--- | Internal function used by 'tryI' and 'tryBI' when re-propagating
--- exceptions that don't match the requested exception type.  (To make
--- the overall types of those two functions work out, a 'Right'
--- constructor needs to be wrapped around the returned failing
--- iteratee.)
-addRightToFail :: (ChunkData t) => IterR t m a -> IterR t m (Either e a)
-addRightToFail (InumFail e a c) = InumFail e (Right a) c
-addRightToFail (IterFail e c)   = IterFail e c
-addRightToFail i                = error $ "addRightToFail: " ++ show i
-
--- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
--- the 'Iter' throws an exception @e@, returns @'Left' (e, i)@ where
--- @i@ is the state of the failing 'Iter'.
-tryI :: (ChunkData t, Monad m, Exception e) =>
-        Iter t m a -> Iter t m (Either (e, Iter t m a) a)
-tryI = onDone errToEither
-    where
-      errToEither (Done a c) = Done (Right a) c
-      errToEither iter =
-          case fromException $ getIterError iter of
-            Nothing -> addRightToFail iter
-            Just e  -> Done (Left (e, Iter $ setResid iter)) (getResid iter)
-
--- | Run an 'Iter'.  Catch any exception it throws, or feed the result
--- to a continuation.
-catchOrI :: (ChunkData t, Monad m, Exception e) =>
-            Iter t m a
-         -> (e -> Iter t m b) 
-         -> (a -> Iter t m b)
-         -> (Iter t m b)
-catchOrI iter handler cont = onDone check iter
-    where check (Done a c) = runIter (cont a) c
-          check err        =
-              case fromException $ getIterError err of
-                Just e  -> runIter (handler e) (getResid err)
-                Nothing -> IterFail (getIterError err) (getResid err)
-
--- | Like 'onDone', but also keeps a copy of all input consumed.  (The
--- residual input on the 'IterR' returned will be a suffix of the
--- input returned.)
-onDoneInput :: (ChunkData t, Monad m) =>
-               (IterR t m a -> Chunk t -> IterR t m b)
-            -> Iter t m a
-            -> Iter t m b
-onDoneInput f = Iter . next id
-    where
-      next acc iter c = check $ runIter iter c
-          where check (IterF i) = IterF $ Iter $ next (acc . mappend c) i
-                check r | isIterActive r = stepR r check
-                        | otherwise      = f r $ acc c
-
--- | Simlar to 'tryI', but saves all data that has been fed to the
--- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
--- @tryBI@ stands for \"backtracking\".)  Thus, if @tryBI@ returns
--- @'Left' exception@, the next 'Iter' to be invoked will see the same
--- input that caused the previous 'Iter' to fail.  (For this reason,
--- it makes no sense ever to call 'resumeI' on the 'Iter' you get back
--- from @tryBI@, which is why @tryBI@ does not return the failing
--- Iteratee the way 'tryI' does.)
+-- | Run an 'Iter'.  Catch any exception it throws (and return the
+-- failing iter state).  Transform successful results with a function.
 --
--- Because @tryBI@ saves a copy of all input, it can consume a lot of
--- memory and should only be used when the 'Iter' argument is known to
--- consume a bounded amount of data.
-tryBI :: (ChunkData t, Monad m, Exception e) =>
-         Iter t m a -> Iter t m (Either e a)
-tryBI = onDoneInput errToEither
-    where errToEither (Done a c) _ = Done (Right a) c
-          errToEither iter c = case fromException $ getIterError iter of
-                                 Nothing -> addRightToFail iter
-                                 Just e  -> Done (Left e) c
+-- This funciton is slightly more generall than 'catchI'.  For
+-- instance, we can't implement 'tryI' in terms of just 'catchI'.
+-- Something like
+--
+-- > tryI iter = catchI (iter >>= return . Right) ...
+--
+-- would turn 'InumFail' states into 'IterFail' states, because the
+-- '>>=' operator has this effect.  (I.e., even if @iter@ is
+-- 'InumFail', the expression @iter >>= return . Right@ will be
+-- 'IterFail'.)  This could be particularly bad in cases where the
+-- exception is not even caught by the 'tryI' expression.
+genCatchI :: (ChunkData t, Monad m, Exception e) =>
+             Iter t m a
+          -- ^ 'Iter' that might throw an exception
+          -> (e -> IterR t m a -> Iter t m b) 
+          -- ^ Exception handler
+          -> (a -> b)
+          -- ^ Conversion function for 'InumFail' errors.
+          -> Iter t m b
+genCatchI iter0 handler conv = onDone check iter0
+    where check (Done a c) = Done (conv a) c
+          check iter = case fromException $ getIterError iter of
+                         Just e  -> runIter (handler e (setResid iter mempty))
+                                    (getResid iter)
+                         Nothing -> fixup iter
+          fixup (IterFail e c)   = IterFail e c
+          fixup (InumFail e a c) = InumFail e (conv a) c
+          fixup _                = error "genCatchI"
 
 -- | Catch an exception thrown by an 'Iter' or an enclosing 'Inum'
 -- (for instance one applied with '.|$').  If you wish to catch just
 -- errors thrown within 'Inum's, see the function 'inumCatch'.
 --
 -- On exceptions, @catchI@ invokes a handler passing it both the
--- exception thrown and the state of the failing 'Iter', which may
+-- exception thrown and the state of the failing 'IterR', which may
 -- contain more information than just the exception.  In particular,
--- if the exception occured in an 'Inum', the returned 'Iter' will
--- also contain the 'Iter' being fed by that 'Inum', which likely will
--- not have failed.  To avoid discarding this extra information, you
--- should not re-throw exceptions with 'throwI'.  Rather, you should
--- re-throw an exception by re-executing the failed 'Iter'.  For
--- example, you could define an @onExceptionI@ function analogous to
--- the standard library @'onException'@ as follows:
+-- if the exception occured in an 'Inum', the returned 'IterR' will
+-- also contain the 'IterR' being fed by that 'Inum', which likely
+-- will not have failed.  To avoid discarding this extra information,
+-- you should not re-throw exceptions with 'throwI'.  Rather, you
+-- should re-throw an exception by re-executing the failed 'IterR'
+-- with 'reRunIter'.  For example, you could define an @onExceptionI@
+-- function analogous to the standard library @'onException'@ as
+-- follows:
 --
 -- @
 --  onExceptionI iter cleanup =
---      iter \`catchI\` \\('SomeException' _) iter' -> cleanup >> iter'
+--      iter \`catchI\` \\('SomeException' _) r -> cleanup >> reRunIter r
 -- @
 --
 -- Note that @catchI@ only works for /synchronous/ exceptions, such as
@@ -540,17 +498,49 @@ tryBI = onDoneInput errToEither
 -- divide-by-zero errors, the 'throw' function, or exceptions raised
 -- by other threads using @'throwTo'@.
 --
--- @\`catchI\`@ has the default infix precedence (@infixl 9
--- \`catchI\`@), which binds more tightly than any concatenation or
--- fusing operators.
+-- @\`catchI\`@ has the default infix precedence
+-- (@infixl 9 -- \`catchI\`@), which binds more tightly than any
+-- concatenation or fusing operators.
 catchI :: (Exception e, ChunkData t, Monad m) =>
           Iter t m a
        -- ^ 'Iter' that might throw an exception
-       -> (e -> Iter t m a -> Iter t m a)
+       -> (e -> IterR t m a -> Iter t m a)
        -- ^ Exception handler, which gets as arguments both the
        -- exception and the failing 'Iter' state.
        -> Iter t m a
-catchI iter handler = tryI iter >>= either (uncurry handler) return
+catchI iter handler = genCatchI iter handler id
+
+-- | A version of 'catchI' with the arguments reversed, analogous to
+-- @'handle'@ in the standard library.  (A more logical name for this
+-- function might be @handleI@, but that name is used for the file
+-- handle iteratee in "Data.IterIO.ListLike".)
+handlerI :: (Exception e, ChunkData t, Monad m) =>
+          (e -> IterR t m a -> Iter t m a)
+         -- ^ Exception handler
+         -> Iter t m a
+         -- ^ 'Iter' that might throw an exception
+         -> Iter t m a
+handlerI = flip catchI
+
+-- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
+-- the 'Iter' throws an exception @e@, returns @'Left' (e, i)@ where
+-- @i@ is the state of the failing 'Iter'.
+tryI :: (ChunkData t, Monad m, Exception e) =>
+        Iter t m a -> Iter t m (Either (e, IterR t m a) a)
+tryI iter = genCatchI iter (\e r -> return $ Left (e, r)) Right
+
+-- | Run an 'Iter'.  Catch any exception it throws, or feed the result
+-- to a continuation.  Note that because it allows transformation of
+-- the return types, this function turns 'InumFail' errors into
+-- 'IterFail's.
+catchOrI :: (ChunkData t, Monad m, Exception e) =>
+            Iter t m a
+         -> (e -> Iter t m b) 
+         -> (a -> Iter t m b)
+         -> (Iter t m b)
+catchOrI iter handler cont = tryI iter >>= check
+    where check (Right a)     = cont a
+          check (Left (e, _)) = handler e
 
 -- | Execute an 'Iter', then perform a cleanup action regardless of
 -- whether the 'Iter' threw an exception or not.  Analogous to the
@@ -565,7 +555,22 @@ finallyI iter cleanup = onDone runclean iter
 -- @'onException'@.
 onExceptionI :: (ChunkData t, Monad m) =>
                 Iter t m a -> Iter t m b -> Iter t m a
-onExceptionI iter cleanup = catchI iter $ \(SomeException _) -> (cleanup >>)
+onExceptionI iter cleanup = catchI iter $ \(SomeException _) r ->
+                            cleanup >> reRunIter r
+
+-- | Like 'onDone', but also keeps a copy of all input consumed.  (The
+-- residual input on the 'IterR' returned will be a suffix of the
+-- input returned.)
+onDoneInput :: (ChunkData t, Monad m) =>
+               (IterR t m a -> Chunk t -> IterR t m b)
+            -> Iter t m a
+            -> Iter t m b
+onDoneInput f = Iter . next id
+    where next acc iter c =
+              let check (IterF i) = IterF $ Iter $ next (acc . mappend c) i
+                  check r | isIterActive r = stepR r check
+                          | otherwise      = f r $ acc c
+              in check $ runIter iter c
 
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception
@@ -587,18 +592,6 @@ catchBI iter0 handler = onDoneInput check iter0
                                    Nothing -> r
                                    Just e  -> runIter (handler e) c
 
--- | A version of 'catchI' with the arguments reversed, analogous to
--- @'handle'@ in the standard library.  (A more logical name for this
--- function might be @handleI@, but that name is used for the file
--- handle iteratee in "Data.IterIO.ListLike".)
-handlerI :: (Exception e, ChunkData t, Monad m) =>
-          (e -> Iter t m a -> Iter t m a)
-         -- ^ Exception handler
-         -> Iter t m a
-         -- ^ 'Iter' that might throw an exception
-         -> Iter t m a
-handlerI = flip catchI
-
 -- | 'catchBI' with the arguments reversed.
 handlerBI :: (Exception e, ChunkData t, Monad m) =>
              (e -> Iter t m a)
@@ -608,28 +601,28 @@ handlerBI :: (Exception e, ChunkData t, Monad m) =>
           -> Iter t m a
 handlerBI = flip catchBI
 
-{-
--- | Used in an exception handler, after an 'Inum' failure, to resume
--- processing of the 'Iter' by the next enumerator in a 'cat'ed
--- series.  See 'inumCatch' for an example.
-resumeI :: (ChunkData tIn, Monad m) =>
-           Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a)
-resumeI = onDone check
-    where check (InumFail _ a c) = Done a c
-          check _                = error "resumeI: not InumFail"
-
--- | Like 'resumeI', but if the 'Iter' is resumable, also prints an
--- error message to standard error before running it.
-verboseResumeI :: (ChunkData tIn, MonadIO m) =>
-                  Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a)
-verboseResumeI = onDone check
-    where check (InumFail e a c) =
-              flip runIter c $ liftIO $ do
-                prog <- getProgName
-                hPutStrLn stderr $ prog ++ ": " ++ show e
-                return a
-          check _                = error "verboseResumeI: not InumFail"
--}
+-- | Simlar to 'tryI', but saves all data that has been fed to the
+-- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
+-- @tryBI@ stands for \"backtracking\".)  Thus, if @tryBI@ returns
+-- @'Left' exception@, the next 'Iter' to be invoked will see the same
+-- input that caused the previous 'Iter' to fail.  (For this reason,
+-- it makes no sense ever to call 'resumeI' on the 'Iter' you get back
+-- from @tryBI@, which is why @tryBI@ does not return the failing
+-- Iteratee the way 'tryI' does.)
+--
+-- Because @tryBI@ saves a copy of all input, it can consume a lot of
+-- memory and should only be used when the 'Iter' argument is known to
+-- consume a bounded amount of data.
+tryBI :: (ChunkData t, Monad m, Exception e) =>
+         Iter t m a -> Iter t m (Either e a)
+tryBI = onDoneInput errToEither
+    where errToEither (Done a c) _ = Done (Right a) c
+          errToEither iter c = case fromException $ getIterError iter of
+                                 Just e  -> Done (Left e) c
+                                 Nothing -> addRightToFail iter
+          addRightToFail (InumFail e a c) = InumFail e (Right a) c
+          addRightToFail (IterFail e c)   = IterFail e c
+          addRightToFail _                = error "tryBI"
 
 mapExceptionR :: (ChunkData t, Monad m, Exception e1, Exception e2) =>
                  (e1 -> e2) -> IterR t m a -> IterR t m a
@@ -852,6 +845,7 @@ getIterError :: IterR t m a -> SomeException
 getIterError (IterFail e _)   = e
 getIterError (InumFail e _ _) = e
 getIterError (IterM _)        = error "getIterError: no error (in IterM state)"
+getIterError (IterF _)        = error "getIterError: no error (in IterF state)"
 getIterError _                = error "getIterError: no error to extract"
 
 getResid :: (ChunkData t) => IterR t m a -> Chunk t
@@ -874,8 +868,8 @@ runIterR iter0 c = if null c then iter0 else check iter0
           check (IterFail e c0)   = IterFail e (mappend c0 c)
           check (InumFail e a c0) = InumFail e a (mappend c0 c)
 
-unRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
-unRunIter = Iter . runIterR
+reRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
+reRunIter = Iter . runIterR
 
 {-
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The

@@ -220,7 +220,7 @@ cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-cat a b iter = a iter `inumBind` b . unRunIter
+cat a b iter = a iter `inumBind` b . reRunIter
 infixr 3 `cat`
 
 -- | Transforms the result of an 'Inum' into the result of the 'Iter'
@@ -261,8 +261,6 @@ infixl 4 |.
       -> Iter tIn m a
 (.|) inum iter = onDone joinR $ inum iter
 infixr 4 .|
-
-{-
 
 --
 -- Exception functions
@@ -323,15 +321,22 @@ infixr 4 .|
 inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
               Inum tIn tOut m a
            -- ^ 'Inum' that might throw an exception
-           -> (e -> Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a))
+           -> (e -> IterR tIn m (IterR tOut m a) -> Iter tIn m (IterR tOut m a))
            -- ^ Exception handler
            -> Inum tIn tOut m a
-inumCatch enum handler = onDone check . enum
-    where check r@(InumFail err a c) =
-              case fromException err of
-                Just e -> runIter (handler e $ Iter $ InumFail err a) c
-                Nothing -> r
-          check r                    = r
+inumCatch enum handler iter = catchI (enum iter) check
+    where check e r@(InumFail _ _ _) = handler e r
+          check _ r                  = reRunIter r
+
+-- | 'inumCatch' with the argument order switched.
+inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
+               (e -> IterR tIn m (IterR tOut m a)
+                  -> Iter tIn m (IterR tOut m a))
+            -- ^ Exception handler
+            -> Inum tIn tOut m a
+            -- ^ 'Inum' that might throw an exception
+            -> Inum tIn tOut m a
+inumHandler = flip inumCatch
 
 -- | Execute some cleanup action when an 'Inum' finishes.
 inumFinally :: (ChunkData tIn, Monad m) =>
@@ -345,35 +350,25 @@ inumOnException :: (ChunkData tIn, Monad m) =>
                Inum tIn tOut m a -> Iter tIn m b -> Inum tIn tOut m a
 inumOnException inum cleanup iter = inum iter `onExceptionI` cleanup
 
--- | 'inumCatch' with the argument order switched.
-inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
-               (e -> Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a))
-            -- ^ Exception handler
-            -> Inum tIn tOut m a
-            -- ^ 'Inum' that might throw an exception
-            -> Inum tIn tOut m a
-inumHandler = flip inumCatch
-
 -- | Used in an exception handler, after an 'Inum' failure, to resume
 -- processing of the 'Iter' by the next enumerator in a 'cat'ed
 -- series.  See 'inumCatch' for an example.
 resumeI :: (ChunkData tIn, Monad m) =>
-           Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a)
-resumeI = onDone check
-    where check (InumFail _ a c) = Done a c
-          check _                = error "resumeI: not InumFail"
+           IterR tIn m (IterR tOut m a) -> Iter tIn m (IterR tOut m a)
+resumeI (InumFail _ a _) = return a
+resumeI _                = error "resumeI: not InumFail"
 
 -- | Like 'resumeI', but if the 'Iter' is resumable, also prints an
 -- error message to standard error before running it.
 verboseResumeI :: (ChunkData tIn, MonadIO m) =>
-                  Iter tIn m (Iter tOut m a) -> Iter tIn m (Iter tOut m a)
-verboseResumeI = onDone check
-    where check (InumFail e a c) =
-              flip runIter c $ liftIO $ do
-                prog <- getProgName
-                hPutStrLn stderr $ prog ++ ": " ++ show e
-                return a
-          check _                = error "verboseResumeI: not InumFail"
+                  IterR tIn m (IterR tOut m a) -> Iter tIn m (IterR tOut m a)
+verboseResumeI (InumFail e a _) = do
+  liftIO $ do prog <- liftIO getProgName
+              hPutStrLn stderr $ prog ++ ": " ++ show e
+  return a
+verboseResumeI _                = error "verboseResumeI: not InumFail"
+
+{-
 
 
 --
@@ -385,7 +380,7 @@ inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           Inum tIn tOut m a
 inumMC i0 = Iter $ \c ->
             let check r@(IterM _)   = stepM r check
-                check r             = Done (unRunIter r) c
+                check r             = Done (reRunIter r) c
             in check $ runIter i0 mempty
 
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
@@ -397,7 +392,7 @@ inumNop = Iter . nextChunk
             check (IterF i) | eof       = Done i chunkEOF
                             | otherwise = IterF $ Iter $ nextChunk i
             check r@(IterM _)           = stepM r check
-            check r                     = Done (unRunIter $ setResid r mempty)
+            check r                     = Done (reRunIter $ setResid r mempty)
                                           (setEOF $ getResid r)
 
 -}
