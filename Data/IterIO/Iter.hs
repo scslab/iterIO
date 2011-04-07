@@ -23,7 +23,8 @@ module Data.IterIO.Iter
     , nullI, dataI, pureI, chunkI, peekI, atEOFI, ungetI
     -- * Internal functions
     , onDone
-    , onDoneR, stepR, runR, reRunIter, runIterR, setResid, getResid
+    , onDoneR, stepR, runR, reRunIter, runIterR
+    , getResid, setResid, flushResid
     -- * Misc debugging functions
     , traceInput, traceI
     ) where
@@ -463,7 +464,7 @@ genCatchI :: (ChunkData t, Monad m, Exception e) =>
 genCatchI iter0 handler conv = onDone check iter0
     where check (Done a c) = Done (conv a) c
           check iter = case fromException $ getIterError iter of
-                         Just e  -> runIter (handler e (setResid iter mempty))
+                         Just e  -> runIter (handler e (flushResid iter))
                                     (getResid iter)
                          Nothing -> fixup iter
           fixup (IterFail e c)   = IterFail e c
@@ -852,13 +853,19 @@ getResid :: (ChunkData t) => IterR t m a -> Chunk t
 getResid (Done _ c)       = c
 getResid (IterFail _ c)   = c
 getResid (InumFail _ _ c) = c
-getResid r                = error $ "getResid: not done (" ++ show r ++ ")"
+getResid _                = mempty
 
 setResid :: (ChunkData t1) => IterR t1 m1 a -> Chunk t2 -> IterR t2 m2 a
 setResid (Done a _)       = Done a
 setResid (IterFail e _)   = IterFail e
 setResid (InumFail e a _) = InumFail e a
 setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
+
+flushResid :: (ChunkData t) => IterR t m a -> IterR t m a
+flushResid (Done a _)       = Done a mempty
+flushResid (IterFail e _)   = IterFail e mempty
+flushResid (InumFail e a _) = InumFail e a mempty
+flushResid r                = r
 
 runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
 runIterR iter0 c = if null c then iter0 else check iter0
