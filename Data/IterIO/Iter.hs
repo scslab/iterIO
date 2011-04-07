@@ -20,9 +20,10 @@ module Data.IterIO.Iter
     , mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
-    , nullI, dataI, pureI, chunkI, peekI, atEOFI, ungetI, joinI
+    , nullI, dataI, pureI, chunkI, peekI, atEOFI, ungetI
     -- * Internal functions
-    , onDone, stepM, stepR, runR, unRunIter, runIterR, setResid, getResid
+    , onDone
+    , onDoneR, stepR, runR, unRunIter, runIterR, setResid, getResid
     -- * Misc debugging functions
     , traceInput, traceI
     ) where
@@ -213,24 +214,31 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
     (*>)   = (>>)
     a <* b = do r <- a; b >> return r
 
+{-
 stepM :: (ChunkData t1, ChunkData t2, Monad m) =>
          IterR t1 m a -> (IterR t1 m a -> IterR t2 m b) -> IterR t2 m b
 stepM (IterM m) f = IterM $ liftM f m
 stepM r f         = f r
+-}
 
 stepR :: (ChunkData t, Monad m) =>
          IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
 stepR (IterF (Iter i)) f = IterF $ Iter $ f . i
 stepR (IterM m) f        = IterM $ liftM f m
-stepR r f                = f r
+stepR i _                = error $ "stepR " ++ show i
+-- stepR r f                = f r
+
+onDoneR :: (ChunkData t, Monad m) =>
+           (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
+onDoneR f r = check r
+    where check r | isIterActive r = stepR r check
+                  | otherwise      = f r
 
 -- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
 -- 'InumFail' state, then use a function to transform the 'IterR'.
 onDone :: (ChunkData t, Monad m) =>
           (IterR t m a -> IterR t m b) -> Iter t m a -> Iter t m b
-onDone f i = Iter $ check . runIter i
-    where check r | isIterActive r = stepR r check
-                  | otherwise      = f r
+onDone f i = Iter $ onDoneR f . runIter i
 
 instance (ChunkData t, Monad m) => Monad (Iter t m) where
     return a = Iter $ Done a
@@ -869,6 +877,7 @@ runIterR iter0 c = if null c then iter0 else check iter0
 unRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
 unRunIter = Iter . runIterR
 
+{-
 -- | Join the result of an 'Inum', turning it into an 'Iter'.  The
 -- behavior of @joinI@ is similar to what one would obtain by defining
 -- @joinI iter = iter >>= 'runI'@, but with more precise error
@@ -891,6 +900,7 @@ joinI = onDone check
               where setErr (Done a c) = InumFail e a c
                     setErr err        = err
           check _                 = error "joinI"
+-}
 
 --
 -- Debugging
