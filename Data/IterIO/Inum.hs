@@ -227,7 +227,7 @@ infixr 3 `cat`
 -- that it contains.  Used by '|.' and '.|' to collapse their result
 -- types.
 joinR :: (ChunkData tIn, ChunkData tMid, Monad m) =>
-         IterR tIn m (IterR tMid m a)
+         IterR tIn m (IterR tMid m a) -- First m could be m'
       -> IterR tIn m a
 joinR (Done r c)       = runIterR (runR r) c
 joinR (IterFail e c)   = IterFail e c
@@ -236,17 +236,21 @@ joinR _                = error "joinR: not done"
 
 -- | Fuse two 'Inum's when the output type of the first 'Inum' is the
 -- same as the input type of the second.  More specifically, if
--- @inum1@ transcodes type @tIn@ to @tMin@ and @inum2@ transcodes
--- @tMid@ to @tOut@, then @inum1 |. inum2@ produces a new 'Inum' that
--- transcodes from @tIn@ to @tOut@.
+-- @inum1@ transcodes type @tIn@ to @tOut@ and @inum2@ transcodes
+-- @tOut@ to @tOut2@, then @inum1 |. inum2@ produces a new 'Inum' that
+-- transcodes from @tIn@ to @tOut2@.
+--
+-- Typically @i@ and @iR@ are types @'Iter' tOut2 m a@ and
+-- @'IterR' tOut2 m a@ respectively, in which case the second
+-- argument and result are also 'Inum's.
 --
 -- Has fixity:
 --
 -- > infixl 4 |.
-(|.) :: (ChunkData tIn, ChunkData tMid, Monad m) =>
-        Inum tIn tMid m (IterR tOut m a)
-     -> Inum tMid tOut m a
-     -> Inum tIn tOut m a
+(|.) :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+        Inum tIn tOut m iR      -- ^
+     -> (i -> Iter tOut m iR)
+     -> (i -> Iter tIn m iR)
 (|.) outer inner iter = onDone joinR $ outer $ inner iter
 infixl 4 |.
 
@@ -368,12 +372,12 @@ verboseResumeI (InumFail e a _) = do
   return a
 verboseResumeI _                = error "verboseResumeI: not InumFail"
 
-{-
-
 
 --
 -- Basic Inums
 --
+
+{-
 
 inumMC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           -- CtlHandler (Iter tIn m) ->
