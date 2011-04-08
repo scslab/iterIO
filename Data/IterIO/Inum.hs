@@ -160,11 +160,12 @@ infixr 2 .|$
 -- \"file2\".  Unless there is an 'InumFail' failure, @cat@ always
 -- invokes both 'Inum's, as the second 'Inum' may have monadic
 -- side-effects that must be executed even when the 'Iter' has already
--- finished.  You can wrap 'inumLazy' around an 'Inum' to prevent this
--- behavior and just return immediately if the 'Iter' has stopped
--- accepting input.  Conversely, if you want to continue executing
--- even in the event of an 'InumFail' condition, you can wrap the
--- first 'Inum' with 'inumCatch'.
+-- finished.  See 'lcat' if you want to stop when the 'Iter' no longer
+-- requires input.  If you want to continue executing even in the
+-- event of an 'InumFail' condition, you can wrap the first 'Inum'
+-- with 'inumCatch'.
+--
+-- THE REST OF THIS TEXT NEEDS TO BE ADJUSTED
 --
 -- @cat@ is useful in right folds.  Say, for example, that @files@ is
 -- a list of files that you want to concatenate.  You can use a
@@ -189,11 +190,11 @@ infixr 2 .|$
 --
 -- > infixr 3 `cat`
 cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-        Inum tIn tOut m a      -- ^
-     -> Inum tIn tOut m a
-     -> Inum tIn tOut m a
+       Inum tIn tOut m a      -- ^
+    -> Inum tIn tOut m a
+    -> Inum tIn tOut m a
 cat a b iter = do
-  er <- tryI $ a iter
+  er <- tryI $ runInumM a iter
   case er of
     Right r                   -> b $ reRunIter r
     Left (SomeException _, r) -> reRunIter r -- Re-throw exception
@@ -203,6 +204,21 @@ cat a b iter = do
 -- types of >>= do not have to be the same, >>= must convert InumFail
 -- errors into IterFail ones).
 infixr 3 `cat`
+
+-- | Lazy cat.  Like 'cat', except that it does not run the second
+-- 'Inum' if the 'Iter' is no longer active after completion of the
+-- first 'Inum'.
+lcat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+        Inum tIn tOut m a      -- ^
+     -> Inum tIn tOut m a
+     -> Inum tIn tOut m a
+lcat a b iter = do
+  er <- tryI $ runInumM a iter
+  case er of
+    Right (IterF i) -> b i
+    Right r -> return r
+    Left (SomeException _, r) -> reRunIter r
+infixr 3 `lcat`
 
 -- | Transforms the result of an 'Inum' into the result of the 'Iter'
 -- that it contains.  Used by '|.' and '.|' to collapse their result
