@@ -102,7 +102,7 @@ instance (ChunkData t) => Monoid (Chunk t) where
     mappend ca@(Chunk a eofa) cb@(Chunk b eofb)
         | eofa      = error $ "mappend to EOF: " ++ show ca
                                            ++ " `mappend` " ++ show cb
-        | null b    = Chunk a eofb -- Just an optimization for below case
+        | null b    = Chunk a eofb -- Just an optimization for case below
         | otherwise = Chunk (mappend a b) eofb
 
 -- | A 'Chunk' is 'null' when its data is 'null' and its EOF flag is
@@ -135,6 +135,10 @@ newtype Iter t m a = Iter { runIter :: Chunk t -> IterR t m a }
 iterF :: (ChunkData t) => (Chunk t -> IterR t m a) -> Iter t m a
 iterF f = Iter $ \c -> if null c then IterF $ iterF f else f c
 
+-- | Class of control commands for enclosing enumerators.  The class
+-- binds each control argument type to a unique result type.
+class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
+
 -- | An @IterR@ is in one of several states:  it may require more
 -- input ('IterF'), it may wish to execute monadic actions in the
 -- transformed monad ('IterM'), it may have produced a result
@@ -150,6 +154,9 @@ data IterR t m a = IterF !(Iter t m a)
                  -- ^ The iteratee requires more input.
                  | IterM !(m (IterR t m a))
                  -- ^ The iteratee must execute monadic bind in monad @m@
+                 | forall carg cres. (CtlCmd carg cres) =>
+                   IterC !carg (Maybe cres -> Iter t m a) (Chunk t)
+                 -- ^ Control request
                  | Done a (Chunk t)
                  -- ^ Sufficient input was received; the 'Iter' is
                  -- returning a result of type @a@.  In adition, the
@@ -167,15 +174,18 @@ data IterR t m a = IterF !(Iter t m a)
 -- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
 -- error states.
 isIterActive :: IterR t m a -> Bool
-isIterActive (IterF _)   = True
-isIterActive (IterM _)   = True
-isIterActive _           = False
+isIterActive (IterF _)     = True
+isIterActive (IterM _)     = True
+isIterActive (IterC _ _ _) = True
+isIterActive _             = False
 
 -- | Show the current state of an 'IterR', prepending it to some
 -- remaining input (the standard 'ShowS' optimization), when 'a' is in
 -- class 'Show'.  Note that if @a@ is not in 'Show', you can simply
 -- use the 'shows' function.
 iterShows :: (ChunkData t, Show a) => IterR t m a -> ShowS
+iterShows (IterC a _ c) rest =
+    "IterC " ++ (shows (typeOf a) $ " _ " ++ shows c rest)
 iterShows (Done a c) rest = "Done " ++ (shows a $ " " ++ shows c rest)
 iterShows (InumFail e a c) rest =
     "InumFail " ++ (shows e $ " (" ++ (shows a $ ") " ++ shows c rest))
@@ -190,6 +200,8 @@ iterShow iter = iterShows iter ""
 instance (ChunkData t) => Show (IterR t m a) where
     showsPrec _ (IterF _) rest = "IterF _" ++ rest
     showsPrec _ (IterM _) rest = "IterM _" ++ rest
+    showsPrec _ (IterC a _ c) rest =
+        "IterC " ++ (shows (typeOf a) $ " _ _" ++ rest)
     showsPrec _ (Done _ c) rest = "Done _ " ++ shows c rest
     showsPrec _ (IterFail e c) rest =
         "IterFail " ++ (shows e $ " " ++ shows c rest)
@@ -215,32 +227,16 @@ instance (ChunkData t, Monad m) => Applicative (Iter t m) where
     (*>)   = (>>)
     a <* b = do r <- a; b >> return r
 
-stepR :: (ChunkData t, Monad m) =>
-         IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
-stepR (IterF (Iter i)) f = IterF $ Iter $ f . i
-stepR (IterM m) f        = IterM $ liftM f m
-stepR i _                = error $ "stepR " ++ show i
-
-onDoneR :: (ChunkData t, Monad m) =>
-           (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
-onDoneR f r = check r
-    where check r | isIterActive r = stepR r check
-                  | otherwise      = f r
-
--- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
--- 'InumFail' state, then use a function to transform the 'IterR'.
-onDone :: (ChunkData t, Monad m) =>
-          (IterR t m a -> IterR t m b) -> Iter t m a -> Iter t m b
-onDone f i = Iter $ onDoneR f . runIter i
-
-instance (ChunkData t, Monad m) => Monad (Iter t m) where
+instance (Monad m) => Monad (Iter t m) where
     return a = Iter $ Done a
 
-    m >>= k = onDone check m
-        where check (Done a c)       = runIter (k a) c
+    m >>= k = Iter $ check . runIter m
+        where check (IterF i)        = IterF $ i >>= k
+              check (IterM m)        = IterM $ m >>= return . check
+              check (IterC a n c)    = IterC a (n >=> k) c
+              check (Done a c)       = runIter (k a) c
               check (IterFail e c)   = IterFail e c
               check (InumFail e _ c) = IterFail e c
-              check _                = error "Iter >>="
 
     fail msg = Iter $ IterFail (toException $ ErrorCall msg)
 
@@ -263,15 +259,15 @@ instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
     mzero = throwI $ IterMiscParseErr "mzero"
     mplus a b = ifParse a return b
 
-instance (ChunkData t) => MonadTrans (Iter t) where
+instance MonadTrans (Iter t) where
     lift m = Iter $ \c -> IterM $ m >>= return . flip Done c
 
-translateIterEOF :: (ChunkData t) => IO a -> IO (IterR t m a)
+translateIterEOF :: IO a -> IO (Iter t m a)
 translateIterEOF m = do
   result <- try m
   case result of
-    Right ok -> return $ Done ok mempty
-    Left err -> return $ flip IterFail mempty $
+    Right ok -> return $ Iter $ Done ok
+    Left err -> return $ Iter $ IterFail $
         case fromException err of
           Just ioerr | isEOFError ioerr -> toException $ IterEOF ioerr
           _                             -> err
@@ -292,13 +288,13 @@ instance (ChunkData t, MonadIO m) => MonadIO (IterR t m) where
 -- monad transformers, 'liftIO' is /not/ equivalent to some number of
 -- nested calls to 'lift'.  See the documentation of '.|$' for an
 -- example.
-instance (ChunkData t, MonadIO m) => MonadIO (Iter t m) where
-    liftIO m = Iter $ runIterR $ IterM $ liftIO $ translateIterEOF m
+instance (MonadIO m) => MonadIO (Iter t m) where
+    liftIO m = Iter $ \c -> IterM $ do i <- liftIO $ translateIterEOF m
+                                       return $ runIter i c
 
 -- | This is a generalization of 'fixIO' for arbitrary members of the
 -- 'MonadIO' class.
-fixMonadIO :: (MonadIO m) =>
-              (a -> m a) -> m a
+fixMonadIO :: (MonadIO m) => (a -> m a) -> m a
 fixMonadIO f = do
   ref <- liftIO $ newIORef $ throw $ toException
          $ ErrorCall "fixMonadIO: non-termination"
@@ -307,7 +303,7 @@ fixMonadIO f = do
   liftIO $ writeIORef ref r
   return r
 
-instance (ChunkData t, MonadIO m) => MonadFix (Iter t m) where
+instance (MonadIO m) => MonadFix (Iter t m) where
     mfix f = fixMonadIO f
 
 --
@@ -558,20 +554,6 @@ onExceptionI :: (ChunkData t, Monad m) =>
                 Iter t m a -> Iter t m b -> Iter t m a
 onExceptionI iter cleanup = catchI iter $ \(SomeException _) r ->
                             cleanup >> reRunIter r
-
--- | Like 'onDone', but also keeps a copy of all input consumed.  (The
--- residual input on the 'IterR' returned will be a suffix of the
--- input returned.)
-onDoneInput :: (ChunkData t, Monad m) =>
-               (IterR t m a -> Chunk t -> IterR t m b)
-            -> Iter t m a
-            -> Iter t m b
-onDoneInput f = Iter . next id
-    where next acc iter c =
-              let check (IterF i) = IterF $ Iter $ next (acc . mappend c) i
-                  check r | isIterActive r = stepR r check
-                          | otherwise      = f r $ acc c
-              in check $ runIter iter c
 
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception
@@ -855,6 +837,39 @@ ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 --
 -- Iter manipulation functions
 --
+
+stepR :: (ChunkData t, Monad m) =>
+         IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
+stepR (IterF (Iter i)) f = IterF $ Iter $ f . i
+stepR (IterM m) f        = IterM $ liftM f m
+stepR (IterC a n c) f    = IterC a (Iter . (f .) . runIter . n) c
+stepR i _                = error $ "stepR " ++ show i
+
+onDoneR :: (ChunkData t, Monad m) =>
+           (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
+onDoneR f r = check r
+    where check r | isIterActive r = stepR r check
+                  | otherwise      = f r
+
+-- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
+-- 'InumFail' state, then use a function to transform the 'IterR'.
+onDone :: (ChunkData t, Monad m) =>
+          (IterR t m a -> IterR t m b) -> Iter t m a -> Iter t m b
+onDone f i = Iter $ onDoneR f . runIter i
+
+-- | Like 'onDone', but also keeps a copy of all input consumed.  (The
+-- residual input on the 'IterR' returned will be a suffix of the
+-- input returned.)
+onDoneInput :: (ChunkData t, Monad m) =>
+               (IterR t m a -> Chunk t -> IterR t m b)
+            -> Iter t m a
+            -> Iter t m b
+onDoneInput f = Iter . next id
+    where next acc iter c =
+              let check (IterF i) = IterF $ Iter $ next (acc . mappend c) i
+                  check r | isIterActive r = stepR r check
+                          | otherwise      = f r $ acc c
+              in check $ runIter iter c
 
 getIterError :: IterR t m a -> SomeException
 getIterError (IterFail e _)   = e

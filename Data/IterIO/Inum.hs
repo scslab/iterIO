@@ -397,8 +397,9 @@ runInumM inum = onDone check . inum
       check (Done (IterM m) c) = IterM $ m >>= \r -> return $ check $ Done r c
       check r = r
 
--- | Create an 'Inum' given a function to adjust residual data and an
--- 'Iter' that transcodes from the input to the output type.
+-- | Simple (stateless) 'Inum' creation.  Create an 'Inum' given a
+-- function to adjust residual data and an 'Iter' that transcodes from
+-- the input to the output type.
 mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           ((tIn, tOut) -> (tIn, tOut))
        -- ^ Adjust residual data
