@@ -427,12 +427,23 @@ pullupResid (a, b) = (mappend a b, mempty)
 -- Basic Inums
 --
 
+-- | @inumNop@ passes all data through to the underlying 'Iter'.  It
+-- acts as a no-op when fused to other 'Inum's with '|.' or fused to
+-- 'Iter's with '.|'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = mkInum pullupResid dataI
 
+-- | @inumNull@ feeds empty data to the underlying 'Iter'.  It acts as
+-- a no-op when concatenated to other 'Inum's with 'cat' or 'lcat'.
+inumNull :: (ChunkData tIn, ChunkData tOut, Monad m) => Inum tIn tOut m a
+inumNull = inumPure mempty
+
+-- | Feed pure data to an 'Iter'.
 inumPure :: (ChunkData tIn, Monad m) => tOut -> Inum tIn tOut m a
 inumPure t iter = runIterM iter $ chunk t
 
+-- | Repeat an 'Inum' until the input receives an EOF condition or the
+-- 'Iter' no longer requires input.
 inumRepeat :: (ChunkData tIn, Monad m) =>
               Inum tIn tOut m a -> Inum tIn tOut m a
 inumRepeat inum iter0 = do
