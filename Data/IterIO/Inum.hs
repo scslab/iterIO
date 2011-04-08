@@ -356,18 +356,30 @@ verboseResumeI (InumFail e a _) = do
   return a
 verboseResumeI _                = error "verboseResumeI: not InumFail"
 
-
 --
--- Basic Inums
+-- Basic tools
 --
 
 -- | Run an 'Iter' just like 'runIter', but then keep executing
 -- monadic actions for as long as the result is in the 'IterM' state.
+-- 'Inum's should generally use this function, as it is convenient if
+-- 'Inum's avoid ever returning 'IterR's in the 'IterM' state.
 runIterM :: (Monad m, MonadTrans mt, Monad (mt m)) =>
             Iter t m a -> Chunk t -> mt m (IterR t m a)
 runIterM iter c = check $ runIter iter c
     where check (IterM m) = lift m >>= check
           check r         = return r
+
+-- | Takes an 'Inum' that might return 'IterR's in the 'IterM' state
+-- (which is considered impolite--see 'runIterM') and transforms it
+-- into an 'Inum' then never returns 'IterR's in the 'IterM' state.
+runInumM :: (ChunkData tIn, Monad m) =>
+            Inum tIn tOut m a -> Inum tIn tOut m a
+runInumM inum = onDone check . inum
+    where
+      -- check (InumFail e (IterM m) c) = IterM $ m >>= \r -> return $ check $ InumFail e r c
+      check (Done (IterM m) c) = IterM $ m >>= \r -> return $ check $ Done r c
+      check r = r
 
 -- | Create an 'Inum' given a function to adjust residual data and an
 -- 'Iter' that transcodes from the input to the output type.
@@ -382,23 +394,35 @@ mkInum adjustResid codec iter0 = doIter iter0
       doIter iter = catchOrI codec (inputErr iter) (doInput iter)
       inputErr iter e | isIterEOF e = return $ IterF iter
                       | otherwise   = Iter $ InumFail e (IterF iter)
-
       doInput iter input = do
         r <- runIterM iter (Chunk input False)
-        stop <- Iter $ \c@(Chunk t eof) -> Done (eof && null t) c
-        case (stop, r) of
+        stop <- knownEOFI
+        case (stop || null input, r) of
           (False, IterF i) -> doIter i
-          _ -> Iter $ \c ->
-               case runResid (c, getResid r) of
-                 (tIn, tOut) -> Done (setResid r tOut) tIn
-
-      runResid (Chunk tIn0 eofIn, Chunk tOut0 eofOut) =
-          case adjustResid (tIn0, tOut0) of
-            (tIn, tOut) -> (Chunk tIn eofIn, Chunk tOut eofOut)
+          _ -> Iter $ \c -> fixResid r (c, getResid r)
+      fixResid r (Chunk tIn0 eofIn, Chunk tOut0 eofOut) =
+          let (tIn, tOut) = adjustResid (tIn0, tOut0)
+          in Done (setResid r (Chunk tOut eofOut)) (Chunk tIn eofIn)
 
 pullupResid :: (ChunkData t) => (t, t) -> (t, t)
 pullupResid (a, b) = (mappend a b, mempty)
 
+--
+-- Basic Inums
+--
+
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = mkInum pullupResid dataI
 
+inumPure :: (ChunkData tIn, Monad m) => tOut -> Inum tIn tOut m a
+inumPure t iter = runIterM iter $ chunk t
+
+inumRepeat :: (ChunkData tIn, Monad m) =>
+              Inum tIn tOut m a -> Inum tIn tOut m a
+inumRepeat inum iter0 = do
+  er <- tryI $ runInumM inum iter0
+  stop <- knownEOFI
+  case (stop, er) of
+    (False, Right (IterF iter)) -> inumRepeat inum iter
+    (_, Right r) -> return r
+    (_, Left (SomeException _, r)) -> reRunIter r
