@@ -637,12 +637,9 @@ combineExpected :: (ChunkData t, Monad m) =>
                 -- previous error
                 -> IterR t m a
 combineExpected (IterNoParse e) r =
-    case cast e of
-      Just (IterExpected saw1 e1) -> mapExceptionR (combine saw1 e1) r
-      _                           -> r
-    where
-      combine saw1 e1 (IterExpected saw2 e2) =
-          IterExpected (if null saw2 then saw1 else saw2) $ e1 ++ e2
+    maybe r (\e' -> mapExceptionR (combine e') r) $ cast e
+    where combine (IterExpected saw1 e1) (IterExpected saw2 e2) =
+              IterExpected (if null saw2 then saw1 else saw2) $ e1 ++ e2
 
 -- | Try two Iteratees and return the result of executing the second
 -- if the first one throws an 'IterNoParse' exception.  Note that
