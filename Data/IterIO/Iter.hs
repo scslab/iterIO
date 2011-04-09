@@ -141,7 +141,8 @@ class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
 -- | An @IterR@ is in one of several states:  it may require more
 -- input ('IterF'), it may wish to execute monadic actions in the
--- transformed monad ('IterM'), it may have produced a result
+-- transformed monad ('IterM'), it may have a control request for an
+-- enclosing enumerator ('IterC'), it may have produced a result
 -- ('Done'), or it may have failed.  Failure is indicated by
 -- 'IterFail' or 'InumFail', depending on whether the failure occured
 -- in an iteratee or enumerator.  In the latter case, when an 'Inum'
@@ -156,7 +157,14 @@ data IterR t m a = IterF !(Iter t m a)
                  -- ^ The iteratee must execute monadic bind in monad @m@
                  | forall carg cres. (CtlCmd carg cres) =>
                    IterC !carg (Maybe cres -> Iter t m a) (Chunk t)
-                 -- ^ Control request
+                 -- ^ The 'Iter' is issuing a control request to an
+                 -- enclosing enumerator.  Note that unlike 'IterF' or
+                 -- 'IterM', control requests expose the residual
+                 -- data, which is ordinarily fed right back to the
+                 -- continuation upon execution of the request.  This
+                 -- allows certain control operations (such as seek
+                 -- and tell) to flush, check the length of, or adjust
+                 -- the residual data.
                  | Done a (Chunk t)
                  -- ^ Sufficient input was received; the 'Iter' is
                  -- returning a result of type @a@.  In adition, the
@@ -218,10 +226,16 @@ instance (Typeable t, Typeable1 m) => Typeable1 (Iter t m) where
 instance (Typeable t, Typeable1 m, Typeable a) => Typeable (Iter t m a) where
     typeOf = typeOfDefault
 
-instance (ChunkData t, Monad m) => Functor (Iter t m) where
+instance (Monad m) => Functor (Iter t m) where
     fmap = liftM
 
-instance (ChunkData t, Monad m) => Applicative (Iter t m) where
+instance (ChunkData t, Monad m) => Functor (IterR t m) where
+    fmap f = onDoneR check
+        where check (Done a c)       = Done (f a) c
+              check (InumFail e a c) = InumFail e (f a) c
+              check (IterFail e c)   = IterFail e c
+
+instance (Monad m) => Applicative (Iter t m) where
     pure   = return
     (<*>)  = ap
     (*>)   = (>>)
@@ -240,21 +254,6 @@ instance (Monad m) => Monad (Iter t m) where
 
     fail msg = Iter $ IterFail (toException $ ErrorCall msg)
 
-{-
-instance (ChunkData t, Monad m) => Monad (IterR t m) where
-    return a = Done a mempty
-
-    (Done a c) >>= k       = runIterR (k a) c
-    (IterF (Iter i)) >>= k = IterF $ Iter $ i >=> k
-    (IterM m) >>= k        = IterM $ liftM (>>= k) m
-    err >>= _              = IterFail (getIterError err) (getResid err)
-
-    fail msg = IterFail (toException $ ErrorCall msg) mempty
-
-instance (ChunkData t) => MonadTrans (IterR t) where
-    lift m = IterM $ m >>= return . return
--}
-
 instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
     mzero = throwI $ IterMiscParseErr "mzero"
     mplus a b = ifParse a return b
@@ -271,11 +270,6 @@ translateIterEOF m = do
         case fromException err of
           Just ioerr | isEOFError ioerr -> toException $ IterEOF ioerr
           _                             -> err
-
-{-
-instance (ChunkData t, MonadIO m) => MonadIO (IterR t m) where
-    liftIO m = IterM $ liftIO $ translateIterEOF m
--}
 
 -- | The 'Iter' instance of 'MonadIO' handles errors specially.  If the
 -- lifted operation throws an exception, 'liftIO' catches the
@@ -323,6 +317,7 @@ run i0 = check $ runIter i0 chunkEOF
     where check (Done a _)       = return a
           check (IterF i)        = run i
           check (IterM m)        = m >>= check
+          check (IterC a n c)    = check $ runIter (n Nothing) c
           check (IterFail e _)   = throw $ unIterEOF e
           check (InumFail e _ _) = throw $ unIterEOF e
 
@@ -330,6 +325,7 @@ runR :: (ChunkData t1, ChunkData t2, Monad m) => IterR t1 m a -> IterR t2 m a
 runR (Done a _)       = Done a mempty
 runR (IterF i)        = runR $ runIter i chunkEOF
 runR (IterM m)        = IterM $ liftM runR m
+runR (IterC a n c)    = runR $ runIter (n Nothing) c
 runR (IterFail e _)   = IterFail e mempty
 runR (InumFail e i _) = InumFail e i mempty
 
@@ -343,15 +339,6 @@ runR (InumFail e i _) = InumFail e i mempty
 -- issue in the documentation for '.|$'.
 runI :: (ChunkData t1, ChunkData t2, Monad m) => Iter t1 m a -> Iter t2 m a
 runI i = Iter $ runIterR (runR $ runIter i chunkEOF)
-{-
-runI i0 = Iter $ \c ->
-          let check (Done a _)       = Done a c
-              check (IterF i)        = check $ runIter i chunkEOF
-              check (IterM m)        = IterM $ m >>= return . check
-              check (IterFail e _)   = IterFail e c
-              check (InumFail e i _) = InumFail e i c
-          in check $ runIter i0 chunkEOF
--}
 
 --
 -- Exceptions
@@ -435,6 +422,28 @@ throwI e = Iter $ IterFail (toException e)
 throwEOFI :: (ChunkData t) => String -> Iter t m a
 throwEOFI = throwI . mkIterEOF
 
+{-
+-- | A variant of the monadic '>>=' operator that preserves 'InumFail'
+-- conditions.  (@m >>= k@ always translates an 'InumFail' condition
+-- in @m@ into an 'IterFail condition.)  In order to pass on the
+-- 'InumFail' condition, @bindFail@ requires a conversion function to
+-- translate the first monad's return type into the seconds'.
+bindFail :: (ChunkData t, Monad m) =>
+            (a -> b) -> Iter t m a -> (a -> Iter t m b) -> Iter t m b
+bindFail trans m k = onDone check m
+    where check (Done a c)       = runIter (k a) c
+          check (InumFail e a c) = InumFail e (trans a) c
+          check (IterFail e c)   = IterFail e c
+infixl 1 `bindFail`
+
+handleROr :: (Exception e) => IterR t m a -> (e -> b) -> b -> b
+handleROr r h pass = check r
+    where check (IterFail e _)   = tryh e
+          check (InumFail e _ _) = tryh e
+          check _                = pass
+          tryh e = case fromException e of Just e' -> h e'; Nothing -> pass
+-}
+
 -- | Run an 'Iter'.  Catch any exception it throws (and return the
 -- failing iter state).  Transform successful results with a function.
 --
@@ -459,13 +468,10 @@ genCatchI :: (ChunkData t, Monad m, Exception e) =>
           -> Iter t m b
 genCatchI iter0 handler conv = onDone check iter0
     where check (Done a c) = Done (conv a) c
-          check iter = case fromException $ getIterError iter of
-                         Just e  -> runIter (handler e (setResid iter mempty))
-                                    (getResid iter)
-                         Nothing -> fixup iter
-          fixup (IterFail e c)   = IterFail e c
-          fixup (InumFail e a c) = InumFail e (conv a) c
-          fixup _                = error "genCatchI"
+          check r = case fromException $ getIterError r of
+                      Just e  -> runIter (handler e (setResid r mempty))
+                                 (getResid r)
+                      Nothing -> fmap conv r
 
 -- | Catch an exception thrown by an 'Iter' or an enclosing 'Inum'
 -- (for instance one applied with '.|$').  If you wish to catch just
@@ -600,12 +606,9 @@ tryBI :: (ChunkData t, Monad m, Exception e) =>
          Iter t m a -> Iter t m (Either e a)
 tryBI = onDoneInput errToEither
     where errToEither (Done a c) _ = Done (Right a) c
-          errToEither iter c = case fromException $ getIterError iter of
-                                 Just e  -> Done (Left e) c
-                                 Nothing -> addRightToFail iter
-          addRightToFail (InumFail e a c) = InumFail e (Right a) c
-          addRightToFail (IterFail e c)   = IterFail e c
-          addRightToFail _                = error "tryBI"
+          errToEither r c = case fromException $ getIterError r of
+                              Just e  -> Done (Left e) c
+                              Nothing -> fmap Right r
 
 mapExceptionR :: (ChunkData t, Monad m, Exception e1, Exception e2) =>
                  (e1 -> e2) -> IterR t m a -> IterR t m a
@@ -895,6 +898,7 @@ runIterR iter0 c = if null c then iter0 else check iter0
     where check (Done a c0)       = Done a (mappend c0 c)
           check (IterF (Iter i))  = i c
           check (IterM m)         = IterM $ liftM check m
+          check (IterC a n c0)    = IterC a n (mappend c0 c)
           check (IterFail e c0)   = IterFail e (mappend c0 c)
           check (InumFail e a c0) = InumFail e a (mappend c0 c)
 
