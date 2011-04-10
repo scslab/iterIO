@@ -6,7 +6,7 @@
 module Data.IterIO.Iter
     (-- * Base types
      ChunkData(..), Chunk(..), chunk, chunkEOF
-    , Iter(..), IterR(..), iterF
+    , Iter(..), CtlArg(..), IterR(..), iterF
     , isIterActive, iterShows, iterShow
     -- * Execution
     , run, runI
@@ -139,6 +139,15 @@ iterF f = Iter $ \c -> if null c then IterF $ iterF f else f c
 -- binds each control argument type to a unique result type.
 class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
+-- | Used when an 'Iter' is issuing a control request to an enclosing
+-- enumerator.  Note that unlike 'IterF' or 'IterM', control requests
+-- expose the residual data, which is ordinarily fed right back to the
+-- continuation upon execution of the request.  This allows certain
+-- control operations (such as seek and tell) to flush, check the
+-- length of, or adjust the residual data.
+data CtlArg t m a = forall carg cres. (CtlCmd carg cres) =>
+                    CtlArg !carg (Maybe cres -> Iter t m a) (Chunk t)
+
 -- | An @IterR@ is in one of several states:  it may require more
 -- input ('IterF'), it may wish to execute monadic actions in the
 -- transformed monad ('IterM'), it may have a control request for an
@@ -155,16 +164,8 @@ data IterR t m a = IterF !(Iter t m a)
                  -- ^ The iteratee requires more input.
                  | IterM !(m (IterR t m a))
                  -- ^ The iteratee must execute monadic bind in monad @m@
-                 | forall carg cres. (CtlCmd carg cres) =>
-                   IterC !carg (Maybe cres -> Iter t m a) (Chunk t)
-                 -- ^ The 'Iter' is issuing a control request to an
-                 -- enclosing enumerator.  Note that unlike 'IterF' or
-                 -- 'IterM', control requests expose the residual
-                 -- data, which is ordinarily fed right back to the
-                 -- continuation upon execution of the request.  This
-                 -- allows certain control operations (such as seek
-                 -- and tell) to flush, check the length of, or adjust
-                 -- the residual data.
+                 | IterC !(CtlArg t m a)
+                 -- ^ A control request (see 'CtlArg').
                  | Done a (Chunk t)
                  -- ^ Sufficient input was received; the 'Iter' is
                  -- returning a result of type @a@.  In adition, the
@@ -184,7 +185,7 @@ data IterR t m a = IterF !(Iter t m a)
 isIterActive :: IterR t m a -> Bool
 isIterActive (IterF _)     = True
 isIterActive (IterM _)     = True
-isIterActive (IterC _ _ _) = True
+isIterActive (IterC _)     = True
 isIterActive _             = False
 
 -- | Show the current state of an 'IterR', prepending it to some
@@ -192,7 +193,7 @@ isIterActive _             = False
 -- class 'Show'.  Note that if @a@ is not in 'Show', you can simply
 -- use the 'shows' function.
 iterShows :: (ChunkData t, Show a) => IterR t m a -> ShowS
-iterShows (IterC a _ c) rest =
+iterShows (IterC (CtlArg a _ c)) rest =
     "IterC " ++ (shows (typeOf a) $ " _ " ++ shows c rest)
 iterShows (Done a c) rest = "Done " ++ (shows a $ " " ++ shows c rest)
 iterShows (InumFail e a c) rest =
@@ -208,7 +209,7 @@ iterShow iter = iterShows iter ""
 instance (ChunkData t) => Show (IterR t m a) where
     showsPrec _ (IterF _) rest = "IterF _" ++ rest
     showsPrec _ (IterM _) rest = "IterM _" ++ rest
-    showsPrec _ (IterC a _ c) rest =
+    showsPrec _ (IterC (CtlArg a _ c)) rest =
         "IterC " ++ (shows (typeOf a) $ " _ _" ++ rest)
     showsPrec _ (Done _ c) rest = "Done _ " ++ shows c rest
     showsPrec _ (IterFail e c) rest =
@@ -245,12 +246,12 @@ instance (Monad m) => Monad (Iter t m) where
     return a = Iter $ Done a
 
     m >>= k = Iter $ check . runIter m
-        where check (Done a c)       = runIter (k a) c
-              check (IterF i)        = IterF $ i >>= k
-              check (IterM m)        = IterM $ m >>= return . check
-              check (IterC a n c)    = IterC a (n >=> k) c
-              check (IterFail e c)   = IterFail e c
-              check (InumFail e _ c) = IterFail e c
+        where check (Done a c)             = runIter (k a) c
+              check (IterF i)              = IterF $ i >>= k
+              check (IterM m)              = IterM $ m >>= return . check
+              check (IterC (CtlArg a n c)) = IterC $ CtlArg a (n >=> k) c
+              check (IterFail e c)         = IterFail e c
+              check (InumFail e _ c)       = IterFail e c
 
     fail msg = Iter $ IterFail (toException $ ErrorCall msg)
 
@@ -314,20 +315,20 @@ unIterEOF e = case fromException e of
 -- there has been a failure.
 run :: (ChunkData t, Monad m) => Iter t m a -> m a
 run i0 = check $ runIter i0 chunkEOF
-    where check (Done a _)       = return a
-          check (IterF i)        = run i
-          check (IterM m)        = m >>= check
-          check (IterC a n c)    = check $ runIter (n Nothing) c
-          check (IterFail e _)   = throw $ unIterEOF e
-          check (InumFail e _ _) = throw $ unIterEOF e
+    where check (Done a _)             = return a
+          check (IterF i)              = run i
+          check (IterM m)              = m >>= check
+          check (IterC (CtlArg a n c)) = check $ runIter (n Nothing) c
+          check (IterFail e _)         = throw $ unIterEOF e
+          check (InumFail e _ _)       = throw $ unIterEOF e
 
 runR :: (ChunkData t1, ChunkData t2, Monad m) => IterR t1 m a -> IterR t2 m a
-runR (Done a _)       = Done a mempty
-runR (IterF i)        = runR $ runIter i chunkEOF
-runR (IterM m)        = IterM $ liftM runR m
-runR (IterC a n c)    = runR $ runIter (n Nothing) c
-runR (IterFail e _)   = IterFail e mempty
-runR (InumFail e i _) = InumFail e i mempty
+runR (Done a _)             = Done a mempty
+runR (IterF i)              = runR $ runIter i chunkEOF
+runR (IterM m)              = IterM $ liftM runR m
+runR (IterC (CtlArg a n c)) = runR $ runIter (n Nothing) c
+runR (IterFail e _)         = IterFail e mempty
+runR (InumFail e i _)       = InumFail e i mempty
 
 -- | Runs an 'Iter' from within a different 'Iter' monad.  If
 -- successful, @runI iter@ will produce the same result as @'lift'
@@ -839,7 +840,7 @@ ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 -- is supported by enclosing enumerators, otherwise return 'Nothing'.
 safeCtlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
             carg -> Iter t m (Maybe cres)
-safeCtlI carg = Iter $ IterC carg return
+safeCtlI carg = Iter $ IterC . CtlArg carg return
 
 -- | Issue a control request, and return the result.  Throws an
 -- exception if the operation type was not supported by an enclosing
@@ -855,12 +856,12 @@ ctlI carg = safeCtlI carg >>=
 
 stepR :: (Monad m) =>
          IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
-stepR (IterF (Iter i)) f = IterF $ Iter $ f . i
-stepR (IterM m) f        = IterM $ liftM f m
-stepR (IterC a n c) f    = IterC a (Iter . (f .) . runIter . n) c
-stepR (Done _ _) _       = error "stepR (Done)"
-stepR (IterFail _ _) _   = error "stepR (IterFail)"
-stepR (InumFail _ _ _) _ = error "stepR (InumFail)"
+stepR (IterF (Iter i)) f       = IterF $ Iter $ f . i
+stepR (IterM m) f              = IterM $ liftM f m
+stepR (IterC (CtlArg a n c)) f = IterC $ CtlArg a (Iter . (f .) . runIter . n) c
+stepR (Done _ _) _             = error "stepR (Done)"
+stepR (IterFail _ _) _         = error "stepR (IterFail)"
+stepR (InumFail _ _ _) _       = error "stepR (InumFail)"
 
 onDoneR :: (Monad m) =>
            (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
@@ -890,7 +891,7 @@ onDoneInput f = Iter . next id
 getIterError :: IterR t m a -> SomeException
 getIterError (IterFail e _)   = e
 getIterError (InumFail e _ _) = e
-getIterError (IterC _ _ _)    = error "getIterError: no error (in IterC state)"
+getIterError (IterC _ )       = error "getIterError: no error (in IterC state)"
 getIterError (IterM _)        = error "getIterError: no error (in IterM state)"
 getIterError (IterF _)        = error "getIterError: no error (in IterF state)"
 getIterError _                = error "getIterError: no error to extract"
@@ -899,12 +900,12 @@ getIterError _                = error "getIterError: no error to extract"
 -- or in the 'IterC' state.  (It is an error to call this on an
 -- 'IterR' in the 'IterF' or 'IterM' state.)
 getResid :: IterR t m a -> Chunk t
-getResid (Done _ c)       = c
-getResid (IterFail _ c)   = c
-getResid (InumFail _ _ c) = c
-getResid (IterC _ _ c)    = c
-getResid (IterF _)        = error $ "getResid (IterF)"
-getResid (IterM _)        = error $ "getResid (IterM)"
+getResid (Done _ c)             = c
+getResid (IterFail _ c)         = c
+getResid (InumFail _ _ c)       = c
+getResid (IterC (CtlArg _ _ c)) = c
+getResid (IterF _)              = error $ "getResid (IterF)"
+getResid (IterM _)              = error $ "getResid (IterM)"
 
 -- | Set residual data for an 'IterR' that is not active.  (It is an
 -- error to call this on an 'IterR' in the 'Done', 'IterM', or 'IterC'
@@ -917,12 +918,12 @@ setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
 
 runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
 runIterR iter c = if null c then iter else check iter
-    where check (Done a c0)       = Done a (mappend c0 c)
-          check (IterF i)         = runIter i c
-          check (IterM m)         = IterM $ liftM check m
-          check (IterC a n c0)    = IterC a n (mappend c0 c)
-          check (IterFail e c0)   = IterFail e (mappend c0 c)
-          check (InumFail e a c0) = InumFail e a (mappend c0 c)
+    where check (Done a c0)             = Done a (mappend c0 c)
+          check (IterF i)               = runIter i c
+          check (IterM m)               = IterM $ liftM check m
+          check (IterC (CtlArg a n c0)) = IterC $ CtlArg a n (mappend c0 c)
+          check (IterFail e c0)         = IterFail e (mappend c0 c)
+          check (InumFail e a c0)       = InumFail e a (mappend c0 c)
 
 reRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
 reRunIter (IterF i) = i

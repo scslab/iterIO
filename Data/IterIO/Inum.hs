@@ -25,6 +25,7 @@ import Control.Exception (SomeException(..), Exception(..))
 import Control.Monad
 import Control.Monad.Trans
 import Data.Monoid
+import Data.Typeable
 import System.Environment (getProgName)
 import System.IO
 
@@ -365,6 +366,27 @@ verboseResumeI (InumFail e a _) = do
 verboseResumeI _                = error "verboseResumeI: not InumFail"
 
 --
+-- Control handlers
+--
+
+-- | Generally the type parameter @m1@ has to be @'Iter' t m'@.  Thus,
+-- a control handler maps control requests to 'IterR' results.
+type CtlHandler m1 t m a = CtlArg t m a -> m1 (IterR t m a)
+
+noCtl :: (Monad m1) => CtlHandler m1 t m a
+noCtl (CtlArg _ n c) = return $ runIter (n Nothing) c
+
+passCtl :: (Monad m) =>
+           ((tIn, tOut) -> (tIn, tOut))
+        -> CtlHandler (Iter tIn m) tOut m a
+passCtl adjustResid (CtlArg a n (Chunk tOut0 eofOut)) =
+    Iter $ \(Chunk tIn0 eofIn) ->
+    let (tIn, tOut) = adjustResid (tIn0, tOut0)
+        (cIn, cOut) = (Chunk tIn eofIn, Chunk tOut eofOut)
+    in IterC $ CtlArg a (\cr -> return $ runIter (n cr) cOut) cIn
+
+
+--
 -- Basic tools
 --
 
@@ -378,6 +400,12 @@ runIterM iter c = check $ runIter iter c
     where check (IterM m) = lift m >>= check
           check r         = return r
 
+runIterMC :: (Monad m) =>
+             Iter t m a -> Chunk t -> Iter t2 m (IterR t m a)
+runIterMC iter c = check $ runIter iter c
+    where check (IterM m) = lift m >>= check
+          check r         = return r
+
 -- | Takes an 'Inum' that might return 'IterR's in the 'IterM' state
 -- (which is considered impolite--see 'runIterM') and transforms it
 -- into an 'Inum' then never returns 'IterR's in the 'IterM' state.
@@ -385,7 +413,6 @@ runInumM :: (ChunkData tIn, Monad m) =>
             Inum tIn tOut m a -> Inum tIn tOut m a
 runInumM inum = onDone check . inum
     where
-      -- check (InumFail e (IterM m) c) = IterM $ m >>= \r -> return $ check $ InumFail e r c
       check (Done (IterM m) c) = IterM $ m >>= \r -> return $ check $ Done r c
       check r = r
 
