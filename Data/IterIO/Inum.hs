@@ -193,11 +193,7 @@ cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
        Inum tIn tOut m a      -- ^
     -> Inum tIn tOut m a
     -> Inum tIn tOut m a
-cat a b iter = do
-  er <- tryI $ runInumM a iter
-  case er of
-    Right r                   -> b $ reRunIter r
-    Left (SomeException _, r) -> reRunIter r -- Re-throw exception
+cat a b iter = tryI' (runInumM a iter) >>= either reRunIter (b . reRunIter)
 -- Note this was carefully constructed to preserve InumFail errors.
 -- Something like:  cat a b iter = a iter >>= b . reRunIter
 -- would not preserve InumFail errors; since the input and output
@@ -212,12 +208,8 @@ lcat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-lcat a b iter = do
-  er <- tryI $ runInumM a iter
-  case er of
-    Right (IterF i) -> b i
-    Right r -> return r
-    Left (SomeException _, r) -> reRunIter r
+lcat a b iter = tryI' (runInumM a iter) >>= either reRunIter check
+    where check r = if isIterActive r then b $ reRunIter r else return r
 infixr 3 `lcat`
 
 -- | Transforms the result of an 'Inum' into the result of the 'Iter'
@@ -408,7 +400,7 @@ mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
        -> Inum tIn tOut m a
 mkInum adjustResid codec iter0 = doIter iter0
     where
-      doIter iter = catchOrI codec (inputErr iter) (doInput iter)
+      doIter iter = tryI codec >>= either (inputErr iter . fst) (doInput iter)
       inputErr iter e | isIterEOF e = return $ IterF iter
                       | otherwise   = Iter $ InumFail e (IterF iter)
       doInput iter input = do

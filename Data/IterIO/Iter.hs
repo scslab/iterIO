@@ -15,7 +15,7 @@ module Data.IterIO.Iter
     , IterExpected(..), IterMiscParseErr(..)
     -- * Exception-related functions
     , throwI, throwEOFI
-    , genCatchI, catchI, catchOrI, handlerI, tryI, finallyI, onExceptionI
+    , genCatchI, catchI, handlerI, tryI, tryI', finallyI, onExceptionI
     , catchBI, handlerBI, tryBI 
     , mapExceptionI
     , ifParse, ifNoParse, multiParse
@@ -227,9 +227,9 @@ instance (Typeable t, Typeable1 m, Typeable a) => Typeable (Iter t m a) where
     typeOf = typeOfDefault
 
 instance (Monad m) => Functor (Iter t m) where
-    fmap = liftM
+    fmap = onDone . fmap
 
-instance (ChunkData t, Monad m) => Functor (IterR t m) where
+instance (Monad m) => Functor (IterR t m) where
     fmap f = onDoneR check
         where check (Done a c)       = Done (f a) c
               check (InumFail e a c) = InumFail e (f a) c
@@ -530,36 +530,40 @@ handlerI = flip catchI
 -- @i@ is the state of the failing 'Iter'.
 tryI :: (ChunkData t, Monad m, Exception e) =>
         Iter t m a -> Iter t m (Either (e, IterR t m a) a)
-tryI iter = genCatchI iter (\e r -> return $ Left (e, r)) Right
+tryI iter = genCatchI iter (curry $ return . Left) Right
 
--- | Run an 'Iter'.  Catch any exception it throws, or feed the result
--- to a continuation.  Note that because it allows transformation of
--- the return types, this function turns 'InumFail' errors into
--- 'IterFail's.
-catchOrI :: (ChunkData t, Monad m, Exception e) =>
-            Iter t m a
-         -> (e -> Iter t m b) 
-         -> (a -> Iter t m b)
-         -> (Iter t m b)
-catchOrI iter handler cont = tryI iter >>= check
-    where check (Right a)     = cont a
-          check (Left (e, _)) = handler e
+-- | A version of 'tryI' that catches all exceptions.  Instead of
+-- returning the exception caught, it returns the failing 'IterR'
+-- (from which you can extract the exception if you really want it).
+-- The main use of this is for doing some kind of clean-up action,
+-- then re-throwing the exception with 'reRunIter'.
+--
+-- For example, the following is a possible implementation of 'finallyI':
+--
+-- > finallyI iter cleanup = do
+-- >   er <- tryI' iter
+-- >   cleanup
+-- >   either reRunIter return er
+--
+tryI' :: (ChunkData t, Monad m) =>
+         Iter t m a -> Iter t m (Either (IterR t m a) a)
+tryI' iter = genCatchI iter (\(SomeException _) r -> return $ Left r) Right
 
 -- | Execute an 'Iter', then perform a cleanup action regardless of
 -- whether the 'Iter' threw an exception or not.  Analogous to the
 -- standard library function @'finally'@.
 finallyI :: (ChunkData t, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m a
-finallyI iter cleanup = onDone runclean iter
-    where runclean r = runIter (cleanup >> Iter (setResid r)) (getResid r)
+finallyI iter cleanup = do er <- tryI' iter
+                           cleanup >> either reRunIter return er
 
 -- | Execute an 'Iter' and perform a cleanup action if the 'Iter'
 -- threw an exception.  Analogous to the standard library function
 -- @'onException'@.
 onExceptionI :: (ChunkData t, Monad m) =>
                 Iter t m a -> Iter t m b -> Iter t m a
-onExceptionI iter cleanup = catchI iter $ \(SomeException _) r ->
-                            cleanup >> reRunIter r
+onExceptionI iter cleanup =
+    catchI iter $ \(SomeException _) r -> cleanup >> reRunIter r
 
 -- | Catch exception with backtracking.  This is a version of 'catchI'
 -- that keeps a copy of all data fed to the iteratee.  If an exception
@@ -849,22 +853,23 @@ ctlI carg = safeCtlI carg >>=
 -- Iter manipulation functions
 --
 
-stepR :: (ChunkData t, Monad m) =>
+stepR :: (Monad m) =>
          IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
 stepR (IterF (Iter i)) f = IterF $ Iter $ f . i
 stepR (IterM m) f        = IterM $ liftM f m
 stepR (IterC a n c) f    = IterC a (Iter . (f .) . runIter . n) c
-stepR i _                = error $ "stepR " ++ show i
+stepR (Done _ _) _       = error "stepR (Done)"
+stepR (IterFail _ _) _   = error "stepR (IterFail)"
+stepR (InumFail _ _ _) _ = error "stepR (InumFail)"
 
-onDoneR :: (ChunkData t, Monad m) =>
+onDoneR :: (Monad m) =>
            (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
-onDoneR f r = check r
-    where check r | isIterActive r = stepR r check
-                  | otherwise      = f r
+onDoneR f = let check r = if isIterActive r then stepR r check else f r
+            in check
 
 -- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
 -- 'InumFail' state, then use a function to transform the 'IterR'.
-onDone :: (ChunkData t, Monad m) =>
+onDone :: (Monad m) =>
           (IterR t m a -> IterR t m b) -> Iter t m a -> Iter t m b
 onDone f i = Iter $ onDoneR f . runIter i
 
@@ -885,6 +890,7 @@ onDoneInput f = Iter . next id
 getIterError :: IterR t m a -> SomeException
 getIterError (IterFail e _)   = e
 getIterError (InumFail e _ _) = e
+getIterError (IterC _ _ _)    = error "getIterError: no error (in IterC state)"
 getIterError (IterM _)        = error "getIterError: no error (in IterM state)"
 getIterError (IterF _)        = error "getIterError: no error (in IterF state)"
 getIterError _                = error "getIterError: no error to extract"
@@ -892,12 +898,13 @@ getIterError _                = error "getIterError: no error to extract"
 -- | Get the residual data for an 'IterR' that is in no longer active
 -- or in the 'IterC' state.  (It is an error to call this on an
 -- 'IterR' in the 'IterF' or 'IterM' state.)
-getResid :: (ChunkData t) => IterR t m a -> Chunk t
+getResid :: IterR t m a -> Chunk t
 getResid (Done _ c)       = c
 getResid (IterFail _ c)   = c
 getResid (InumFail _ _ c) = c
 getResid (IterC _ _ c)    = c
-getResid r                = error $ "getResid: " ++ show r
+getResid (IterF _)        = error $ "getResid (IterF)"
+getResid (IterM _)        = error $ "getResid (IterM)"
 
 -- | Set residual data for an 'IterR' that is not active.  (It is an
 -- error to call this on an 'IterR' in the 'Done', 'IterM', or 'IterC'
@@ -909,16 +916,17 @@ setResid (InumFail e a _) = InumFail e a
 setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
 
 runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
-runIterR iter0 c = if null c then iter0 else check iter0
+runIterR iter c = if null c then iter else check iter
     where check (Done a c0)       = Done a (mappend c0 c)
-          check (IterF (Iter i))  = i c
+          check (IterF i)         = runIter i c
           check (IterM m)         = IterM $ liftM check m
           check (IterC a n c0)    = IterC a n (mappend c0 c)
           check (IterFail e c0)   = IterFail e (mappend c0 c)
           check (InumFail e a c0) = InumFail e a (mappend c0 c)
 
 reRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
-reRunIter = Iter . runIterR
+reRunIter (IterF i) = i
+reRunIter r         = Iter $ runIterR r
 
 --
 -- Debugging
