@@ -245,10 +245,10 @@ instance (Monad m) => Monad (Iter t m) where
     return a = Iter $ Done a
 
     m >>= k = Iter $ check . runIter m
-        where check (IterF i)        = IterF $ i >>= k
+        where check (Done a c)       = runIter (k a) c
+              check (IterF i)        = IterF $ i >>= k
               check (IterM m)        = IterM $ m >>= return . check
               check (IterC a n c)    = IterC a (n >=> k) c
-              check (Done a c)       = runIter (k a) c
               check (IterFail e c)   = IterFail e c
               check (InumFail e _ c) = IterFail e c
 
@@ -788,17 +788,14 @@ nullI = Iter $ \(Chunk _ eof) ->
 -- exception if EOF is encountered and there is no data.
 dataI :: (Monad m, ChunkData t) => Iter t m t
 dataI = iterF nextChunk
-    where eoferr = toException $ mkIterEOF "dataI"
-          nextChunk c@(Chunk d True) | null d = IterFail eoferr c
+    where nextChunk c@(Chunk d True) | null d = IterFail eoferr c
           nextChunk (Chunk d eof)             = Done d (Chunk mempty eof)
+          eoferr = toException $ mkIterEOF "dataI"
 
 -- | A variant of 'dataI' that reads the whole input up to an
 -- end-of-file and returns it.
 pureI :: (Monad m, ChunkData t) => Iter t m t
-pureI = loop id
-    where loop acc = Iter $ \(Chunk t eof) ->
-                     if eof then Done (acc t) chunkEOF
-                            else IterF $ loop $ acc . mappend t
+pureI = do peekI nullI; Iter $ \(Chunk t _) -> Done t chunkEOF
 
 -- | Returns the next 'Chunk' that either contains non-'null' data or
 -- has the EOF bit set.
@@ -878,12 +875,19 @@ getIterError (IterM _)        = error "getIterError: no error (in IterM state)"
 getIterError (IterF _)        = error "getIterError: no error (in IterF state)"
 getIterError _                = error "getIterError: no error to extract"
 
+-- | Get the residual data for an 'IterR' that is in no longer active
+-- or in the 'IterC' state.  (It is an error to call this on an
+-- 'IterR' in the 'IterF' or 'IterM' state.)
 getResid :: (ChunkData t) => IterR t m a -> Chunk t
 getResid (Done _ c)       = c
 getResid (IterFail _ c)   = c
 getResid (InumFail _ _ c) = c
+getResid (IterC _ _ c)    = c
 getResid r                = error $ "getResid: " ++ show r
 
+-- | Set residual data for an 'IterR' that is not active.  (It is an
+-- error to call this on an 'IterR' in the 'Done', 'IterM', or 'IterC'
+-- states.)
 setResid :: (ChunkData t1) => IterR t1 m1 a -> Chunk t2 -> IterR t2 m2 a
 setResid (Done a _)       = Done a
 setResid (IterFail e _)   = IterFail e
@@ -901,31 +905,6 @@ runIterR iter0 c = if null c then iter0 else check iter0
 
 reRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
 reRunIter = Iter . runIterR
-
-{-
--- | Join the result of an 'Inum', turning it into an 'Iter'.  The
--- behavior of @joinI@ is similar to what one would obtain by defining
--- @joinI iter = iter >>= 'runI'@, but with more precise error
--- handling.  Specifically, with @iter >>= 'runI'@, the @'>>='@
--- operator for 'Iter' translates enumerator failures ('InumFail')
--- into iteratee failures ('IterFail'), discarding the state of the
--- 'Iter' even when the failure occured in an 'Inum'.  By contrast,
--- @joinI@ preserves enumerator failures, allowing the state of the
--- non-failed 'Iter' to be resumed by 'resumeI'.  (The fusing
--- operators '|.' and '.|' use @joinI@ internally, and it is this
--- error preserving property that allows 'inumCatch' and 'resumeI' to
--- work properly around fused 'Inum's.)
-joinI :: (ChunkData tOut, ChunkData tIn, Monad m) =>
-         Iter tIn m (Iter tOut m a)
-      -> Iter tIn m a
-joinI = onDone check
-    where check (Done i c)        = runIter (runI i) c
-          check (IterFail e c)    = IterFail e c
-          check (InumFail e i c0) = runIter (onDone setErr $ runI i) c0
-              where setErr (Done a c) = InumFail e a c
-                    setErr err        = err
-          check _                 = error "joinI"
--}
 
 --
 -- Debugging
