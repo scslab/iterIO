@@ -831,6 +831,20 @@ knownEOFI = Iter $ \c@(Chunk t eof) -> Done (null t && eof) c
 ungetI :: (ChunkData t) => t -> Iter t m ()
 ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 
+-- | Issue a control request, return 'Just' the result if the request
+-- is supported by enclosing enumerators, otherwise return 'Nothing'.
+safeCtlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+            carg -> Iter t m (Maybe cres)
+safeCtlI carg = Iter $ IterC carg return
+
+-- | Issue a control request, and return the result.  Throws an
+-- exception if the operation type was not supported by an enclosing
+-- enumerator.
+ctlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+        carg -> Iter t m cres
+ctlI carg = safeCtlI carg >>=
+            maybe (fail $ "Unsupported CtlCmd " ++ show (typeOf carg)) return
+
 --
 -- Iter manipulation functions
 --
