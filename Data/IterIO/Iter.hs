@@ -6,7 +6,7 @@
 module Data.IterIO.Iter
     (-- * Base types
      ChunkData(..), Chunk(..), chunk, chunkEOF
-    , Iter(..), CtlArg(..), IterR(..), iterF
+    , Iter(..), CtlCmd(..), CtlArg(..), IterR(..), iterF
     , isIterActive, iterShows, iterShow
     -- * Execution
     , run, runI
@@ -21,6 +21,7 @@ module Data.IterIO.Iter
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
     , nullI, dataI, pureI, chunkI, peekI, atEOFI, knownEOFI, ungetI
+    , safeCtlI, ctlI
     -- * Internal functions
     , onDone
     , onDoneR, stepR, runR, reRunIter, runIterR
@@ -838,14 +839,14 @@ ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 
 -- | Issue a control request, return 'Just' the result if the request
 -- is supported by enclosing enumerators, otherwise return 'Nothing'.
-safeCtlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+safeCtlI :: (CtlCmd carg cres, Monad m) =>
             carg -> Iter t m (Maybe cres)
 safeCtlI carg = Iter $ IterC . CtlArg carg return
 
 -- | Issue a control request, and return the result.  Throws an
 -- exception if the operation type was not supported by an enclosing
 -- enumerator.
-ctlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
+ctlI :: (CtlCmd carg cres, Monad m) =>
         carg -> Iter t m cres
 ctlI carg = safeCtlI carg >>=
             maybe (fail $ "Unsupported CtlCmd " ++ show (typeOf carg)) return

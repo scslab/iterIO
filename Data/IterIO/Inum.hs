@@ -369,22 +369,47 @@ verboseResumeI _                = error "verboseResumeI: not InumFail"
 -- Control handlers
 --
 
+type ResidHandler tIn tOut = (tIn, tOut) -> (tIn, tOut)
+
+withResidHandler :: ResidHandler tIn tOut
+                 -> Chunk tOut
+                 -> (Chunk tOut -> Iter tIn mIn a)
+                 -> Iter tIn mIn a
+withResidHandler adjust (Chunk tOut0 eofOut) cont =
+    Iter $ \(Chunk tIn0 eofIn) ->
+    case adjust (tIn0, tOut0) of
+      (tIn, tOut) -> runIter (cont $ Chunk tOut eofOut) $ Chunk tIn eofIn
+
 -- | Generally the type parameter @m1@ has to be @'Iter' t m'@.  Thus,
 -- a control handler maps control requests to 'IterR' results.
 type CtlHandler m1 t m a = CtlArg t m a -> m1 (IterR t m a)
 
+-- | Reject all control requests.
 noCtl :: (Monad m1) => CtlHandler m1 t m a
 noCtl (CtlArg _ n c) = return $ runIter (n Nothing) c
 
+-- | Pass all control requests through to the enclosing 'Iter' monad.
+-- The 'ResidHandler' argument sais how to adjust residual data, in
+-- case some enclosing 'CtlHandler' decides to flush pending input
+-- data, it is advisable to un-translate any data in the output type
+-- @tOut@ back to the input type @tIn@.
 passCtl :: (Monad m) =>
-           ((tIn, tOut) -> (tIn, tOut))
+           ResidHandler tIn tOut
         -> CtlHandler (Iter tIn m) tOut m a
-passCtl adjustResid (CtlArg a n (Chunk tOut0 eofOut)) =
-    Iter $ \(Chunk tIn0 eofIn) ->
-    let (tIn, tOut) = adjustResid (tIn0, tOut0)
-        (cIn, cOut) = (Chunk tIn eofIn, Chunk tOut eofOut)
-    in IterC $ CtlArg a (\cr -> return $ runIter (n cr) cOut) cIn
+passCtl adj (CtlArg a n c0) = withResidHandler adj c0 runn
+    where runn c = do mcr <- safeCtlI a
+                      return $ runIter (n mcr) c
 
+type CtlFn carg cres m1 t m a =
+    carg -> (cres -> Iter t m a) -> Chunk t -> m1 (IterR t m a)
+
+consCtl :: (CtlCmd carg cres) =>
+           (carg -> (cres -> Iter t m a) -> Chunk t -> m1 (IterR t m a))
+        -> CtlHandler m1 t m a
+        -> CtlHandler m1 t m a
+consCtl fn fallback ca@(CtlArg a0 n c) = maybe (fallback ca) runfn $ cast a0
+    where runfn a = fn a (n . cast) c
+infixr 9 `consCtl`
 
 --
 -- Basic tools
@@ -401,10 +426,12 @@ runIterM iter c = check $ runIter iter c
           check r         = return r
 
 runIterMC :: (Monad m) =>
-             Iter t m a -> Chunk t -> Iter t2 m (IterR t m a)
-runIterMC iter c = check $ runIter iter c
-    where check (IterM m) = lift m >>= check
-          check r         = return r
+             CtlHandler (Iter tIn m) tOut m a
+          -> Iter tOut m a -> Chunk tOut -> Iter tIn m (IterR tOut m a)
+runIterMC ch iter c = check $ runIter iter c
+    where check (IterM m)  = lift m >>= check
+          check (IterC ca) = ch ca >>= check
+          check r          = return r
 
 -- | Takes an 'Inum' that might return 'IterR's in the 'IterM' state
 -- (which is considered impolite--see 'runIterM') and transforms it
@@ -420,25 +447,25 @@ runInumM inum = onDone check . inum
 -- function to adjust residual data and an 'Iter' that transcodes from
 -- the input to the output type.
 mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-          ((tIn, tOut) -> (tIn, tOut))
+          CtlHandler (Iter tIn m) tOut m a
+       -- ^ Handle control requests
+       -> ResidHandler tIn tOut
        -- ^ Adjust residual data
        -> Iter tIn m tOut
        -- ^ Generate transcoded data chunks
        -> Inum tIn tOut m a
-mkInum adjustResid codec iter0 = doIter iter0
+mkInum ch adj codec iter0 = doIter iter0
     where
       doIter iter = tryI codec >>= either (inputErr iter . fst) (doInput iter)
       inputErr iter e | isIterEOF e = return $ IterF iter
                       | otherwise   = Iter $ InumFail e (IterF iter)
       doInput iter input = do
-        r <- runIterM iter (Chunk input False)
+        r <- runIterMC ch iter (Chunk input False)
         stop <- knownEOFI
         case (stop || null input, r) of
           (False, IterF i) -> doIter i
-          _ -> Iter $ \c -> fixResid r (c, getResid r)
-      fixResid r (Chunk tIn0 eofIn, Chunk tOut0 eofOut) =
-          let (tIn, tOut) = adjustResid (tIn0, tOut0)
-          in Done (setResid r (Chunk tOut eofOut)) (Chunk tIn eofIn)
+          (True, r@(IterF _)) -> return r
+          _ -> withResidHandler adj (getResid r) $ return . setResid r
 
 pullupResid :: (ChunkData t) => (t, t) -> (t, t)
 pullupResid (a, b) = (mappend a b, mempty)
@@ -451,7 +478,7 @@ pullupResid (a, b) = (mappend a b, mempty)
 -- acts as a no-op when fused to other 'Inum's with '|.' or fused to
 -- 'Iter's with '.|'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop = mkInum pullupResid dataI
+inumNop = mkInum (passCtl pullupResid) pullupResid dataI
 
 -- | @inumNull@ feeds empty data to the underlying 'Iter'.  It acts as
 -- a no-op when concatenated to other 'Inum's with 'cat' or 'lcat'.
@@ -462,14 +489,16 @@ inumNull = inumPure mempty
 inumPure :: (ChunkData tIn, Monad m) => tOut -> Inum tIn tOut m a
 inumPure t iter = runIterM iter $ chunk t
 
--- | Repeat an 'Inum' until the input receives an EOF condition or the
--- 'Iter' no longer requires input.
+-- | Repeat an 'Inum' until the input receives an EOF condition, the
+-- 'Iter' no longer requires input, or the 'Iter' is in an unhandled
+-- 'IterC' state (which presumably will continue to be unhandled by
+-- the same inum, so no point in executing it again).
 inumRepeat :: (ChunkData tIn, Monad m) =>
               Inum tIn tOut m a -> Inum tIn tOut m a
 inumRepeat inum iter0 = do
-  er <- tryI $ runInumM inum iter0
+  er <- tryI' $ runInumM inum iter0
   stop <- knownEOFI
   case (stop, er) of
     (False, Right (IterF iter)) -> inumRepeat inum iter
     (_, Right r) -> return r
-    (_, Left (SomeException _, r)) -> reRunIter r
+    (_, Left r) -> reRunIter r
