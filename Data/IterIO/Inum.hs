@@ -393,15 +393,12 @@ noCtl (CtlArg _ n c) = return $ runIter (n Nothing) c
 -- case some enclosing 'CtlHandler' decides to flush pending input
 -- data, it is advisable to un-translate any data in the output type
 -- @tOut@ back to the input type @tIn@.
-passCtl :: (Monad m) =>
+passCtl :: (Monad mIn) =>
            ResidHandler tIn tOut
-        -> CtlHandler (Iter tIn m) tOut m a
+        -> CtlHandler (Iter tIn mIn) tOut m a
 passCtl adj (CtlArg a n c0) = withResidHandler adj c0 runn
     where runn c = do mcr <- safeCtlI a
                       return $ runIter (n mcr) c
-
-type CtlFn carg cres m1 t m a =
-    carg -> (cres -> Iter t m a) -> Chunk t -> m1 (IterR t m a)
 
 consCtl :: (CtlCmd carg cres) =>
            (carg -> (cres -> Iter t m a) -> Chunk t -> m1 (IterR t m a))
@@ -410,6 +407,23 @@ consCtl :: (CtlCmd carg cres) =>
 consCtl fn fallback ca@(CtlArg a0 n c) = maybe (fallback ca) runfn $ cast a0
     where runfn a = fn a (n . cast) c
 infixr 9 `consCtl`
+
+-- | Make a control function suitable for use as the first argument to
+-- 'consCtl'.
+mkCtl :: (CtlCmd carg cres, Monad m1) =>
+         (carg -> m1 cres)
+      -> carg -> (cres -> Iter t m a) -> Chunk t -> m1 (IterR t m a)
+mkCtl f a n c = do cres <- f a; return $ runIter (n cres) c
+
+-- | Like 'mkCtl', except that it flushes all input and clears the EOF
+-- flag in both 'Iter' monads after executing the control function.
+mkFlushCtl :: (CtlCmd carg cres, Monad mIn, ChunkData tIn, ChunkData t) =>
+              (carg -> Iter tIn mIn cres)
+           -> carg -> (cres -> Iter t m a) -> Chunk t
+           -> Iter tIn mIn (IterR t m a)
+mkFlushCtl f a n _ = do cres <- onDone (flip setResid mempty) $ f a
+                        return $ runIter (n cres) mempty
+  
 
 --
 -- Basic tools
