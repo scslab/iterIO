@@ -1,10 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FunctionalDependencies #-}
 
 module Data.IterIO.Inum
-{-
     (-- * Base types
      Inum, Onum
     -- * concatenation and fusing operators
@@ -12,10 +8,21 @@ module Data.IterIO.Inum
     -- * Exception functions
     , inumCatch, inumHandler, inumFinally, inumOnException
     , resumeI, verboseResumeI
+    -- * Simple Enumerator construction function
+    -- $mkInumIntro
+    , ResidHandler, CtlHandler
+    , mkInum
+    -- * Utilities
+    , noCtl, passCtl, consCtl, mkCtl, mkFlushCtl
+    , runIterM, runIterMC, runInum
     -- * Some basic Inums
-    , inumNop
-    -- , enumPure, inumF, inumC, inumFC, inumMC, inumLazy, inumRepeat
-    ) -} where
+    , inumNop, inumNull, inumPure, inumRepeat
+    -- * Enumerator construction monad
+    -- $mkInumMIntro
+    , InumM, mkInumM, mkInumAutoM
+    , setCtlHandler, setAutoEOF, setAutoDone, addCleanup, withCleanup
+    , ifeed, ifeed1, ipipe, irun, irepeat, ipopresid, idone
+    ) where
 
 import Prelude hiding (null)
 import qualified Prelude
@@ -424,9 +431,28 @@ mkFlushCtl :: (CtlCmd carg cres, Monad mIn, ChunkData tIn, ChunkData t) =>
 mkFlushCtl f a n _ = do cres <- onDone (flip setResid mempty) $ f a
                         return $ runIter (n cres) mempty
   
-
 --
 -- Basic tools
+--
+
+-- $mkInumIntro
+--
+-- The 'mkInum' function allows you to create stateless 'Inum's out of
+-- simple transcoding 'Iter's.  As an example, suppose you are
+-- processing a list of @L.ByteString@s representing packets, and want
+-- to concatenate them all into one continuous stream of bytes.  You
+-- could implement an 'Inum' called @inumConcat@ to do this as
+-- follows:
+--
+-- #mkInumExample#
+--
+-- @
+--iterConcat :: (Monad m) => 'Iter' [L.ByteString] m L.ByteString
+--iterConcat = L.concat ``liftM`` 'dataI'
+--
+--inumConcat :: (Monad m) => 'Inum' [L.ByteString] L.ByteString m a
+--inumConcat = 'mkInum' iterConcat
+-- @
 --
 
 -- | Run an 'Iter' just like 'runIter', but then keep executing
@@ -740,7 +766,7 @@ data InumState tIn tOut m a = InumState {
       insAutoEOF :: !Bool
     , insAutoDone :: !Bool
     , insCtl :: !(CtlHandler (Iter tIn m) tOut m a)
-    , insIter :: !(Iter tOut m a)
+    , insIter :: !(IterR tOut m a)
     , insCleanup :: !(InumM tIn tOut m a ())
     , insCleaning :: !Bool
     }
@@ -750,7 +776,7 @@ defaultInumState = InumState {
                      insAutoEOF = False
                    , insAutoDone = False
                    , insCtl = noCtl
-                   , insIter = Iter $ const $ error "insIter"
+                   , insIter = IterF $ Iter $ const $ error "insIter"
                    , insCleanup = return ()
                    , insCleaning = False
                    }
@@ -843,7 +869,7 @@ runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          -- ^ Monadic computation defining the 'Inum'.
          -> InumState tIn tOut m a
          -- ^ State to run on
-         -> Iter tIn m (Iter tOut m a)
+         -> Iter tIn m (IterR tOut m a)
 runInumM inumm s0 = do
   (result1, s1) <- runIterStateT inumm s0 >>= convertFail
   (result2, s2) <- runIterStateT (insCleanup s1) s1 { insAutoDone = False
@@ -863,7 +889,6 @@ runInumM inumm s0 = do
       convertFail is = return is
       isInumDone e = maybe False (\InumDone -> True) $ fromException e
 
-{-
 
 -- | A variant of 'mkInumM' that sets /AutoEOF/ and /AutoDone/ to
 -- 'True' by default.  (Equivalent to calling @'setAutoEOF' 'True' >>
@@ -871,7 +896,7 @@ runInumM inumm s0 = do
 mkInumAutoM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
                InumM tIn tOut m a b -> Inum tIn tOut m a
 mkInumAutoM inumm iter0 =
-    runInumM inumm defaultInumState { insIter = iter0
+    runInumM inumm defaultInumState { insIter = IterF iter0
                                     , insAutoEOF = True
                                     , insAutoDone = True
                                     }
@@ -897,7 +922,7 @@ mkInumAutoM inumm iter0 =
 mkInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
            InumM tIn tOut m a b -> Inum tIn tOut m a
 mkInumM inumm iter0 =
-    runInumM inumm defaultInumState { insIter = iter0 }
+    runInumM inumm defaultInumState { insIter = IterF iter0 }
 
 -- | Used from within the 'InumM' monad to feed data to the target
 -- 'Iter'.  Returns @'False'@ if the target 'Iter' is still active and
@@ -976,5 +1001,3 @@ ipopresid = do
 -- @'throwI' ...@ for an unsuccessful exit.)
 idone :: (ChunkData tIn, Monad m) => InumM tIn tOut m a b
 idone = throwI InumDone
-
--}
