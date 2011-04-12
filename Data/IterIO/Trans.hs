@@ -9,10 +9,10 @@
 
 -- | Various helper functions and instances for using 'Iter's of
 -- different Monads together in the same pipeline.
-module Data.IterIO.Trans (-- * Iter-specific state monad transformer
+module Data.IterIO.Trans {-
+                         (-- * Iter-specific state monad transformer
                           IterStateT(..), runIterStateT
                          , iget, igets, iput, imodify
-{-
                           -- * Functions for building Iter monad adapters
                          , adaptIter, adaptIterM
                          -- * Adapters for Iters of mtl transformers
@@ -20,11 +20,10 @@ module Data.IterIO.Trans (-- * Iter-specific state monad transformer
                          , runContTI, runErrorTI, runListTI, runReaderTI
                          , runRWSI, runRWSLI, runStateTI, runStateTLI
                          , runWriterTI, runWriterTLI
--}
                          )
+-}
     where
 
-{-
 import Control.Monad.Cont
 import Control.Monad.Error
 import Control.Monad.List
@@ -35,12 +34,15 @@ import Control.Monad.Writer.Strict
 import qualified Control.Monad.RWS.Lazy as Lazy
 import qualified Control.Monad.State.Lazy as Lazy
 import qualified Control.Monad.Writer.Lazy as Lazy
--}
 import Control.Monad
 import Control.Monad.Trans
 import Data.Monoid
 
-import Data.IterIO.Base
+import Data.IterIO.Iter
+
+--
+-- IterStateT monad
+--
 
 -- | @IterStateT@ is a variant of the 'StateT' monad transformer
 -- specifically designed for use inside 'Iter's.  The difference
@@ -66,37 +68,35 @@ instance (MonadIO m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
 
 -- | Runs an @'IterStateT' s m@ computation on some state @s@.
--- Returns the state of the 'Iter' and the state of @s@ as a pair.
--- Pulls residual input up to the enclosing 'Iter' monad the same way
--- that 'inumNop' does.
+-- Returns the result ('IterR') of the 'Iter' and the state of @s@ as
+-- a pair.  Pulls residual input up to the enclosing 'Iter' monad as
+-- with 'pullupResid'.
 runIterStateT :: (ChunkData t, Monad m) => 
                  Iter t (IterStateT s m) a -> s -> Iter t m (IterR t m a, s)
 runIterStateT i0 s0 = Iter $ adapt s0 . runIter i0
-    where
-      adapt s (IterM (IterStateT f)) = IterM $
-                                       liftM (uncurry $ flip adapt) (f s)
-      adapt s (IterF i)              = IterF $ runIterStateT i s
-      adapt s r@(IterC _ _)          = stepC r $ adapt s
-      adapt s r                      = Done (setResid r mempty, s) (getResid r)
-
+    where adapt s (IterM (IterStateT f)) =
+              IterM $ liftM (uncurry $ flip adapt) (f s)
+          adapt s r = stepR' r (adapt s) $
+                      Done (setResid r mempty, s) (getResid r)
+                
 -- | Returns the state in an @'Iter' t ('IterStateT' s m)@ monad.
 -- Analogous to @'get'@ for a @'StateT' s m@ monad.
-iget :: (ChunkData t, Monad m) => Iter t (IterStateT s m) s
+iget :: (Monad m) => Iter t (IterStateT s m) s
 iget = lift $ IterStateT $ \s -> return (s, s)
 
 -- | Returns a particular field of the 'IterStateT' state, analogous
 -- to @'gets'@ for @'StateT'@.
-igets :: (ChunkData t, Monad m) => (s -> a) -> Iter t (IterStateT s m) a
+igets :: (Monad m) => (s -> a) -> Iter t (IterStateT s m) a
 igets f = liftM f iget
 
 -- | Sets the 'IterStateT' state.  Analogous to @'put'@ for
 -- @'StateT'@.
-iput :: (ChunkData t, Monad m) => s -> Iter t (IterStateT s m) ()
+iput :: (Monad m) => s -> Iter t (IterStateT s m) ()
 iput s = lift $ IterStateT $ \_ -> return ((), s)
 
 -- | Modifies the 'IterStateT' state.  Analogous to @'modify'@ for
 -- @'StateT'@.
-imodify :: (ChunkData t, Monad m) => (s -> s) -> Iter t (IterStateT s m) ()
+imodify :: (Monad m) => (s -> s) -> Iter t (IterStateT s m) ()
 imodify f = lift $ IterStateT $ \s -> return ((), f s)
 
 {-
@@ -172,6 +172,9 @@ liftIterM = adaptIterM lift
 liftIterIO :: (ChunkData t, MonadIO m) =>
               Iter t IO a -> Iter t m a
 liftIterIO = adaptIterM liftIO
+
+
+{-
 
 --
 -- mtl runner functions
@@ -340,5 +343,7 @@ instance (MonadWriter w m) => MonadWriter w (IterStateT s m) where
     pass   m = IterStateT $ \s -> pass $ do
                  ((a, f), s') <- unIterStateT m s
                  return ((a, s'), f)
+
+-}
 
 -}

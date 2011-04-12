@@ -25,7 +25,7 @@ module Data.IterIO.Iter
     , safeCtlI, ctlI
     -- * Internal functions
     , onDone
-    , onDoneR, stepR, runR, reRunIter, runIterR
+    , onDoneR, stepR, stepR', runR, reRunIter, runIterR
     , getResid, setResid
     -- * Misc debugging functions
     , traceInput, traceI
@@ -862,14 +862,31 @@ ctlI carg = safeCtlI carg >>=
 -- Iter manipulation functions
 --
 
+-- | A variant of 'IterR' that only works for the 'IterF' and 'IterC'
+-- states, not the 'IterM' state.  (Because of this additional
+-- restriction, the input and output 'Monad' types @m1@ and @m2@ do
+-- not need to be the same.)
+stepR' :: IterR t m1 a
+       -- ^ The 'IterR' that needs to be stepped.
+       -> (IterR t m1 a -> IterR t m2 b)
+       -- ^ Transformation funciton if the 'IterR' is in the 'IterF'
+       -- or 'IterC' states
+       -> IterR t m2 b
+       -- ^ Fallbck if the 'IterR' is no longer active.
+       -> IterR t m2 b
+stepR' (IterF (Iter i)) f _       = IterF $ Iter $ f . i
+stepR' (IterC (CtlArg a n c)) f _ =
+    IterC $ CtlArg a (Iter . (f .) . runIter . n) c
+stepR' (IterM _) _ _              = error "stepR' (IterM)"
+stepR' _ _ notActive              = notActive
+
+-- | Step an active 'IterR' (i.e., one in the 'IterF', 'IterM', or
+-- 'IterC' state) to its next state, and pass its result through a
+-- function.
 stepR :: (Monad m) =>
          IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
-stepR (IterF (Iter i)) f       = IterF $ Iter $ f . i
-stepR (IterM m) f              = IterM $ liftM f m
-stepR (IterC (CtlArg a n c)) f = IterC $ CtlArg a (Iter . (f .) . runIter . n) c
-stepR (Done _ _) _             = error "stepR (Done)"
-stepR (IterFail _ _) _         = error "stepR (IterFail)"
-stepR (InumFail _ _ _) _       = error "stepR (InumFail)"
+stepR (IterM m) f = IterM $ liftM f m
+stepR r f         = stepR' r f (error "stepR")
 
 onDoneR :: (Monad m) =>
            (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b

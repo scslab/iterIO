@@ -26,8 +26,6 @@ module Data.IterIO.Inum
 
 import Prelude hiding (null)
 import qualified Prelude
-import Data.IterIO.Iter
-
 import Control.Exception (SomeException(..), Exception(..))
 import Control.Monad
 import Control.Monad.Trans
@@ -35,6 +33,9 @@ import Data.Monoid
 import Data.Typeable
 import System.Environment (getProgName)
 import System.IO
+
+import Data.IterIO.Iter
+import Data.IterIO.Trans
 
 --
 -- Enumerator types
@@ -545,67 +546,6 @@ inumRepeat inum iter0 = do
     (_, Left r) -> reRunIter r
 
 --
--- IterStateT monad
---
-
--- | @IterStateT@ is a variant of the 'StateT' monad transformer
--- specifically designed for use inside 'Iter's.  The difference
--- between 'IterStateT' and 'StateT' is that the 'runIterStateT'
--- function returns an 'Iter' instead of just the result, which is
--- somewhat analogous to the way 'finishI' returns an 'Iter' inside an
--- 'Iter' so you can inspect its state.  The advantage of this
--- approach is that you can recover the state even if an 'IterFail' or
--- 'InumFail' condition occurs.
-newtype IterStateT s m a = IterStateT (s -> m (a, s))
-
-instance (Monad m) => Monad (IterStateT s m) where
-    return a = IterStateT $ \s -> return (a, s)
-    (IterStateT mf) >>= k = IterStateT $ \s -> do (a, s') <- mf s
-                                                  let (IterStateT kf) = k a
-                                                  kf $! s'
-    fail = IterStateT . const . fail
-
-instance MonadTrans (IterStateT s) where
-    lift m = IterStateT $ \s -> m >>= \a -> return (a, s)
-
-instance (MonadIO m) => MonadIO (IterStateT s m) where
-    liftIO = lift . liftIO
-
--- | Runs an @'IterStateT' s m@ computation on some state @s@.
--- Returns the result ('IterR') of the 'Iter' and the state of @s@ as
--- a pair.  Pulls residual input up to the enclosing 'Iter' monad as
--- with 'pullupResid'.
-runIterStateT :: (ChunkData t, Monad m) => 
-                 Iter t (IterStateT s m) a -> s -> Iter t m (IterR t m a, s)
-runIterStateT i0 s0 = Iter $ adapt s0 . runIter i0
-    where adapt s (IterF i) = IterF $ runIterStateT i s
-          adapt s (IterM (IterStateT f)) =
-              IterM $ liftM (uncurry $ flip adapt) (f s)
-          adapt s (IterC (CtlArg a n c)) =
-              IterC $ CtlArg a (Iter . (adapt s .) . runIter . n) c
-          adapt s r = Done (setResid r mempty, s) (getResid r)
-
--- | Returns the state in an @'Iter' t ('IterStateT' s m)@ monad.
--- Analogous to @'get'@ for a @'StateT' s m@ monad.
-iget :: (Monad m) => Iter t (IterStateT s m) s
-iget = lift $ IterStateT $ \s -> return (s, s)
-
--- | Returns a particular field of the 'IterStateT' state, analogous
--- to @'gets'@ for @'StateT'@.
-igets :: (Monad m) => (s -> a) -> Iter t (IterStateT s m) a
-igets f = liftM f iget
-
--- | Sets the 'IterStateT' state.  Analogous to @'put'@ for
--- @'StateT'@.
-iput :: (Monad m) => s -> Iter t (IterStateT s m) ()
-iput s = lift $ IterStateT $ \_ -> return ((), s)
-
--- | Modifies the 'IterStateT' state.  Analogous to @'modify'@ for
--- @'StateT'@.
-imodify :: (Monad m) => (s -> s) -> Iter t (IterStateT s m) ()
-imodify f = lift $ IterStateT $ \s -> return ((), f s)
-
---
 -- Complex Inum creation
 --
 
@@ -953,17 +893,15 @@ ifeed1 dat = if null dat then throwEOFI "ifeed1" else ifeed dat
 -- finished.
 ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
-ipipe inum = 
-    undefined
-{-
+ipipe inum = {-
 do
   s <- iget
-  iter <- liftIterM $ inumRepeat (inumMC (insCtl s) `cat` inumF) |. inum $
-          insIter s
+  -- iter <- liftIterM $ runIterMC (insCtl s) $ inum $ reRunIter $ insIter s
+  -- iter <- liftIterM $ inumRepeat (inumMC (insCtl s) `cat` inumF) |. inum $ insIter s
   iput s { insIter = iter }
   let done = not $ isIterActive iter
   if done && insAutoDone s then idone else return done
--}
+-} undefined
 
 -- | Apply an 'Onum' (or 'Inum' of an arbitrary, unused input type) to
 -- the 'Iter' from within the 'InumM' monad.  As with 'ifeed', returns
