@@ -461,14 +461,15 @@ runInumM inum = onDone check . inum
 -- function to adjust residual data and an 'Iter' that transcodes from
 -- the input to the output type.
 mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-          CtlHandler (Iter tIn m) tOut m a
-       -- ^ Handle control requests
-       -> ResidHandler tIn tOut
-       -- ^ Adjust residual data
+          ResidHandler tIn tOut
+       -- ^ Adjust residual data (use 'id' for no adjustment)
+       -> CtlHandler (Iter tIn m) tOut m a
+       -- ^ Handle control requests (use 'noCtl' or 'passCtl' if
+       -- 'Inum' shouldn't implement any specific control functions).
        -> Iter tIn m tOut
        -- ^ Generate transcoded data chunks
        -> Inum tIn tOut m a
-mkInum ch adj codec iter0 = doIter iter0
+mkInum adj ch codec iter0 = doIter iter0
     where
       doIter iter = tryI codec >>= either (inputErr iter . fst) (doInput iter)
       inputErr iter e | isIterEOF e = return $ IterF iter
@@ -492,7 +493,7 @@ pullupResid (a, b) = (mappend a b, mempty)
 -- acts as a no-op when fused to other 'Inum's with '|.' or fused to
 -- 'Iter's with '.|'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop = mkInum (passCtl pullupResid) pullupResid dataI
+inumNop = mkInum pullupResid (passCtl pullupResid) dataI
 
 -- | @inumNull@ feeds empty data to the underlying 'Iter'.  It acts as
 -- a no-op when concatenated to other 'Inum's with 'cat' or 'lcat'.
@@ -516,3 +517,70 @@ inumRepeat inum iter0 = do
     (False, Right (IterF iter)) -> inumRepeat inum iter
     (_, Right r) -> return r
     (_, Left r) -> reRunIter r
+
+--
+-- IterStateT monad
+--
+
+-- | @IterStateT@ is a variant of the 'StateT' monad transformer
+-- specifically designed for use inside 'Iter's.  The difference
+-- between 'IterStateT' and 'StateT' is that the 'runIterStateT'
+-- function returns an 'Iter' instead of just the result, which is
+-- somewhat analogous to the way 'finishI' returns an 'Iter' inside an
+-- 'Iter' so you can inspect its state.  The advantage of this
+-- approach is that you can recover the state even if an 'IterFail' or
+-- 'InumFail' condition occurs.
+newtype IterStateT s m a = IterStateT (s -> m (a, s))
+
+instance (Monad m) => Monad (IterStateT s m) where
+    return a = IterStateT $ \s -> return (a, s)
+    (IterStateT mf) >>= k = IterStateT $ \s -> do (a, s') <- mf s
+                                                  let (IterStateT kf) = k a
+                                                  kf $! s'
+    fail = IterStateT . const . fail
+
+instance MonadTrans (IterStateT s) where
+    lift m = IterStateT $ \s -> m >>= \a -> return (a, s)
+
+instance (MonadIO m) => MonadIO (IterStateT s m) where
+    liftIO = lift . liftIO
+
+{-
+-- | Runs an @'IterStateT' s m@ computation on some state @s@.
+-- Returns the state of the 'Iter' and the state of @s@ as a pair.
+-- Pulls residual input up to the enclosing 'Iter' monad the same way
+-- that 'inumNop' does.
+runIterStateT :: (ChunkData t, Monad m) => 
+                 Iter t (IterStateT s m) a -> s -> Iter t m (IterR t m a, s)
+runIterStateT i0 s0 = Iter $ adapt s0 . runIter i0
+    where
+      adapt s (IterM (IterStateT f)) = IterM $
+                                       liftM (uncurry $ flip adapt) (f s)
+      adapt s (IterF i)              = IterF $ runIterStateT i s
+      adapt s r@(IterC _)            = stepR r $ adapt s
+      adapt s r                      = Done (setResid r mempty, s) (getResid r)
+-}
+
+-- | Returns the state in an @'Iter' t ('IterStateT' s m)@ monad.
+-- Analogous to @'get'@ for a @'StateT' s m@ monad.
+iget :: (ChunkData t, Monad m) => Iter t (IterStateT s m) s
+iget = lift $ IterStateT $ \s -> return (s, s)
+
+-- | Returns a particular field of the 'IterStateT' state, analogous
+-- to @'gets'@ for @'StateT'@.
+igets :: (ChunkData t, Monad m) => (s -> a) -> Iter t (IterStateT s m) a
+igets f = liftM f iget
+
+-- | Sets the 'IterStateT' state.  Analogous to @'put'@ for
+-- @'StateT'@.
+iput :: (ChunkData t, Monad m) => s -> Iter t (IterStateT s m) ()
+iput s = lift $ IterStateT $ \_ -> return ((), s)
+
+-- | Modifies the 'IterStateT' state.  Analogous to @'modify'@ for
+-- @'StateT'@.
+imodify :: (ChunkData t, Monad m) => (s -> s) -> Iter t (IterStateT s m) ()
+imodify f = lift $ IterStateT $ \s -> return ((), f s)
+
+--
+-- Complex Inum creation
+--
