@@ -545,7 +545,6 @@ instance MonadTrans (IterStateT s) where
 instance (MonadIO m) => MonadIO (IterStateT s m) where
     liftIO = lift . liftIO
 
-{-
 -- | Runs an @'IterStateT' s m@ computation on some state @s@.
 -- Returns the state of the 'Iter' and the state of @s@ as a pair.
 -- Pulls residual input up to the enclosing 'Iter' monad the same way
@@ -554,12 +553,12 @@ runIterStateT :: (ChunkData t, Monad m) =>
                  Iter t (IterStateT s m) a -> s -> Iter t m (IterR t m a, s)
 runIterStateT i0 s0 = Iter $ adapt s0 . runIter i0
     where
-      adapt s (IterM (IterStateT f)) = IterM $
-                                       liftM (uncurry $ flip adapt) (f s)
-      adapt s (IterF i)              = IterF $ runIterStateT i s
-      adapt s r@(IterC _)            = stepR r $ adapt s
-      adapt s r                      = Done (setResid r mempty, s) (getResid r)
--}
+      adapt s (IterF i) = IterF $ runIterStateT i s
+      adapt s (IterM (IterStateT f)) =
+          IterM $ liftM (uncurry $ flip adapt) (f s)
+      adapt s (IterC (CtlArg a n c)) =
+          IterC $ CtlArg a (Iter . (adapt s .) . runIter . n) c
+      adapt s r = Done (setResid r mempty, s) (getResid r)
 
 -- | Returns the state in an @'Iter' t ('IterStateT' s m)@ monad.
 -- Analogous to @'get'@ for a @'StateT' s m@ monad.
