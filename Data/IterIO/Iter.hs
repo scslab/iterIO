@@ -20,7 +20,8 @@ module Data.IterIO.Iter
     , mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
-    , nullI, dataI, pureI, chunkI, peekI, atEOFI, knownEOFI, ungetI
+    , nullI, dataI, pureI, chunkI, currentChunkI
+    , peekI, atEOFI, knownEOFI, ungetI
     , safeCtlI, ctlI
     -- * Internal functions
     , onDone
@@ -808,6 +809,12 @@ pureI = do peekI nullI; Iter $ \(Chunk t _) -> Done t chunkEOF
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 chunkI = iterF $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
 
+-- | Returns the current chunk.  Unlike 'chunkI', @currentChunkI@ may
+-- return an empty chunk with no data, even when there is more data to
+-- be requested.
+currentChunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
+currentChunkI = Iter $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
+
 -- | Runs an 'Iter' without consuming any input.  (See 'tryBI' if you
 -- want to avoid consuming input just when the 'Iter' fails.)
 peekI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a
@@ -830,7 +837,7 @@ atEOFI = iterF $ \c@(Chunk t _) -> Done (null t) c
 -- inside 'Inum' implementations).  This is a somewhat fringe case.
 -- Thus, when in doubt, use 'atEOFI' in preference to @knownEOFI@.
 knownEOFI :: (Monad m, ChunkData t) => Iter t m Bool
-knownEOFI = Iter $ \c@(Chunk t eof) -> Done (null t && eof) c
+knownEOFI = Iter $ \c@(Chunk t eof) -> Done (eof && null t) c
 
 -- | Place data back onto the input stream, where it will be the next
 -- data consumed by subsequent 'Iter's..
