@@ -24,6 +24,7 @@ module Data.IterIO.Trans {-
 -}
     where
 
+import Control.Applicative ((<$>))
 import Control.Monad.Cont
 import Control.Monad.Error
 import Control.Monad.List
@@ -99,11 +100,17 @@ iput s = lift $ IterStateT $ \_ -> return ((), s)
 imodify :: (Monad m) => (s -> s) -> Iter t (IterStateT s m) ()
 imodify f = lift $ IterStateT $ \s -> return ((), f s)
 
-{-
-
 --
 -- Adapter utility functions
 --
+
+runFC :: (ChunkData t, Monad mIn) =>
+         Iter t mOut a -> Iter t mIn (IterR t mOut a)
+runFC i = Iter $ \c@(Chunk _ eof) -> check eof $ runIter i c
+    where check eof r@(IterM _) = Done r (Chunk mempty eof)
+          check _ (IterF i) = IterF (runFC i)
+          check _ (IterC (CtlArg a n c)) = IterC $ CtlArg a (runFC . n) c
+          check _ r = Done (setResid r mempty) (getResid r)
 
 -- | Adapt an 'Iter' from one monad to another.  Requires two
 -- functions, one adapting the result to a new type (if required), and
@@ -132,19 +139,31 @@ imodify f = lift $ IterStateT $ \s -> return ((), f s)
 -- run on the latest state, and that eventually the result @a@ will be
 -- paired with the newest state.
 adaptIter :: (ChunkData t, Monad m1, Monad m2) =>
-             (a -> b)                          -- ^ How to adapt result values
-          -> (m1 (Iter t m1 a) -> Iter t m2 b) -- ^ How to adapt computations
-          -> Iter t m1 a                       -- ^ Input computation
-          -> Iter t m2 b                       -- ^ Output computation
+             (a -> b)                           -- ^ How to adapt result values
+          -> (m1 (Iter t m1 a) -> Iter t m2 b)  -- ^ How to adapt computations
+          -> Iter t m1 a                        -- ^ Input computation
+          -> Iter t m2 b                        -- ^ Output computation
+adaptIter f mf = runAdapt
+    where runAdapt i = currentChunkI >>= adapt . runIter i
+          adapt r@(IterF i) = runAdapt i
+          adapt r@(IterC (CtlArg a n c)) = do
+            mcr <- safeCtlI a
+            adapt $ runIter (n mcr) c
+
+    
+{-
 adaptIter f mf = Iter . runAdapt
-    where
-      runAdapt m = adapt . runIter m
-      adapt iter@(IterF _)   = IterF $ adapt . feedI iter
-      adapt (IterM m)        = mf m
-      adapt (Done a c)       = Done (f a) c
-      adapt (IterC a fr)     = IterC a $ adapt . fr
-      adapt (IterFail e c)   = IterFail e c
-      adapt (InumFail e a c) = InumFail e (f a) c
+    where runAdapt m = IterF . adapt . runIter m
+          adapt (IterM m) = mf $ liftM reRunIter m
+          adapt iter@(IterF _)   = IterF $ adapt . feedI iter
+          adapt (IterM m)        = mf m
+          adapt (Done a c)       = Done (f a) c
+          adapt (IterC a fr)     = IterC a $ adapt . fr
+          adapt (IterFail e c)   = IterFail e c
+          adapt (InumFail e a c) = InumFail e (f a) c
+-}
+
+{-
 
 -- | Adapt monadic computations of an 'Iter' from one monad to
 -- another.  This only works when the values are converted straight
@@ -173,6 +192,7 @@ liftIterIO :: (ChunkData t, MonadIO m) =>
               Iter t IO a -> Iter t m a
 liftIterIO = adaptIterM liftIO
 
+-}
 
 {-
 
@@ -343,7 +363,5 @@ instance (MonadWriter w m) => MonadWriter w (IterStateT s m) where
     pass   m = IterStateT $ \s -> pass $ do
                  ((a, f), s') <- unIterStateT m s
                  return ((a, s'), f)
-
--}
 
 -}

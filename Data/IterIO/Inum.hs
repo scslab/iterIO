@@ -13,6 +13,7 @@ module Data.IterIO.Inum
     , ResidHandler, CtlHandler
     , mkInum
     -- * Utilities
+    , pullupResid
     , noCtl, passCtl, consCtl, mkCtl, mkFlushCtl
     , runIterM, runIterMC, runInum
     -- * Some basic Inums
@@ -465,6 +466,15 @@ runIterM :: (Monad m, MonadTrans mt, Monad (mt m)) =>
 runIterM iter c = check $ runIter iter c
     where check (IterM m) = lift m >>= check
           check r         = return r
+
+{-
+runIterC :: (Monad m1) =>
+            CtlHandler m1 tOut m a
+         -> Iter tOut m a -> Chunk tOut -> m1 (IterR tOut m a)
+runIterC ch iter c = check $ runIter iter c
+    where check (IterC ca) = ch ca >>= check
+          check r          = return r
+-}
 
 runIterMC :: (Monad m) =>
              CtlHandler (Iter tIn m) tOut m a

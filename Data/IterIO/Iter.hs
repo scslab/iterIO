@@ -870,7 +870,7 @@ stepR' :: IterR t m1 a
        -- ^ The 'IterR' that needs to be stepped.
        -> (IterR t m1 a -> IterR t m2 b)
        -- ^ Transformation funciton if the 'IterR' is in the 'IterF'
-       -- or 'IterC' states
+       -- or 'IterC' state.
        -> IterR t m2 b
        -- ^ Fallbck if the 'IterR' is no longer active.
        -> IterR t m2 b
