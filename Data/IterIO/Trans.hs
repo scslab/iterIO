@@ -104,14 +104,6 @@ imodify f = lift $ IterStateT $ \s -> return ((), f s)
 -- Adapter utility functions
 --
 
-runFC :: (ChunkData t, Monad mIn) =>
-         Iter t mOut a -> Iter t mIn (IterR t mOut a)
-runFC i = Iter $ \c@(Chunk _ eof) -> check eof $ runIter i c
-    where check eof r@(IterM _) = Done r (Chunk mempty eof)
-          check _ (IterF i) = IterF (runFC i)
-          check _ (IterC (CtlArg a n c)) = IterC $ CtlArg a (runFC . n) c
-          check _ r = Done (setResid r mempty) (getResid r)
-
 -- | Adapt an 'Iter' from one monad to another.  Requires two
 -- functions, one adapting the result to a new type (if required), and
 -- a second adapting monadic computations from one monad to the other.
@@ -140,29 +132,13 @@ runFC i = Iter $ \c@(Chunk _ eof) -> check eof $ runIter i c
 -- paired with the newest state.
 adaptIter :: (ChunkData t, Monad m1, Monad m2) =>
              (a -> b)                           -- ^ How to adapt result values
-          -> (m1 (Iter t m1 a) -> Iter t m2 b)  -- ^ How to adapt computations
+          -> (m1 (IterR t m1 a) -> Iter t m2 b) -- ^ How to adapt computations
           -> Iter t m1 a                        -- ^ Input computation
           -> Iter t m2 b                        -- ^ Output computation
-adaptIter f mf = runAdapt
-    where runAdapt i = currentChunkI >>= adapt . runIter i
-          adapt r@(IterF i) = runAdapt i
-          adapt r@(IterC (CtlArg a n c)) = do
-            mcr <- safeCtlI a
-            adapt $ runIter (n mcr) c
-
+adaptIter f mf i = Iter $ check . runIter i
+    where check (IterM m) = runIter (mf m) mempty
+          check r = stepR' r check $ fmapR f r
     
-{-
-adaptIter f mf = Iter . runAdapt
-    where runAdapt m = IterF . adapt . runIter m
-          adapt (IterM m) = mf $ liftM reRunIter m
-          adapt iter@(IterF _)   = IterF $ adapt . feedI iter
-          adapt (IterM m)        = mf m
-          adapt (Done a c)       = Done (f a) c
-          adapt (IterC a fr)     = IterC a $ adapt . fr
-          adapt (IterFail e c)   = IterFail e c
-          adapt (InumFail e a c) = InumFail e (f a) c
--}
-
 {-
 
 -- | Adapt monadic computations of an 'Iter' from one monad to

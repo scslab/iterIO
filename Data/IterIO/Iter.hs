@@ -25,7 +25,7 @@ module Data.IterIO.Iter
     , safeCtlI, ctlI
     -- * Internal functions
     , onDone
-    , onDoneR, stepR, stepR', runR, reRunIter, runIterR
+    , onDoneR, stepR, stepR', runR, fmapR, reRunIter, runIterR
     , getResid, setResid
     -- * Misc debugging functions
     , traceInput, traceI
@@ -232,11 +232,16 @@ instance (Typeable t, Typeable1 m, Typeable a) => Typeable (Iter t m a) where
 instance (Monad m) => Functor (Iter t m) where
     fmap = onDone . fmap
 
+fmapR :: (a -> b) -> IterR t m1 a -> IterR t m2 b
+fmapR f (Done a c)       = Done (f a) c
+fmapR _ (IterFail e c)   = IterFail e c
+fmapR f (InumFail e a c) = InumFail e (f a) c
+fmapR _ (IterF _)        = error "fmapR (IterF)"
+fmapR _ (IterM _)        = error "fmapR (IterM)"
+fmapR _ (IterC _)        = error "fmapR (IterC)"
+
 instance (Monad m) => Functor (IterR t m) where
-    fmap f = onDoneR check
-        where check (Done a c)       = Done (f a) c
-              check (InumFail e a c) = InumFail e (f a) c
-              check (IterFail e c)   = IterFail e c
+    fmap = onDoneR . fmapR
 
 instance (Monad m) => Applicative (Iter t m) where
     pure   = return
@@ -450,7 +455,7 @@ handleROr r h pass = check r
 -- | Run an 'Iter'.  Catch any exception it throws (and return the
 -- failing iter state).  Transform successful results with a function.
 --
--- This funciton is slightly more generall than 'catchI'.  For
+-- This function is slightly more general than 'catchI'.  For
 -- instance, we can't implement 'tryI' in terms of just 'catchI'.
 -- Something like
 --
@@ -869,10 +874,10 @@ ctlI carg = safeCtlI carg >>=
 stepR' :: IterR t m1 a
        -- ^ The 'IterR' that needs to be stepped.
        -> (IterR t m1 a -> IterR t m2 b)
-       -- ^ Transformation funciton if the 'IterR' is in the 'IterF'
+       -- ^ Transformation function if the 'IterR' is in the 'IterF'
        -- or 'IterC' state.
        -> IterR t m2 b
-       -- ^ Fallbck if the 'IterR' is no longer active.
+       -- ^ Fallback if the 'IterR' is no longer active.
        -> IterR t m2 b
 stepR' (IterF (Iter i)) f _       = IterF $ Iter $ f . i
 stepR' (IterC (CtlArg a n c)) f _ =
