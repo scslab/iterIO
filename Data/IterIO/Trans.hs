@@ -6,7 +6,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-
 -- | Various helper functions and instances for using 'Iter's of
 -- different Monads together in the same pipeline.
 module Data.IterIO.Trans {-
@@ -77,8 +76,8 @@ runIterStateT :: (ChunkData t, Monad m) =>
 runIterStateT i0 s0 = Iter $ adapt s0 . runIter i0
     where adapt s (IterM (IterStateT f)) =
               IterM $ liftM (uncurry $ flip adapt) (f s)
-          adapt s r = stepR' r (adapt s) $
-                      Done (setResid r mempty, s) (getResid r)
+          adapt s r =
+              stepR' r (adapt s) $ Done (setResid r mempty, s) (getResid r)
                 
 -- | Returns the state in an @'Iter' t ('IterStateT' s m)@ monad.
 -- Analogous to @'get'@ for a @'StateT' s m@ monad.
@@ -113,32 +112,37 @@ imodify f = lift $ IterStateT $ \s -> return ((), f s)
 -- >              Iter s m a -> Iter s (t m) a
 -- > liftIterM = adaptIter id $ lift . lift >=> liftIterM
 --
--- Note that in general the computation adapter must invoke itself
--- recursively.  @adaptIter@ is designed this way because the result
--- adapter function may need to change.  An example is 'runStateTI',
--- which could be implemented as follows:
+-- Here @'lift' . 'lift'@ executes a computation of type
+-- @m ('Iter' s m a)@ from within the @'Iter' s (t m)@ monad.
+-- The result, of type @'Iter' s m a@, can then be fed back into
+-- @liftIterM@ recursively.
+--
+-- Note that in general the computation adapters must invoke the outer
+-- function recursively.  @adaptIter@ is designed this way because the
+-- result adapter function may need to change.  An example is
+-- 'runStateTI', which could be implemented as follows:
 --
 -- > runStateTI :: (ChunkData t, Monad m) =>
 -- >               Iter t (StateT s m) a -> s -> Iter t m (a, s)
 -- > runStateTI iter s = adaptIter adaptResult adaptComputation iter
 -- >     where adaptResult a = (a, s)
--- >           adaptComputation m = do (iter', s') <- lift (runStateT m s)
--- >                                   runStateTI iter' s'
+-- >           adaptComputation m = do (r', s') <- lift (runStateT m s)
+-- >                                   runStateTI r' s'
 --
 -- Here, after executing 'runStateT', the state may be modified.
--- Thus, 'runStateTI' invokes itself recursively with the modified
--- state, @s'@, to ensure that subsequent 'IterM' computations will be
--- run on the latest state, and that eventually the result @a@ will be
--- paired with the newest state.
-adaptIter :: (ChunkData t, Monad m1, Monad m2) =>
-             (a -> b)                           -- ^ How to adapt result values
-          -> (m1 (IterR t m1 a) -> Iter t m2 b) -- ^ How to adapt computations
-          -> Iter t m1 a                        -- ^ Input computation
-          -> Iter t m2 b                        -- ^ Output computation
+-- Thus, @adaptComputation@ invokes @runStateTI@ recursively with the
+-- modified state, @s'@, to ensure that subsequent 'IterM'
+-- computations will be run on the latest state, and that eventually
+-- @adaptResult@ will pair the result @a@ with the newest state.
+adaptIter :: (ChunkData t, Monad m1) =>
+             (a -> b)                          -- ^ How to adapt result values
+          -> (m1 (Iter t m1 a) -> Iter t m2 b) -- ^ How to adapt computations
+          -> Iter t m1 a                       -- ^ Input computation
+          -> Iter t m2 b                       -- ^ Output computation
 adaptIter f mf i = Iter $ check . runIter i
-    where check (IterM m) = runIter (mf m) mempty
+    where check (IterM m) = runIter (mf $ liftM (Iter . runIterR) m) mempty
           check r = stepR' r check $ fmapR f r
-    
+
 -- | Adapt monadic computations of an 'Iter' from one monad to
 -- another.  This only works when the values are converted straight
 -- through.  For more complex scenarios, you need 'adaptIter'.
@@ -148,11 +152,11 @@ adaptIter f mf i = Iter $ check . runIter i
 -- > liftIterIO :: (ChunkData t, MonadIO m) => Iter t IO a -> Iter t m a
 -- > liftIterIO = adaptIterM liftIO
 adaptIterM :: (ChunkData t, Monad m1, Monad m2) =>
-              (m1 (IterR t m1 a) -> m2 (IterR t m1 a)) -- ^ Conversion function
+              (m1 (Iter t m1 a) -> m2 (Iter t m1 a)) -- ^ Conversion function
            -> Iter t m1 a       -- ^ 'Iter' of input monad
            -> Iter t m2 a       -- ^ Returns 'Iter' of output monad
 adaptIterM f = adapt
-    where adapt = adaptIter id $ lift . f >=> adapt . reRunIter
+    where adapt = adaptIter id $ lift . f >=> adapt
 
 -- | Run an @'Iter' s m@ computation from witin the @'Iter' s (t m)@
 -- monad, where @t@ is a 'MonadTrans'.
@@ -166,8 +170,6 @@ liftIterIO :: (ChunkData t, MonadIO m) =>
               Iter t IO a -> Iter t m a
 liftIterIO = adaptIterM liftIO
 
-{-
-
 --
 -- mtl runner functions
 --
@@ -178,7 +180,10 @@ liftIterIO = adaptIterM liftIO
 -- return residual data.
 runContTI :: (ChunkData t, Monad m) =>
              Iter t (ContT (Iter t m a) m) a -> Iter t m a
-runContTI = adaptIter id $ \m -> IterM $ runContT m (return . runContTI)
+runContTI = adaptIter id adapt
+    where adapt m = join $ lift $ runContT m $ return . runContTI
+--        adapt :: ContT (Iter t m a) m (Iter t (ContT (Iter t m a) m) a)
+--              -> Iter t m a
 
 -- | Run a computation of type @'Iter' t ('ErrorT' e m)@ from within
 -- the @'Iter' t m@ monad.  This function is here for completeness,
@@ -212,10 +217,10 @@ runRWSI :: (ChunkData t, Monoid w, Monad m) =>
         -> s                       -- ^ Mutable State
         -> Iter t m (a, s, w)      -- ^ Returns result, mutable state, writer
 runRWSI iter0 r s0 = doRWS mempty s0 iter0
-    where doRWS w s = adaptIter (\a -> (a, s, w)) $ \m ->
-                      IterM $ runRWST m r s >>= \(iter, s', w') ->
-                      return $ doRWS (mappend w w') s' iter
-
+    where doRWS w s = adaptIter (\a -> (a, s, w)) $ \m -> do
+                        (iter, s', w') <- lift $ runRWST m r s
+                        doRWS (mappend w w') s' iter
+                                                  
 -- | Run an @'Iter' t ('Lazy.RWST' r w s m)@ computation from within
 -- the @'Iter' t m@ monad.  Just like 'runRWSI', execpt this function
 -- is for /Lazy/ 'Lazy.RWST' rather than strict 'RWST'.
@@ -226,9 +231,9 @@ runRWSLI :: (ChunkData t, Monoid w, Monad m) =>
         -> s                       -- ^ Mutable State
         -> Iter t m (a, s, w)      -- ^ Returns result, mutable state, writer
 runRWSLI iter0 r s0 = doRWS mempty s0 iter0
-    where doRWS w s = adaptIter (\a -> (a, s, w)) $ \m ->
-                      IterM $ Lazy.runRWST m r s >>= \ ~(iter, s', w') ->
-                      return $ doRWS (mappend w w') s' iter
+    where doRWS w s = adaptIter (\a -> (a, s, w)) $ \m -> do
+                        (iter, s', w') <- lift $ Lazy.runRWST m r s
+                        doRWS (mappend w w') s' iter
 
 -- | Run an @'Iter' t ('StateT' m)@ computation from within the
 -- @'Iter' t m@ monad.
@@ -260,8 +265,11 @@ runWriterTLI :: (ChunkData t, Monoid w, Monad m) =>
                 Iter t (Lazy.WriterT w m) a -> Iter t m (a, w)
 runWriterTLI = doW mempty
     where doW w = adaptIter (\a -> (a, w)) $
-                  lift . Lazy.runWriterT >=> \ ~(iter, w') ->
+                  lift . Lazy.runWriterT >=> \(iter, w') ->
                   doW (mappend w w') iter
+
+
+{-
 
 --
 -- Below this line, we use FlexibleInstances and UndecidableInstances,

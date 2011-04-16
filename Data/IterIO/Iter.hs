@@ -934,17 +934,19 @@ getResid (Done _ c)             = c
 getResid (IterFail _ c)         = c
 getResid (InumFail _ _ c)       = c
 getResid (IterC (CtlArg _ _ c)) = c
-getResid (IterF _)              = error $ "getResid (IterF)"
-getResid (IterM _)              = error $ "getResid (IterM)"
+getResid (IterF _)              = error "getResid (IterF)"
+getResid (IterM _)              = error "getResid (IterM)"
 
 -- | Set residual data for an 'IterR' that is not active.  (It is an
 -- error to call this on an 'IterR' in the 'Done', 'IterM', or 'IterC'
 -- states.)
-setResid :: (ChunkData t1) => IterR t1 m1 a -> Chunk t2 -> IterR t2 m2 a
+setResid :: IterR t1 m1 a -> Chunk t2 -> IterR t2 m2 a
 setResid (Done a _)       = Done a
 setResid (IterFail e _)   = IterFail e
 setResid (InumFail e a _) = InumFail e a
-setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
+setResid (IterF _)        = error "setResid (IterF)"
+setResid (IterM _)        = error "setResid (IterM)"
+setResid (IterC _)        = error "setResid (IterC)"
 
 runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
 runIterR r c = if null c then r else check r
