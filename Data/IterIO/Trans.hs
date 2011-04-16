@@ -139,8 +139,6 @@ adaptIter f mf i = Iter $ check . runIter i
     where check (IterM m) = runIter (mf m) mempty
           check r = stepR' r check $ fmapR f r
     
-{-
-
 -- | Adapt monadic computations of an 'Iter' from one monad to
 -- another.  This only works when the values are converted straight
 -- through.  For more complex scenarios, you need 'adaptIter'.
@@ -150,11 +148,11 @@ adaptIter f mf i = Iter $ check . runIter i
 -- > liftIterIO :: (ChunkData t, MonadIO m) => Iter t IO a -> Iter t m a
 -- > liftIterIO = adaptIterM liftIO
 adaptIterM :: (ChunkData t, Monad m1, Monad m2) =>
-              (m1 (Iter t m1 a) -> m2 (Iter t m1 a)) -- ^ Conversion function
+              (m1 (IterR t m1 a) -> m2 (IterR t m1 a)) -- ^ Conversion function
            -> Iter t m1 a       -- ^ 'Iter' of input monad
            -> Iter t m2 a       -- ^ Returns 'Iter' of output monad
 adaptIterM f = adapt
-    where adapt = adaptIter id $ lift . f >=> adapt
+    where adapt = adaptIter id $ lift . f >=> adapt . reRunIter
 
 -- | Run an @'Iter' s m@ computation from witin the @'Iter' s (t m)@
 -- monad, where @t@ is a 'MonadTrans'.
@@ -167,8 +165,6 @@ liftIterM = adaptIterM lift
 liftIterIO :: (ChunkData t, MonadIO m) =>
               Iter t IO a -> Iter t m a
 liftIterIO = adaptIterM liftIO
-
--}
 
 {-
 

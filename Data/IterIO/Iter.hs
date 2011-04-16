@@ -947,7 +947,7 @@ setResid (InumFail e a _) = InumFail e a
 setResid r                = error $ "setResid: not done (" ++ show r ++ ")"
 
 runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
-runIterR iter c = if null c then iter else check iter
+runIterR r c = if null c then r else check r
     where check (Done a c0)             = Done a (mappend c0 c)
           check (IterF i)               = runIter i c
           check (IterM m)               = IterM $ liftM check m
@@ -955,6 +955,7 @@ runIterR iter c = if null c then iter else check iter
           check (IterFail e c0)         = IterFail e (mappend c0 c)
           check (InumFail e a c0)       = InumFail e a (mappend c0 c)
 
+-- | Turn an 'IterR' back into an 'Iter'.
 reRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
 reRunIter (IterF i) = i
 reRunIter r         = Iter $ runIterR r
