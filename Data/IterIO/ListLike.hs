@@ -28,6 +28,7 @@ module Data.IterIO.ListLike
     ) where
 
 import Prelude hiding (null)
+import Control.Exception (toException)
 import Control.Monad
 import Control.Monad.Trans
 import qualified Data.ByteString.Lazy as L
@@ -83,7 +84,7 @@ sendI sendfn = do
 headLI :: (Show a, Monad m) => Iter [a] m a
 headLI = iterF $ dohead
     where dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
-          dohead _                  = throwEOFI "headLI"
+          dohead c                  = IterFail (toException $ mkIterEOF "headLI") c
 
 -- | Return 'Just' the first element when the Iteratee data type
 -- is a list, or 'Nothing' on EOF.
@@ -96,18 +97,16 @@ safeHeadLI = iterF $ dohead
 -- | Like 'headLI', but works for any 'LL.ListLike' data type.
 headI :: (ChunkData t, LL.ListLike t e, Monad m) =>
          Iter t m e
-headI = do
-  (Chunk t eof) <- chunkI
-  if null t then throwEOFI "headI"
-            else Done (LL.head t) $ Chunk (LL.tail t) eof
+headI = iterF $ \c@(Chunk t eof) ->
+        if null t then IterFail (toException $ mkIterEOF "headI") c
+                  else Done (LL.head t) $ Chunk (LL.tail t) eof
 
 -- | Like 'safeHeadLI', but works for any 'LL.ListLike' data type.
 safeHeadI :: (ChunkData t, LL.ListLike t e, Monad m) =>
              Iter t m (Maybe e)
-safeHeadI = do
-  (Chunk t eof) <- chunkI
-  if null t then return Nothing
-            else Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
+safeHeadI = iterF $ \c@(Chunk t eof) ->
+            if null t then Done Nothing c
+                      else Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
 
 -- | Like 'lineI', but returns 'Nothing' on EOF.
 safeLineI :: (ChunkData t, Monad m, LL.ListLike t e, Eq t, Enum e, Eq e) =>
@@ -125,7 +124,7 @@ safeLineI = iterF $ doline LL.empty
           in case result of
                Just (l', r') -> Done (Just l') (Chunk r' eof)
                Nothing | eof -> Done Nothing (Chunk acc' True)
-               _             -> iterF $ doline acc'
+               _             -> IterF $ iterF $ doline acc'
       dolr eof l r
           | LL.isPrefixOf nl r = Just (l, LL.drop (LL.length nl) r)
           | LL.isPrefixOf crnl r = Just (l, LL.drop (LL.length crnl) r)
@@ -221,11 +220,13 @@ instance CtlCmd TellC Integer
 -- | A handler function for the 'SizeC', 'SeekC', and 'TellC' control
 -- requests.  @fileCtl@ is used internally by 'enumFile' and
 -- 'enumHandle', and is exposed for similar enumerators to use.
-fileCtl :: (ChunkData t, MonadIO m) => Handle -> CtlHandler (Iter t m)
-fileCtl h = (\(SeekC mode pos) -> liftIO (hSeek h mode pos))
-            `consCtl` (\TellC -> liftIO (hTell h))
-            `consCtl` (\SizeC -> liftIO (hFileSize h))
-            `consCtl` passCtl
+fileCtl :: (ChunkData t, MonadIO m) =>
+           Handle
+        -> CtlHandler (Iter () m) t m a
+fileCtl h = (mkFlushCtl $ \(SeekC mode pos) -> liftIO (hSeek h mode pos))
+            `consCtl` (mkCtl $ \TellC -> liftIO (hTell h)) -- broken
+            `consCtl` (mkCtl $ \SizeC -> liftIO (hFileSize h))
+            `consCtl` passCtl id
 
 --
 -- Onums

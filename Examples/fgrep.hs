@@ -16,7 +16,7 @@ import Data.IterIO
 filterLines :: (Monad m) =>
                String
             -> Inum L.ByteString [L.ByteString] m a
-filterLines s = mkInum $ do
+filterLines s = mkInum id (passCtl id) $ do
                   line <- lineI
                   return $ if match line then [line] else []
     where
