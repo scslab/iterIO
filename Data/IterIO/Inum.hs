@@ -4,7 +4,7 @@ module Data.IterIO.Inum
     (-- * Base types
      Inum, Onum
     -- * concatenation and fusing operators
-    , (|$), (.|$), cat, (|.), (.|)
+    , (|$), (.|$), cat, lcat, (|.), (.|)
     -- * Exception functions
     , inumCatch, inumHandler, inumFinally, inumOnException
     , resumeI, verboseResumeI
@@ -26,9 +26,7 @@ module Data.IterIO.Inum
     ) where
 
 import Prelude hiding (null)
-import qualified Prelude
-import Control.Exception (SomeException(..), Exception(..))
-import Control.Monad
+import Control.Exception (Exception(..))
 import Control.Monad.Trans
 import Data.Monoid
 import Data.Typeable
@@ -476,13 +474,18 @@ runIterC ch iter c = check $ runIter iter c
           check r          = return r
 -}
 
-runIterMC :: (Monad m) =>
-             CtlHandler (Iter tIn m) tOut m a
-          -> Iter tOut m a -> Chunk tOut -> Iter tIn m (IterR tOut m a)
-runIterMC ch iter c = check $ runIter iter c
+runIterRMC :: (Monad m) =>
+              CtlHandler (Iter tIn m) tOut m a
+           -> IterR tOut m a -> Iter tIn m (IterR tOut m a)
+runIterRMC ch = check
     where check (IterM m)  = lift m >>= check
           check (IterC ca) = ch ca >>= check
           check r          = return r
+
+runIterMC :: (Monad m) =>
+             CtlHandler (Iter tIn m) tOut m a
+          -> Iter tOut m a -> Chunk tOut -> Iter tIn m (IterR tOut m a)
+runIterMC ch iter c = runIterRMC ch $ runIter iter c
 
 -- | Takes an 'Inum' that might return 'IterR's in the 'IterM' state
 -- (which is considered impolite--see 'runIterM') and transforms it
@@ -516,7 +519,7 @@ mkInum adj ch codec iter0 = doIter iter0
         stop <- knownEOFI
         case (stop || null input, r) of
           (False, IterF i) -> doIter i
-          (True, r@(IterF _)) -> return r
+          (_, r1) | isIterActive r1 -> return r1
           _ -> withResidHandler adj (getResid r) $ return . setResid r
 
 pullupResid :: (ChunkData t) => (t, t) -> (t, t)
@@ -903,15 +906,12 @@ ifeed1 dat = if null dat then throwEOFI "ifeed1" else ifeed dat
 -- finished.
 ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
-ipipe inum = {-
-do
+ipipe inum = do
   s <- iget
-  -- iter <- liftIterM $ runIterMC (insCtl s) $ inum $ reRunIter $ insIter s
-  -- iter <- liftIterM $ inumRepeat (inumMC (insCtl s) `cat` inumF) |. inum $ insIter s
+  iter <- liftIterM $ (inum $ reRunIter $ insIter s) >>= runIterRMC (insCtl s)
   iput s { insIter = iter }
   let done = not $ isIterActive iter
   if done && insAutoDone s then idone else return done
--} undefined
 
 -- | Apply an 'Onum' (or 'Inum' of an arbitrary, unused input type) to
 -- the 'Iter' from within the 'InumM' monad.  As with 'ifeed', returns

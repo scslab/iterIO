@@ -11,7 +11,7 @@ import qualified OpenSSL.Session as SSL
 import System.Cmd
 import System.Exit
 
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO.Inum
 
 -- | Simple OpenSSL 'Onum'.

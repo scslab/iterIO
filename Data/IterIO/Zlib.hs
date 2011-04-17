@@ -20,7 +20,7 @@ import qualified Data.ByteString.Lazy.Internal as L
 import Foreign
 import Foreign.C
 
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO.Inum
 import Data.IterIO.ZlibInt
 

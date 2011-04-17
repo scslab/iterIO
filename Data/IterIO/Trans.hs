@@ -25,7 +25,6 @@ module Data.IterIO.Trans {-
 -}
     where
 
-import Control.Applicative ((<$>))
 import Control.Monad.Cont
 import Control.Monad.Error
 import Control.Monad.List
@@ -38,7 +37,6 @@ import qualified Control.Monad.State.Lazy as Lazy
 import qualified Control.Monad.Writer.Lazy as Lazy
 import Control.Monad
 import Control.Monad.Trans
-import Data.Monoid
 
 import Data.IterIO.Iter
 
@@ -281,8 +279,8 @@ runWriterTLI = doW mempty
 --
 
 instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
-    callCC f = joinlift $ (callCC $ \cc -> return $ f (cont cc))
-        where cont cc a = Iter $ \c -> IterM $ cc (reRunIter $ Done a c)
+    callCC f = joinlift $ (callCC $ \cc -> return $ f (icont cc))
+        where icont cc a = Iter $ \c -> IterM $ cc (reRunIter $ Done a c)
 
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where

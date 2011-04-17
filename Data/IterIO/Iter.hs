@@ -6,7 +6,7 @@
 module Data.IterIO.Iter
     (-- * Base types
      ChunkData(..), Chunk(..), chunk, chunkEOF
-    , Iter(..), CtlCmd(..), CtlArg(..), IterR(..), iterF
+    , Iter(..), CtlCmd, CtlArg(..), IterR(..), iterF
     , isIterActive, iterShows, iterShow
     -- * Execution
     , run, runI
@@ -49,8 +49,6 @@ import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
-import System.Environment
-import System.IO
 import System.IO.Error (mkIOError, eofErrorType, isEOFError)
 import System.IO.Unsafe
 
@@ -212,7 +210,7 @@ instance (ChunkData t) => Show (IterR t m a) where
     showsPrec _ (IterF _) rest = "IterF _" ++ rest
     showsPrec _ (IterM _) rest = "IterM _" ++ rest
     showsPrec _ (IterC (CtlArg a _ c)) rest =
-        "IterC " ++ (shows (typeOf a) $ " _ _" ++ rest)
+        "IterC " ++ (shows (typeOf a) $ " _" ++ shows c rest)
     showsPrec _ (Done _ c) rest = "Done _ " ++ shows c rest
     showsPrec _ (IterFail e c) rest =
         "IterFail " ++ (shows e $ " " ++ shows c rest)
@@ -255,7 +253,7 @@ instance (Monad m) => Monad (Iter t m) where
     m >>= k = Iter $ check . runIter m
         where check (Done a c)             = runIter (k a) c
               check (IterF i)              = IterF $ i >>= k
-              check (IterM m)              = IterM $ m >>= return . check
+              check (IterM mm)             = IterM $ mm >>= return . check
               check (IterC (CtlArg a n c)) = IterC $ CtlArg a (n >=> k) c
               check (IterFail e c)         = IterFail e c
               check (InumFail e _ c)       = IterFail e c
@@ -325,7 +323,7 @@ run i0 = check $ runIter i0 chunkEOF
     where check (Done a _)             = return a
           check (IterF i)              = run i
           check (IterM m)              = m >>= check
-          check (IterC (CtlArg a n c)) = check $ runIter (n Nothing) c
+          check (IterC (CtlArg _ n c)) = check $ runIter (n Nothing) c
           check (IterFail e _)         = throw $ unIterEOF e
           check (InumFail e _ _)       = throw $ unIterEOF e
 
@@ -333,7 +331,7 @@ runR :: (ChunkData t1, ChunkData t2, Monad m) => IterR t1 m a -> IterR t2 m a
 runR (Done a _)             = Done a mempty
 runR (IterF i)              = runR $ runIter i chunkEOF
 runR (IterM m)              = IterM $ liftM runR m
-runR (IterC (CtlArg a n c)) = runR $ runIter (n Nothing) c
+runR (IterC (CtlArg _ n c)) = runR $ runIter (n Nothing) c
 runR (IterFail e _)         = IterFail e mempty
 runR (InumFail e i _)       = InumFail e i mempty
 

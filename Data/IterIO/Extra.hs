@@ -29,7 +29,7 @@ import qualified Data.ByteString.Lazy as L
 import Network.Socket
 import System.IO
 
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO.Inum
 
 #if __GLASGOW_HASKELL__ <= 611
@@ -76,17 +76,18 @@ iterLoop = do
   -- enumerator waits on the inner MVar, while the iteratee uses the outer 
   -- MVar to avoid races when appending to the stored chunk.
   mv <- liftIO $ newEmptyMVar >>= newMVar
-  return (iterF $ iterf mv, enum mv)
+  return (iter mv, enum mv)
     where
-      iterf mv c@(Chunk _ eof) = do
+      iter mv = do
+             c@(Chunk _ eof) <- chunkI
              liftIO $ withMVar mv $ \p ->
                  do mp <- tryTakeMVar p
                     putMVar p $ case mp of
                                   Nothing -> c
                                   Just c' -> mappend c' c
-             if eof then Done () chunkEOF else iterF $ iterf mv
+             if eof then return () else iter mv
 
-      enum mv = mkInumM loop
+      enum mv = mkInumM (ifeed mempty >> loop)
           where loop = do p <- liftIO $ readMVar mv
                           Chunk t eof <- liftIO $ takeMVar p
                           done <- ifeed t
@@ -106,12 +107,12 @@ iterLoop = do
 -- threads.
 inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
 inumSplit iter1 = do
-  mv <- liftIO $ newMVar $ iter1
+  mv <- liftIO $ newMVar $ IterF iter1
   iterF $ iterf mv
     where
       iterf mv (Chunk t eof) = do
         rold <- liftIO $ takeMVar mv
-        rnew <- inumMC passCtl $ feedI rold $ chunk t
+        rnew <- runIterMC (passCtl pullupResid) (reRunIter rold) $ chunk t
         liftIO $ putMVar mv rnew
         case rnew of
           IterF _ | not eof -> iterF $ iterf mv
@@ -171,7 +172,7 @@ fixIterPure f = IterM $ mfix ff
       ff ~(Done a _)  = check $ f a
       -- Warning: IterF case re-runs function, repeating side effects
       check (IterF _) = return $ iterF $ \c ->
-                        fixIterPure $ \a -> feedI (f a) c
+                        fixIterPure $ \a -> runIter (f a) c
       check (IterM m) = m >>= check
       check iter      = return iter
 

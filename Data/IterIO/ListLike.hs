@@ -40,7 +40,7 @@ import System.IO
 
 import qualified Data.ListLike as LL
 
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO.Inum
 import Data.IterIO.Extra
 

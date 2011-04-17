@@ -3,27 +3,27 @@
 -- exports several other internal modules.  This module's
 -- documentation gives a high-level overview of the iteratee model,
 -- intended more as an introduction than as a reference.  See the
--- "Data.IterIO.Base", "Data.IterIO.Inum", and "Data.IterIO.ListLike"
+-- "Data.IterIO.Iter", "Data.IterIO.Inum", and "Data.IterIO.ListLike"
 -- modules for more detailed documentation of data structures and
 -- functions.  You may also wish to import "Data.IterIO.Parse", which
 -- includes parsec-like parsing combinators and is not exported by
 -- this default module.
 module Data.IterIO
-    (module Data.IterIO.Base
+    (module Data.IterIO.Iter
+    , module Data.IterIO.Trans
     , module Data.IterIO.Inum
     , module Data.IterIO.ListLike
-    , module Data.IterIO.Trans
     -- * Overview
     -- $Overview
     ) where
 
 -- import Prelude hiding (catch)
-import Data.IterIO.Base hiding (null, run -- names that might collide
+import Data.IterIO.Iter hiding (null, run -- names that might collide
                                , traceI, traceInput
                                )
+import Data.IterIO.Trans
 import Data.IterIO.Inum
 import Data.IterIO.ListLike
-import Data.IterIO.Trans
 
 {- $Overview
 
@@ -227,7 +227,7 @@ input type @()@.  The type @'Onum' t m a@ is just a synonym for
 true, however.  For example, the '|$' operator requires an 'Onum', as
 it wouldn't know what data to feed to an arbitrary 'Inum'.  (If you
 need it, however, there is a function @run@, hidden by this module but
-exported by "Data.IterIO.Base", that executes an iteratee computation
+exported by "Data.IterIO.Iter", that executes an iteratee computation
 of arbitrary input type by feeding EOF as input.)
 
 Iteratee-enumerators are generally constructed using either 'mkInum'

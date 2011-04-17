@@ -11,7 +11,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Monoid
 
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO.Inum
 
 -- | Feeds input to an Iteratee until some boundary string is found.
