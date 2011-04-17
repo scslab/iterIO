@@ -69,7 +69,7 @@ Library
                -threaded -fno-warn-unused-imports -rtsopts
   Exposed-modules:
     Data.IterIO,
-    Data.IterIO.Base,
+    Data.IterIO.Iter,
     Data.IterIO.CtlStream,
     Data.IterIO.Extra,
     Data.IterIO.Http,

@@ -31,7 +31,7 @@ import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
 import Data.Monoid
 
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO.ListLike
 
 -- | An infix synonym for 'multiParse' that allows LL(*) parsing of
@@ -166,14 +166,10 @@ infixr 3 `orEmpty`
 -- > infix 0 <?>
 --
 (<?>) :: (ChunkData t, Monad m) => Iter t m a -> String -> Iter t m a
-(<?>) iter@(IterF _) expected = do
-  saw <- IterF $ \c -> Done c c
+(<?>) iter expected = do
+  saw <- Iter $ \c -> Done c c
   flip mapExceptionI iter $ \(IterNoParse _) ->
       IterExpected (take 50 (show saw) ++ "...") [expected]
-(<?>) iter expected
-      | isIterActive iter = inumMC passCtl iter >>= (<?> expected)
-      | otherwise         = flip mapExceptionI iter $ \(IterNoParse _) ->
-                            IterExpected "no input" [expected]
 infix 0 <?>
   
 -- | Throw an 'Iter' exception that describes expected input not
@@ -281,7 +277,7 @@ skipWhileI :: (ChunkData t, LL.ListLike t e, Monad m) =>
               (e -> Bool) -> Iter t m ()
 skipWhileI test = iterF $ \(Chunk t eof) ->
                   case LL.dropWhile test t of
-                    t1 | LL.null t1 && not eof -> skipWhileI test
+                    t1 | LL.null t1 && not eof -> IterF $ skipWhileI test
                     t1 -> Done () $ Chunk t1 eof
 
 -- | Like 'skipWhileI', but fails if at least one element does not
@@ -310,7 +306,7 @@ whileStateI f z0 = dochunk id z0
             t'               = acc . mappend a
         if LL.null b && not eof
           then dochunk t' z'
-          else Done (t' LL.empty, z') (Chunk b eof)
+          else ungetI b >> return (t' LL.empty, z')
       ff e dorest = \(z, n) -> z `seq` n `seq`
                   case f z e of
                     Left z'  -> (False, (z', n))
@@ -360,7 +356,7 @@ whileI test = more LL.empty
                 case LL.span test t of
                   (t1, t2) | not (LL.null t2) || eof ->
                                Done (LL.append t0 t1) $ Chunk t2 eof
-                  (t1, _) -> more (LL.append t0 t1)
+                  (t1, _) -> IterF $ more (LL.append t0 t1)
 
 -- | Like 'whileI', but fails if at least one element does not satisfy
 -- the predicate.
@@ -379,7 +375,7 @@ whileMaxI nmax test = iterF $ \(Chunk t eof) ->
             rest = LL.drop slen t
         in if slen >= nmax || not (LL.null rest) || eof
            then Done s $ Chunk rest eof
-           else LL.append s <$> whileMaxI (nmax - slen) test
+           else LL.append s <$> IterF (whileMaxI (nmax - slen) test)
 
 -- | A variant of 'whileI' with a minimum and maximum number matches.
 whileMinMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>

@@ -183,7 +183,7 @@ joinlift m = Iter $ \c -> IterM $ m >>= \i -> return $ runIter i c
 runContTI :: (ChunkData t, Monad m) =>
              Iter t (ContT (Iter t m a) m) a -> Iter t m a
 runContTI = adaptIter id adapt
-    where adapt m = do joinlift $ runContT m $ return . runContTI
+    where adapt m = joinlift $ runContT m $ return . runContTI
 --        adapt :: ContT (Iter t m a) m (Iter t (ContT (Iter t m a) m) a)
 --              -> Iter t m a
 

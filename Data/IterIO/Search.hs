@@ -71,11 +71,11 @@ mapI mp | Map.null mp = throwI $ IterMiscParseErr "mapI: null map"
         | otherwise = do
   c@(Chunk t eof) <- chunkI
   if not (eof) && more t
-    then iterF (feedI (mapI mp) . mappend c)
+    then iterF (runIter (mapI mp) . mappend c)
     else case findLongestPrefix mp t of
            Nothing -> throwI $ IterExpected (chunkShow t) $
                       map chunkShow $ Map.keys mp
-           Just (k, v) -> Done v (Chunk (LL.drop (LL.length k) t) eof)
+           Just (k, v) -> ungetI (LL.drop (LL.length k) t) >> return v
     where
       gtmap t = snd $ Map.split t mp
       more t | Map.null $ gtmap t = False

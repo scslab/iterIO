@@ -393,7 +393,7 @@ uri = absUri
 
 -- | Turn a path into a list of components
 path2list :: S -> [S]
-path2list path = runIdentity $ enumPure path |$
+path2list path = runIdentity $ inumPure path |$
                  slash [] `catchI` \(IterNoParse _) _ -> return []
     where
       slash acc = while1I (eord '/' ==) \/ eofI *> return (reverse acc) $
@@ -562,7 +562,7 @@ any_hdr req = do
   case Map.lookup field request_headers of
     Nothing -> return req'
     Just f  -> do
-      r <- enumPure (L.fromChunks [val]) .|$
+      r <- inumPure (L.fromChunks [val]) .|$
                (f req' <* (optional spaces >> eofI)
                       <?> (S8.unpack field ++ " header"))
       return r
@@ -622,7 +622,7 @@ inumHttpBody req =
     case reqTransferEncoding req of
       lst | null lst || lst == [S8.pack "identity"] ->
               if hasclen then inumTakeExact (fromJust $ reqContentLength req)
-                         else return -- No message body present
+                         else inumNull -- No message body present
       lst | lst == [S8.pack "chunked"] -> inumFromChunks
       lst -> inumFromChunks |. tcfold (reverse lst)
     where
@@ -632,8 +632,8 @@ inumHttpBody req =
           | h == S8.pack "identity" = tcfold t
           | h == S8.pack "chunked"  = tcfold t -- Has to be first one
           --- | h == S8.pack "gzip"     = inumGunzip |. tcfold t
-          | otherwise = mkInum $ fail $ "unknown Transfer-Coding "
-                        ++ chunkShow h
+          | otherwise = mkInum id noCtl $
+                        fail $ "unknown Transfer-Coding " ++ chunkShow h
 
 {-
 -- | This 'Inum' reads to the end of an HTTP message body (and not
@@ -790,10 +790,14 @@ urlencodedFormI :: (Monad m) => Iter L m [(S,S)]
 urlencodedFormI = sepBy controlI (char '&')
 -}
 
+inumBind :: (ChunkData t, Monad m) =>
+            Iter t m a -> (a -> Iter t m a) -> Iter t m a
+inumBind m k = tryI' m >>= either reRunIter k
+
 foldControls :: (Monad m) => (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldControls f z =
     controlI \/ return z $ \(k, v) ->
-    enumPure (L.fromChunks [v]) .|
+    inumPure (L.fromChunks [v]) .|
              f z defaultFormField { ffName = k } `inumBind` \a ->
     char '&' \/ return a $ \_ -> foldControls f a
 
@@ -809,7 +813,7 @@ foldUrlencoded _req f z = foldControls f z
 
 foldQuery :: (Monad m) =>
              HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
-foldQuery req f z = enumPure (L.fromChunks [reqQuery req]) .| foldControls f z
+foldQuery req f z = inumPure (L.fromChunks [reqQuery req]) .| foldControls f z
 
 --
 -- multipart/form-data decoding, as specified throughout the following:
@@ -855,8 +859,8 @@ multipartI req = case reqBoundary req of
       if done then return Nothing else Just <$> parsepart
     parsepart = do
       cdhdr@(field, val) <- hdr_field_val
-      enumPure field .|$ stringCase "Content-Disposition"
-      parms <- enumPure (L.fromChunks [val]) .|$
+      inumPure field .|$ stringCase "Content-Disposition"
+      parms <- inumPure (L.fromChunks [val]) .|$
                sepBy (parameter <|> (token >>= \t -> return (t, S.empty)))
                      (olws >> char ';')
       hdrs <- many hdr_field_val
@@ -937,10 +941,10 @@ data HttpResp m = HttpResp {
     -- have added a @Content-Length@ header, manually set up chunk
     -- encoding by fusing it in 'respBody', or are not returning a
     -- message body with the reply.
-    , respBody :: !(Onum L.ByteString m (Iter L.ByteString m ()))
-    -- ^ 'Onum' producing the message body.  Use 'return' (which is an
-    -- empty 'Inum', as described in the documentation of 'cat') to
-    -- produce an empty body for responses that do not contain a body.
+    , respBody :: !(Onum L.ByteString m (IterR L.ByteString m ()))
+    -- ^ 'Onum' producing the message body.  Use 'inumNull' (which is
+    -- an empty 'Inum') to produce an empty body for responses that do
+    -- not contain a body.
     }
 
 respAddHeader :: S.ByteString -> HttpResp m -> HttpResp m
@@ -956,7 +960,7 @@ defaultHttpResp :: (Monad m) => HttpResp m
 defaultHttpResp = HttpResp { respStatus = stat200
                            , respHeaders = []
                            , respChunk = True
-                           , respBody = return
+                           , respBody = inumNull
                            }
 
 -- | Generate an 'HttpResp' without a body.
@@ -964,7 +968,7 @@ mkHttpHead :: (Monad m) => HttpStatus -> HttpResp m
 mkHttpHead stat = HttpResp { respStatus = stat
                            , respHeaders = []
                            , respChunk = False
-                           , respBody = return }
+                           , respBody = inumNull }
 
 -- | Generate an 'HttpResp' with a body of type @text/html@.
 mkHtmlResp :: (Monad m) =>
@@ -976,7 +980,7 @@ mkHtmlResp stat html = resp
           ctype = S8.pack "Content-Type: text/html"
           len = S8.pack $ "Content-Length: " ++ show (L8.length html)
           resp  = resp0 { respHeaders = respHeaders resp0 ++ [ctype, len]
-                        , respBody = enumPure html
+                        , respBody = inumPure html
                         }
 
 mkContentLenResp :: (Monad m)
@@ -988,7 +992,7 @@ mkContentLenResp stat ctype body =
   HttpResp { respStatus = stat
            , respHeaders = [contentType, contentLength]
            , respChunk = False
-           , respBody = enumPure body }
+           , respBody = inumPure body }
  where
   contentType = S8.pack $ "Content-Type: " ++ ctype
   contentLength = S8.pack $ "Content-Length: " ++ show (L8.length body)
@@ -996,7 +1000,7 @@ mkContentLenResp stat ctype body =
 mkOnumResp :: (Monad m)
            => HttpStatus
            -> String
-           -> Onum L.ByteString m (Iter L.ByteString m ())
+           -> Onum L.ByteString m (IterR L.ByteString m ())
            -> HttpResp m
 mkOnumResp stat ctype body =
   HttpResp { respStatus = stat
@@ -1086,7 +1090,7 @@ enumHttpResp :: (Monad m) =>
                 HttpResp m
              -> Maybe UTCTime   -- ^ Time for @Date:@ header (if desired)
              -> Onum L.ByteString m ()
-enumHttpResp resp mdate = enumPure fmtresp `cat` (respBody resp |. maybeChunk)
+enumHttpResp resp mdate = inumPure fmtresp `cat` (respBody resp |. maybeChunk)
     where
       fmtresp = L.append (fmtStat $ respStatus resp) hdrs
       hdrs = foldr (L.append . hdr) (L8.pack "\r\n") $
@@ -1143,7 +1147,8 @@ inumHttpServer server = mkInumM loop
         resp <- liftIterM $ inumHttpBody req .|
                 (catchI handler errHandler <* nullI)
         now <- liftIterM $ srvDate server
-        catchOrI (irun $ enumHttpResp resp now) fatal (const $ loop)
+        tryI (irun $ enumHttpResp resp now) >>=
+             either (fatal . fst) (const loop)
       errHandler e@(SomeException _) _ = do
         srvLogger server $ "Response error: " ++ show e
         return $ resp500 $ show e
@@ -1159,7 +1164,7 @@ inumHttpServer server = mkInumM loop
 --
 
 formTest :: L -> IO ()
-formTest b = enumPure b |$ handleReq
+formTest b = inumPure b |$ handleReq
  where
   handleReq = do
     req <- httpReqI
@@ -1189,7 +1194,7 @@ x = L8.pack "p1=v1&p2=v2"
 -}
 
 mptest :: IO ()
-mptest = enumPure postReq |$ (httpReqI >>= getHead)
+mptest = inumPure postReq |$ (httpReqI >>= getHead)
     where
       getHead req = do
         mmp <- multipartI req
@@ -1206,7 +1211,7 @@ mptest = enumPure postReq |$ (httpReqI >>= getHead)
                         getHead req
 
 mptest' :: IO ()
-mptest' = enumPure postReq |$ (httpReqI >>= getParts 0)
+mptest' = inumPure postReq |$ (httpReqI >>= getParts 0)
     where
       getParts :: (MonadIO m) => Integer -> HttpReq -> Iter L m ()
       getParts n req = do
