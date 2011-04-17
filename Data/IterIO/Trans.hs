@@ -176,6 +176,8 @@ liftIterIO = adaptIterM liftIO
 -- mtl runner functions
 --
 
+-- | The type signature says it all.  Just a slightly optimized
+-- version of @joinlift = join . lift@.
 joinlift :: (Monad m) => m (Iter t m a) -> Iter t m a
 joinlift m = Iter $ \c -> IterM $ m >>= \i -> return $ runIter i c
 
@@ -278,16 +280,9 @@ runWriterTLI = doW mempty
 -- but only because this is required by mtl.
 --
 
-{-
-instance forall t m. (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
-    callCC f = joinlift $ (callCC $ \cc -> return $ f (cont cc))
-        where cont :: (a -> m c) -> a -> Iter t m b
-              cont cc a = undefined -- Iter $ \c -> IterM $ cc (Done a c)
-
 instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
-    callCC f = IterM $ (callCC $ \cc -> return $ f (cont cc))
-        where cont cc a = IterF $ \c -> IterM $ cc (Done a c)
--}
+    callCC f = joinlift $ (callCC $ \cc -> return $ f (cont cc))
+        where cont cc a = Iter $ \c -> IterM $ cc (reRunIter $ Done a c)
 
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where
