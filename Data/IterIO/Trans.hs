@@ -6,6 +6,8 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
+{-# LANGUAGE ScopedTypeVariables #-}
+
 -- | Various helper functions and instances for using 'Iter's of
 -- different Monads together in the same pipeline.
 module Data.IterIO.Trans {-
@@ -174,6 +176,9 @@ liftIterIO = adaptIterM liftIO
 -- mtl runner functions
 --
 
+joinlift :: (Monad m) => m (Iter t m a) -> Iter t m a
+joinlift m = Iter $ \c -> IterM $ m >>= \i -> return $ runIter i c
+
 -- | Turn a computation of type @'Iter' t ('ContT' ('Iter' t m a) m)
 -- a@ into one of type @'Iter' t m a@.  Note the return value of the
 -- continuation is of type @'Iter' t m a@, not @a@, so that you can
@@ -181,7 +186,7 @@ liftIterIO = adaptIterM liftIO
 runContTI :: (ChunkData t, Monad m) =>
              Iter t (ContT (Iter t m a) m) a -> Iter t m a
 runContTI = adaptIter id adapt
-    where adapt m = join $ lift $ runContT m $ return . runContTI
+    where adapt m = joinlift $ runContT m $ return . runContTI
 --        adapt :: ContT (Iter t m a) m (Iter t (ContT (Iter t m a) m) a)
 --              -> Iter t m a
 
@@ -268,22 +273,26 @@ runWriterTLI = doW mempty
                   lift . Lazy.runWriterT >=> \(iter, w') ->
                   doW (mappend w w') iter
 
-
-{-
-
 --
 -- Below this line, we use FlexibleInstances and UndecidableInstances,
 -- but only because this is required by mtl.
 --
 
+{-
+instance forall t m. (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
+    callCC f = joinlift $ (callCC $ \cc -> return $ f (cont cc))
+        where cont :: (a -> m c) -> a -> Iter t m b
+              cont cc a = undefined -- Iter $ \c -> IterM $ cc (Done a c)
+
 instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
     callCC f = IterM $ (callCC $ \cc -> return $ f (cont cc))
         where cont cc a = IterF $ \c -> IterM $ cc (Done a c)
+-}
 
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where
         throwError = lift . throwError
-        catchError m0 h = adaptIter id (IterM . runm) m0
+        catchError m0 h = adaptIter id (joinlift . runm) m0
             where runm m = do
                     r <- catchError (liftM Right m) (return . Left . h)
                     case r of
@@ -343,5 +352,3 @@ instance (MonadWriter w m) => MonadWriter w (IterStateT s m) where
     pass   m = IterStateT $ \s -> pass $ do
                  ((a, f), s') <- unIterStateT m s
                  return ((a, s'), f)
-
--}
