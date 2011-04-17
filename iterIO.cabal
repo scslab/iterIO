@@ -57,7 +57,7 @@ Library
                  containers >= 0.3 && < 2,
                  directory >= 1.0 && < 2,
                  HsOpenSSL >= 0.8.0.2 && < 2,
-                 ListLike >= 1.0 && < 3.1,
+                 ListLike >= 1.0 && < 4,
                  mtl >= 1.1.0.2 && < 2.1,
                  network >= 2.2 && < 3.0,
                  old-locale >= 1.0.0.2 && < 2,
@@ -70,7 +70,6 @@ Library
   Exposed-modules:
     Data.IterIO,
     Data.IterIO.Iter,
-    Data.IterIO.CtlStream,
     Data.IterIO.Extra,
     Data.IterIO.Http,
     Data.IterIO.HttpRoute,
