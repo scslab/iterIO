@@ -9,7 +9,7 @@ module Data.IterIO.Extra
       -- chunkerToCodec
       iterLoop
     , inumSplit
-    , fixIterPure
+    -- , fixIterPure
       -- * Functionality missing from system libraries
     , SendRecvString(..)
     , hShutdown
@@ -17,7 +17,6 @@ module Data.IterIO.Extra
 
 import Control.Concurrent.MVar
 import Control.Monad
-import Control.Monad.Fix
 import Control.Monad.Trans
 import Data.Monoid
 import Foreign.C
@@ -108,14 +107,15 @@ iterLoop = do
 inumSplit :: (MonadIO m, ChunkData t) => Inum t t m a
 inumSplit iter1 = do
   mv <- liftIO $ newMVar $ IterF iter1
-  iterF $ iterf mv
+  iter mv
     where
-      iterf mv (Chunk t eof) = do
+      iter mv = do
+        (Chunk t eof) <- chunkI
         rold <- liftIO $ takeMVar mv
         rnew <- runIterMC (passCtl pullupResid) (reRunIter rold) $ chunk t
         liftIO $ putMVar mv rnew
         case rnew of
-          IterF _ | not eof -> iterF $ iterf mv
+          IterF _ | not eof -> iter mv
           _                 -> return rnew
 
 {- fixIterPure allows MonadFix instances, which support
@@ -153,7 +153,6 @@ fixtest2 i = do
                return $ \n -> if n <=  0
                               then return base
                               else liftM (n *) (f $ n - 1)
--}
 
 -- | This is a fixed point combinator for iteratees over monads that
 -- have no side effects.  If you wish to use @rec@ with such a monad,
@@ -176,6 +175,7 @@ fixIterPure f = IterM $ mfix ff
       check (IterM m) = m >>= check
       check iter      = return iter
 
+-}
 
 --
 -- Some utility functions for things that are made hard by the Haskell
