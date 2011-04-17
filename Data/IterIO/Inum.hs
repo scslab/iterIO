@@ -517,7 +517,7 @@ mkInum adj ch codec iter0 = doIter iter0
       doInput iter input = do
         r <- runIterMC ch iter (Chunk input False)
         stop <- knownEOFI
-        case (stop || null input, r) of
+        case (stop, r) of
           (False, IterF i) -> doIter i
           (_, r1) | isIterActive r1 -> return r1
           _ -> withResidHandler adj (getResid r) $ return . setResid r
@@ -837,7 +837,7 @@ runInumM inumm s0 = do
       convertFail (InumFail e _ c, s) = convertFail (IterFail e c, s)
       convertFail (iter@(IterFail e _), s) =
           if isInumDone e || (insAutoEOF s && isIterEOF e)
-          then return (IterF $ error "runInumM", s)
+          then return (IterF $ Iter $ const $ error "runInumM", s)
           else return (iter, s)
       convertFail is = return is
       isInumDone e = maybe False (\InumDone -> True) $ fromException e

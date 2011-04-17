@@ -37,8 +37,8 @@ enumFileCatchError file = enumFile file `inumCatch` enumCatchIO
     where
       enumCatchIO :: (ChunkData t, MonadIO m) =>
                      IOError
-                  -> Iter () m (Iter t m a)
-                  -> Iter () m (Iter t m a)
+                  -> IterR () m (IterR t m a)
+                  -> Iter () m (IterR t m a)
       enumCatchIO _ = verboseResumeI
       -- enumCatchIO e = flip const (e :: IOError) verboseResumeI
 
