@@ -26,7 +26,7 @@ module Data.IterIO.Inum
     ) where
 
 import Prelude hiding (null)
-import Control.Exception (Exception(..))
+import Control.Exception (Exception(..), SomeException(..))
 import Control.Monad.Trans
 import Data.Monoid
 import Data.Typeable
@@ -904,14 +904,26 @@ ifeed1 dat = if null dat then throwEOFI "ifeed1" else ifeed dat
 -- | Apply another 'Inum' to the target 'Iter' from within the 'InumM'
 -- monad.  As with 'ifeed', returns @'True'@ when the 'Iter' is
 -- finished.
+--
+-- Note that the applied 'Inum' must handle all control requests.  (In
+-- other words, ones it passes on are not caught by whatever handler
+-- is installed by 'setCtlHandler', but if the 'Inum' returns the
+-- 'IterR' in the 'IterC' state, as 'inumPure' does, then requests
+-- will be handled.)
 ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
 ipipe inum = do
   s <- iget
-  iter <- liftIterM $ (inum $ reRunIter $ insIter s) >>= runIterRMC (insCtl s)
-  iput s { insIter = iter }
-  let done = not $ isIterActive iter
+  r <- liftIterM (inum $ reRunIter $ insIter s) `catchI` reThrow
+       >>= liftIterM . runIterRMC (insCtl s)
+  iput s { insIter = r }
+  let done = not $ isIterActive r
   if done && insAutoDone s then idone else return done
+    where
+      reThrow (SomeException _) r@(InumFail _ i _) = do
+               imodify $ \s -> s { insIter = i }
+               reRunIter r
+      reThrow _ r = reRunIter r
 
 -- | Apply an 'Onum' (or 'Inum' of an arbitrary, unused input type) to
 -- the 'Iter' from within the 'InumM' monad.  As with 'ifeed', returns
