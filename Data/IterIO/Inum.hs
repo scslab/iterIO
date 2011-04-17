@@ -552,7 +552,7 @@ inumRepeat :: (ChunkData tIn, Monad m) =>
               Inum tIn tOut m a -> Inum tIn tOut m a
 inumRepeat inum iter0 = do
   er <- tryI' $ runInum inum iter0
-  stop <- knownEOFI
+  stop <- atEOFI
   case (stop, er) of
     (False, Right (IterF iter)) -> inumRepeat inum iter
     (_, Right r) -> return r

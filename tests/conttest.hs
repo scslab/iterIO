@@ -3,31 +3,32 @@ module Main where
 
 import Control.Monad.Cont
 import Control.Monad.Trans
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO
 import Debug.Trace
 
 conttest :: IO ()
-conttest = enumPure "foo" `cat` enumPure "bar" |$ iter
+conttest = inumPure "123foo" `cat` inumPure "bar" |$ iter
     where   
       iter :: Iter String IO ()
       iter = runContTI $ do
                callCC $ \cc -> do
+                           _ <- headLI
                            callCC $ ($ ())
+                           _ <- headLI
                            liftIO $ return ()
                            cc ()
                            liftIO $ putStrLn "does not execute"
                foo <- pureI
-               if foo == "foobar" then return ()
-                 else error $ "failure: foobar /= " ++ foo
+               if foo == "3foobar" then return ()
+                 else error $ "failure: 3foobar /= " ++ foo
 
 xtrace :: (ChunkData t, Monad m) => String -> Iter t m ()
-xtrace tag = do
-  input <- pureI
-  trace (tag ++ ": " ++ chunkShow input) $ Done () (chunk input)
+xtrace tag = Iter $ \c@(Chunk input _) ->
+             trace (tag ++ ": " ++ chunkShow input) $ Done () c
 
 conttest2 :: IO String
-conttest2 = enumPure "test string\n" |$ iter
+conttest2 = inumPure "test string\n" |$ iter
     where
       iter :: Iter String IO String
       iter = do
@@ -53,7 +54,7 @@ testeof :: IO ()
 testeof = run iter
     where
       iter :: Iter String IO ()
-      iter = IterF $ \_ -> return () >> return ()
+      iter = Iter $ \_ -> IterF $ return () >> return ()
 
 data Bind a = Bind String a deriving (Show)
 

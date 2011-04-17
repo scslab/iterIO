@@ -10,8 +10,7 @@
 
 -- | Various helper functions and instances for using 'Iter's of
 -- different Monads together in the same pipeline.
-module Data.IterIO.Trans {-
-                         (-- * Iter-specific state monad transformer
+module Data.IterIO.Trans (-- * Iter-specific state monad transformer
                           IterStateT(..), runIterStateT
                          , iget, igets, iput, imodify
                           -- * Functions for building Iter monad adapters
@@ -21,9 +20,7 @@ module Data.IterIO.Trans {-
                          , runContTI, runErrorTI, runListTI, runReaderTI
                          , runRWSI, runRWSLI, runStateTI, runStateTLI
                          , runWriterTI, runWriterTLI
-                         )
--}
-    where
+                         ) where
 
 import Control.Monad.Cont
 import Control.Monad.Error
@@ -186,7 +183,7 @@ joinlift m = Iter $ \c -> IterM $ m >>= \i -> return $ runIter i c
 runContTI :: (ChunkData t, Monad m) =>
              Iter t (ContT (Iter t m a) m) a -> Iter t m a
 runContTI = adaptIter id adapt
-    where adapt m = joinlift $ runContT m $ return . runContTI
+    where adapt m = do joinlift $ runContT m $ return . runContTI
 --        adapt :: ContT (Iter t m a) m (Iter t (ContT (Iter t m a) m) a)
 --              -> Iter t m a
 
@@ -280,7 +277,7 @@ runWriterTLI = doW mempty
 
 instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
     callCC f = joinlift $ (callCC $ \cc -> return $ f (icont cc))
-        where icont cc a = Iter $ \c -> IterM $ cc (reRunIter $ Done a c)
+        where icont cc a = Iter $ \c -> IterM $ cc (Iter $ const $ Done a c)
 
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where
