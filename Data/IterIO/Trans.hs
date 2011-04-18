@@ -177,9 +177,9 @@ joinlift :: (Monad m) => m (Iter t m a) -> Iter t m a
 joinlift m = Iter $ \c -> IterM $ m >>= \i -> return $ runIter i c
 
 -- | Turn a computation of type @'Iter' t ('ContT' ('Iter' t m a) m)
--- a@ into one of type @'Iter' t m a@.  Note the return value of the
--- continuation is of type @'Iter' t m a@, not @a@, so that you can
--- return residual data.
+-- a@ into one of type @'Iter' t m a@.  Note the continuation has to
+-- return type @'Iter' t m a@ and not @a@ so that runContTI can call
+-- itself recursively.
 runContTI :: (ChunkData t, Monad m) =>
              Iter t (ContT (Iter t m a) m) a -> Iter t m a
 runContTI = adaptIter id adapt
@@ -277,7 +277,7 @@ runWriterTLI = doW mempty
 
 instance (ChunkData t, MonadCont m) => MonadCont (Iter t m) where
     callCC f = joinlift $ (callCC $ \cc -> return $ f (icont cc))
-        where icont cc a = Iter $ \c -> IterM $ cc (Iter $ const $ Done a c)
+        where icont cc a = Iter $ \c -> IterM $ cc (Iter $ \_ -> Done a c)
 
 instance (Error e, MonadError e m, ChunkData t) =>
     MonadError e (Iter t m) where
