@@ -58,7 +58,7 @@ lineCountI = count 0
 inumGrep' :: (MonadIO m) => String -> Inum L.ByteString L.ByteString m a
 inumGrep' re iter = do
   Right cre <- liftIO $ compile 0 0 $ S8.pack re
-  flip mkInum iter $ do
+  flip mkInumP iter $ do
     line <- lineI
     Right amatch <- liftIO $ execute cre (S.concat $ L.toChunks line)
     return $ if isJust amatch
@@ -78,13 +78,13 @@ grep re files
     | otherwise  = foldr1 cat (map enumLines files) |$ inumGrep re .| linesOutI
     where
       enumLines file = inumCatch (enumFile file |. inumToLines) handler
-      handler :: IOError -> Iter () IO (Iter [S.ByteString] IO a)
-              -> Iter () IO (Iter [S.ByteString] IO a)
+      handler :: IOError -> IterR () IO (IterR [S.ByteString] IO a)
+              -> Iter () IO (IterR [S.ByteString] IO a)
       handler e iter = do
         liftIO (hPutStrLn stderr $ show e)
         if isDoesNotExistError e
           then resumeI iter
-          else iter
+          else reRunIter iter
       linesOutI = do
         mline <- safeHeadI
         case mline of
@@ -98,7 +98,7 @@ inumToLines = mkInum $ do
                 return [line]
 
 inumGrep :: (Monad m) => String -> Inum [S.ByteString] [S.ByteString] m a
-inumGrep re = mkInum $ do
+inumGrep re = mkInumP $ do
   line <- headI
   return $ if line =~ packedRe then [line] else []
     where
@@ -121,7 +121,7 @@ catchTest1 = myEnum |$ fail "bad Iter"
     where
       myEnum :: Onum String IO ()
       myEnum iter = catchI (enumPure "test" .| iter) handler
-                    >>= return . return
+                    >>= return . flip Done mempty
       handler (SomeException _) _ = do
         liftIO $ hPutStrLn stderr "ignoring exception"
         return ()
@@ -130,17 +130,17 @@ catchTest1 = myEnum |$ fail "bad Iter"
 catchTest2 :: IO ()
 catchTest2 = myEnum |. inumNop |$ fail "bad Iter"
     where
-      myEnum :: Onum String IO (Iter String IO ())
+      myEnum :: Onum String IO (IterR String IO ())
       myEnum iter = catchI (enumPure "test" .| iter) handler
-                    >>= return . return
+                    >>= return . flip Done mempty
       handler (SomeException _) _ = do
         liftIO $ hPutStrLn stderr "ignoring exception"
-        return $ return ()
+        return $ Done () mempty
 
 skipError :: (ChunkData tOut, MonadIO m) =>
              SomeException
-          -> Iter tOut m (Iter tIn m a)
-          -> Iter tOut m (Iter tIn m a)
+          -> IterR tOut m (IterR tIn m a)
+          -> Iter tOut m (IterR tIn m a)
 skipError e iter = do
   liftIO $ hPutStrLn stderr $ "skipping error: " ++ show e
   resumeI iter
@@ -151,7 +151,7 @@ resumeTest = doFile "file1" `cat` doFile "file2" |$ handleI stdout
       doFile path = inumCatch (enumFile' path) $ \err iter ->
                     if isDoesNotExistError err
                     then verboseResumeI iter
-                    else iter
+                    else reRunIter iter
 
 -- Throws an exception, because inumBad was fused outside the argument
 -- to inumCatch.

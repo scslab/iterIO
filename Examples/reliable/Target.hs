@@ -27,7 +27,7 @@ import Text.Printf
 
 import Data.IterIO
 import Data.IterIO.Extra (iterLoop)
-import Data.IterIO.Base (run)
+import Data.IterIO.Iter (run)
 
 import Arc4
 import TM
@@ -167,8 +167,8 @@ enumAccept sock mv iter = do
   enumHandle h iter
 
 iterMVH :: (MonadIO m) => MVar Handle -> Iter L.ByteString m ()
-iterMVH mvh = iterF $ \c -> do h <- liftIO $ readMVar mvh
-                               feedI (handleI h) c
+iterMVH mvh = iterF $ \c -> IterM $ do h <- liftIO $ readMVar mvh
+                                       return $ runIter (handleI h) c
 
 spawnOrConnect :: TM (Target a b)
 spawnOrConnect = do
@@ -406,13 +406,13 @@ pingPong ut a b = do
         line <- lineI
         case reads $ L8.unpack line of
           (n, []):_ | n == expect && n == 1 ->
-               do _ <- inumMC noCtl $ feedI iter $ chunk  (L8.pack "0\n")
+               do _ <- runIterMC noCtl iter $ chunk  (L8.pack "0\n")
                   return True
           (n, []):_ | n == expect && n == 0 -> return True
           (n, []):_ | n == expect ->
-               do r <- inumMC noCtl $ feedI iter $
+               do r <- runIterMC noCtl iter $
                        chunk (L8.pack $ (show $ n - 1) ++ "\n")
-                  minusOne (expect - 2) $ r
+                  minusOne (expect - 2) $ reRunIter r
           _ -> return False
 
 flowControl :: [ThreadId] -> Target () Bool -> Target () Bool -> TM Bool

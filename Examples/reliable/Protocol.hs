@@ -12,7 +12,7 @@ import Data.Bits
 -- import Data.Int
 -- import Data.List
 import Data.Maybe
--- import Data.Monoid
+import Data.Monoid
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Word
@@ -155,11 +155,11 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
                -- result <- inumMC noCtl $ feedI iter $ chunk (reverse pkts)
                result <- runIterMC noCtl iter $ chunk (reverse pkts)
                case result of
-                 IterF _   -> getPkts next q result
+                 IterF _   -> getPkts next q $ reRunIter result
                  Done a _  -> closewait next a
                  _         -> done >> return result
 
-      closewait :: SeqNo -> a -> Iter [L.ByteString] m (Iter [Packet] m a)
+      closewait :: SeqNo -> a -> Iter [L.ByteString] m (IterR [Packet] m a)
       closewait seqno a = do
         lfs <- liftIO $ takeMVar $ epLFS ep
         weof <- liftIO $ readMVar $ epWEOF ep
@@ -167,16 +167,16 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
         lar <- liftIO $ readMVar (epLAR ep)
         case () of
           () | weof && lar == lfs + 1 -> do done
-                                            return $ return a
+                                            return $ Done a mempty
           () | lar == lfs + 1         -> do liftIO $ readSampleVar (epSnd ep) 
                                             closewait seqno a
           () | otherwise              -> closewait' seqno a
 
-      closewait' :: SeqNo -> a -> Iter [L.ByteString] m (Iter [Packet] m a)
+      closewait' :: SeqNo -> a -> Iter [L.ByteString] m (IterR [Packet] m a)
       closewait' seqno a = do
         rawpkt <- safeHeadI
         case liftM pktparse rawpkt of
-          Nothing      -> done >> (return $ return a)
+          Nothing      -> done >> (return $ Done a mempty)
           Just Nothing -> closewait seqno a
           Just (Just (AckP ackno)) ->
               do _ <- recvack ackno

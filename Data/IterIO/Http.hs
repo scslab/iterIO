@@ -632,7 +632,7 @@ inumHttpBody req =
           | h == S8.pack "identity" = tcfold t
           | h == S8.pack "chunked"  = tcfold t -- Has to be first one
           --- | h == S8.pack "gzip"     = inumGunzip |. tcfold t
-          | otherwise = mkInum id noCtl $
+          | otherwise = mkInum $
                         fail $ "unknown Transfer-Coding " ++ chunkShow h
 
 {-

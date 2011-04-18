@@ -5,7 +5,7 @@ import Control.Exception
 import Data.Monoid
 
 import Control.Monad.Trans
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO.Extra
 import Data.IterIO.Parse
 

@@ -5,7 +5,7 @@ import Control.Concurrent
 import Control.Monad
 import Control.Monad.Trans
 import qualified Data.ByteString.Char8 as S8
-import Data.IterIO.Base
+import Data.IterIO.Iter
 import Data.IterIO.ListLike
 import Data.IterIO.Inum
 import Data.IterIO.Extra

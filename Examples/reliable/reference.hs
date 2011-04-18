@@ -58,7 +58,7 @@ rawPktPrint prefix iter = do
 -}
 
 rawPktPrint :: String -> Inum [L.ByteString] [L.ByteString] IO ()
-rawPktPrint prefix = mkInum dopkt
+rawPktPrint prefix = mkInumP dopkt
     where
       dopkt = do
         raw <- headI

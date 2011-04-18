@@ -11,7 +11,7 @@ module Data.IterIO.Inum
     -- * Simple Enumerator construction function
     -- $mkInumIntro
     , ResidHandler, CtlHandler
-    , mkInum
+    , mkInumC, mkInum, mkInumP
     -- * Utilities
     , pullupResid
     , noCtl, passCtl, consCtl, mkCtl, mkFlushCtl
@@ -500,16 +500,16 @@ runInum inum = onDone check . inum
 -- | Simple (stateless) 'Inum' creation.  Create an 'Inum' given a
 -- function to adjust residual data and an 'Iter' that transcodes from
 -- the input to the output type.
-mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-          ResidHandler tIn tOut
-       -- ^ Adjust residual data (use 'id' for no adjustment)
-       -> CtlHandler (Iter tIn m) tOut m a
-       -- ^ Handle control requests (use 'noCtl' or 'passCtl' if
-       -- 'Inum' shouldn't implement any specific control functions).
-       -> Iter tIn m tOut
-       -- ^ Generate transcoded data chunks
-       -> Inum tIn tOut m a
-mkInum adj ch codec iter0 = doIter iter0
+mkInumC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+           ResidHandler tIn tOut
+        -- ^ Adjust residual data (use 'id' for no adjustment)
+        -> CtlHandler (Iter tIn m) tOut m a
+        -- ^ Handle control requests (use 'noCtl' or 'passCtl' if
+        -- 'Inum' shouldn't implement any specific control functions).
+        -> Iter tIn m tOut
+        -- ^ Generate transcoded data chunks
+        -> Inum tIn tOut m a
+mkInumC adj ch codec iter0 = doIter iter0
     where
       doIter iter = tryI codec >>= either (inputErr iter . fst) (doInput iter)
       inputErr iter e | isIterEOF e = return $ IterF iter
@@ -522,6 +522,17 @@ mkInum adj ch codec iter0 = doIter iter0
           (_, r1) | isIterActive r1 -> return r1
           _ -> withResidHandler adj (getResid r) $ return . setResid r
 
+-- | Simplified version of 'mkInumC' that rejects all control
+-- requests.
+mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+          Iter tIn m tOut -> Inum tIn tOut m a
+mkInum = mkInumC id noCtl
+
+-- | Simplified vesion of 'mkInumC' that passes all control requests
+-- to enclosing enumerators.
+mkInumP :: (ChunkData t, Monad m) => Iter t m t -> Inum t t m a
+mkInumP = mkInumC pullupResid (passCtl pullupResid)
+
 pullupResid :: (ChunkData t) => (t, t) -> (t, t)
 pullupResid (a, b) = (mappend a b, mempty)
 
@@ -533,7 +544,7 @@ pullupResid (a, b) = (mappend a b, mempty)
 -- acts as a no-op when fused to other 'Inum's with '|.' or fused to
 -- 'Iter's with '.|'.
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop = mkInum pullupResid (passCtl pullupResid) dataI
+inumNop = mkInumP dataI
 
 -- | @inumNull@ feeds empty data to the underlying 'Iter'.  It acts as
 -- a no-op when concatenated to other 'Inum's with 'cat' or 'lcat'.

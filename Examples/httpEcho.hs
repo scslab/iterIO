@@ -60,7 +60,7 @@ handleRequest h = do
         _ -> echo req
     _ -> error "Unrecognized method"
  where
-  ok html = enumPure (html2L html) .| handleI h
+  ok html = inumPure (html2L html) .| handleI h
   echo req = parmsI req >>= ok . page "Request" . request2Html req
 
 
