@@ -81,7 +81,7 @@ relSend ep fork iter = doSend 0 1
     where
       inMyWindow = inWindow $ epWin ep
       doSend :: SeqNo -> SeqNo
-             -> Iter L.ByteString m (Iter [L.ByteString] m ())
+             -> Iter L.ByteString m (IterR [L.ByteString] m ())
       doSend acked next | not $ inMyWindow acked next = do
         acked' <- liftIO $ withMVar (epLAR ep) $ \lar -> do
                     emptySampleVar (epAck ep)
@@ -98,20 +98,22 @@ relSend ep fork iter = doSend 0 1
         _ <- lift $ fork $ rexmit next payload
         if L.null payload
           then -- Can't return until we are done sending Acks
-               liftIO (waitQSem $ epRdone ep) >> return iter
+               liftIO (waitQSem $ epRdone ep) >> return (IterF iter)
           else doSend acked (next + 1)
 
       xmit :: SeqNo -> L.ByteString -> m ()
       xmit seqno payload = do
         lfr <- liftIO $ readMVar (epLFR ep)
         let pkt = pktgen $ DataP lfr seqno payload
-        _ <- rerun $ feedI iter $ chunk [pkt]
+        _ <- rerun $ runIter iter $ chunk [pkt]
         return ()
 
-      rerun :: Iter t m a -> m (Iter t m a)
-      rerun (IterM m)    = m >>= rerun
-      rerun (IterC _ fr) = rerun $ fr Nothing
-      rerun i            = return i
+      rerun :: IterR t m a -> m (IterR t m a)
+      rerun (IterM m)              = m >>= rerun
+      rerun (IterC (CtlArg _ n c)) = rerun $ runIter (n Nothing) c
+      rerun i                      = return i
+      -- rerun (IterC _ fr) = rerun $ fr Nothing
+      -- rerun i            = return i
 
       rexmit :: SeqNo -> L.ByteString -> m ()
       rexmit seqno payload = do
@@ -150,8 +152,8 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
           Nothing | null pkts -> sendack next >> getPkts next q iter
           Nothing | otherwise ->
             do _ <- sendack next
-               -- feedI (getPkts next q) pkts iter
-               result <- inumMC noCtl $ feedI iter $ chunk (reverse pkts)
+               -- result <- inumMC noCtl $ feedI iter $ chunk (reverse pkts)
+               result <- runIterMC noCtl iter $ chunk (reverse pkts)
                case result of
                  IterF _   -> getPkts next q result
                  Done a _  -> closewait next a
@@ -194,7 +196,7 @@ relReceive ep sender startiter = getPkts 1 Map.empty startiter
                         else return (lar, lar)
       sendack seqno = do
         liftIO $ modifyMVar_ (epLFR ep) $ \_ -> return seqno
-        inumMC noCtl $ feedI sender $ chunk [pktgen $ AckP seqno]
+        runIterMC noCtl sender $ chunk [pktgen $ AckP seqno]
       inMyWindow = inWindow $ epWin ep
       enqPacket next q pkt@(DataP _ seqno _) =
           if inMyWindow next seqno then Map.insert seqno pkt q else q

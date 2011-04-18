@@ -17,7 +17,7 @@ module Data.IterIO.Inum
     , noCtl, passCtl, consCtl, mkCtl, mkFlushCtl
     , runIterM, runIterMC, runInum
     -- * Some basic Inums
-    , inumNop, inumNull, inumPure, inumRepeat
+    , inumNop, inumNull, inumPure, enumPure, inumRepeat
     -- * Enumerator construction monad
     -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM
@@ -537,12 +537,16 @@ inumNop = mkInum pullupResid (passCtl pullupResid) dataI
 
 -- | @inumNull@ feeds empty data to the underlying 'Iter'.  It acts as
 -- a no-op when concatenated to other 'Inum's with 'cat' or 'lcat'.
-inumNull :: (ChunkData tIn, ChunkData tOut, Monad m) => Inum tIn tOut m a
+inumNull :: (ChunkData tOut, Monad m) => Inum tIn tOut m a
 inumNull = inumPure mempty
 
 -- | Feed pure data to an 'Iter'.
-inumPure :: (ChunkData tIn, Monad m) => tOut -> Inum tIn tOut m a
+inumPure :: (Monad m) => tOut -> Inum tIn tOut m a
 inumPure t iter = runIterM iter $ chunk t
+
+-- | Type-restricted version of 'inumPure'.
+enumPure :: (Monad m) => tOut -> Onum tOut m a
+enumPure = inumPure
 
 -- | Repeat an 'Inum' until the input receives an EOF condition, the
 -- 'Iter' no longer requires input, or the 'Iter' is in an unhandled
