@@ -63,9 +63,15 @@ import Debug.Trace
 -- must be a 'Monoid', but must additionally provide a predicate,
 -- @null@, for testing whether an object is equal to 'mempty'.
 -- Feeding a @null@ chunk to an iteratee followed by any other chunk
--- should have the same effect as just feeding the second chunk.
--- @ChunkData@ must also be convertable to a String with the
--- @chunkShow@ method to simplify debugging.
+-- should have the same effect as just feeding the second chunk.  To
+-- simplify debugging, there is an additional requirement that
+-- @ChunkData@ be convertable to a String with the @chunkShow@ method.
+--
+-- Note that because the "Prelude" contains a function 'Prelude.null'
+-- for lists, you may wish to include the import:
+--
+-- > import Prelude hiding (null)
+--
 class (Monoid t) => ChunkData t where
     null :: t -> Bool
     chunkShow :: t -> String
@@ -159,8 +165,6 @@ data CtlArg t m a = forall carg cres. (CtlCmd carg cres) =>
 -- fails, the 'Iter' it is feeding usually will not have failed.
 -- Thus, the 'InumFail' type includes the state of the 'Iter' that the
 -- 'Inum' was feeding.
---
--- Note that @IterR t@ is a 'MonadTrans' and @IterR t m@ is a a 'Monad'.
 data IterR t m a = IterF !(Iter t m a)
                  -- ^ The iteratee requires more input.
                  | IterM !(m (IterR t m a))
@@ -181,8 +185,8 @@ data IterR t m a = IterF !(Iter t m a)
                  -- t' m a\'@ for some @t'@ and @a'@.)
 
 -- | True if an 'IterR' is requesting something from an
--- enumerator--i.e., the 'Iter' is not 'Done' and is not in one of the
--- error states.
+-- enumerator--i.e., the 'IterR' is not 'Done' and is not in one of
+-- the error states.
 isIterActive :: IterR t m a -> Bool
 isIterActive (IterF _)     = True
 isIterActive (IterM _)     = True
@@ -231,6 +235,11 @@ instance (Typeable t, Typeable1 m, Typeable a) => Typeable (Iter t m a) where
 instance (Monad m) => Functor (Iter t m) where
     fmap = onDone . fmap
 
+-- | Maps the result of an 'IterR' like 'fmap', but only if the
+-- 'IterR' is no longer active.  It is an error to call this function
+-- on an 'IterR' in the 'IterF', 'IterM', or 'IterC' state.  Because
+-- of this restriction, @fmapR@ does not require the input and output
+-- 'Monad' types (@m1@ and @m2@) to be the same.
 fmapR :: (a -> b) -> IterR t m1 a -> IterR t m2 b
 fmapR f (Done a c)       = Done (f a) c
 fmapR _ (IterFail e c)   = IterFail e c
@@ -316,9 +325,8 @@ unIterEOF e = case fromException e of
                 Just (IterEOF e') -> toException e'
                 _                 -> e
 
--- | Return the result of an iteratee.  If it is still in the 'IterF'
--- state, feed it an EOF to extract a result.  Throws an exception if
--- there has been a failure.
+-- | Feed an EOF to an 'Iter' and return the result.  Throws an
+-- exception if there has been a failure.
 run :: (ChunkData t, Monad m) => Iter t m a -> m a
 run i0 = check $ runIter i0 chunkEOF
     where check (Done a _)             = return a
@@ -328,6 +336,7 @@ run i0 = check $ runIter i0 chunkEOF
           check (IterFail e _)         = throw $ unIterEOF e
           check (InumFail e _ _)       = throw $ unIterEOF e
 
+-- | The equivalent for 'runI' for 'IterR's.
 runR :: (ChunkData t1, ChunkData t2, Monad m) => IterR t1 m a -> IterR t2 m a
 runR (Done a _)             = Done a mempty
 runR (IterF i)              = runR $ runIter i chunkEOF
@@ -343,7 +352,7 @@ runR (InumFail e i _)       = InumFail e i mempty
 -- 'Iter' monads.  By contrast, @runI@ throws a monadic exception that
 -- can be caught.  In short, use @runI@ in preference to @run@
 -- whenever possible.  See a more detailed discussion of the same
--- issue in the documentation for '.|$'.
+-- issue in the documentation for @'.|$'@ in "Data.IterIO.Inum".
 runI :: (ChunkData t1, ChunkData t2, Monad m) => Iter t1 m a -> Iter t2 m a
 runI i = Iter $ runIterR (runR $ runIter i chunkEOF)
 
@@ -482,7 +491,8 @@ genCatchI iter0 handler conv = onDone check iter0
 
 -- | Catch an exception thrown by an 'Iter' or an enclosing 'Inum'
 -- (for instance one applied with '.|$').  If you wish to catch just
--- errors thrown within 'Inum's, see the function 'inumCatch'.
+-- errors thrown within 'Inum's, see the function @'inumCatch'@ in
+-- "Data.IterIO.Inum".
 --
 -- On exceptions, @catchI@ invokes a handler passing it both the
 -- exception thrown and the state of the failing 'IterR', which may
@@ -508,9 +518,9 @@ genCatchI iter0 handler conv = onDone check iter0
 -- divide-by-zero errors, the 'throw' function, or exceptions raised
 -- by other threads using @'throwTo'@.
 --
--- @\`catchI\`@ has the default infix precedence
--- (@infixl 9 -- \`catchI\`@), which binds more tightly than any
--- concatenation or fusing operators.
+-- @\`catchI\`@ has the default infix precedence (@infixl 9
+-- \`catchI\`@), which binds more tightly than any concatenation or
+-- fusing operators.
 catchI :: (Exception e, ChunkData t, Monad m) =>
           Iter t m a
        -- ^ 'Iter' that might throw an exception
@@ -533,8 +543,8 @@ handlerI :: (Exception e, ChunkData t, Monad m) =>
 handlerI = flip catchI
 
 -- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
--- the 'Iter' throws an exception @e@, returns @'Left' (e, i)@ where
--- @i@ is the state of the failing 'Iter'.
+-- the 'Iter' throws an exception @e@, returns @'Left' (e, r)@ where
+-- @r@ is the state of the failing 'Iter'.
 tryI :: (ChunkData t, Monad m, Exception e) =>
         Iter t m a -> Iter t m (Either (e, IterR t m a) a)
 tryI iter = genCatchI iter (curry $ return . Left) Right
@@ -606,8 +616,8 @@ handlerBI = flip catchBI
 -- @tryBI@ stands for \"backtracking\".)  Thus, if @tryBI@ returns
 -- @'Left' exception@, the next 'Iter' to be invoked will see the same
 -- input that caused the previous 'Iter' to fail.  (For this reason,
--- it makes no sense ever to call 'resumeI' on the 'Iter' you get back
--- from @tryBI@, which is why @tryBI@ does not return the failing
+-- it makes no sense ever to call @'resumeI'@ on the 'Iter' you get
+-- back from @tryBI@, which is why @tryBI@ does not return the failing
 -- Iteratee the way 'tryI' does.)
 --
 -- Because @tryBI@ saves a copy of all input, it can consume a lot of
@@ -814,8 +824,8 @@ chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 chunkI = iterF $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
 
 -- | Returns the current chunk.  Unlike 'chunkI', @currentChunkI@ may
--- return an empty chunk with no data, even when there is more data to
--- be requested.
+-- return an empty chunk with no data, even when more data is
+-- available upon requested.
 currentChunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 currentChunkI = Iter $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
 
@@ -844,7 +854,7 @@ knownEOFI :: (Monad m, ChunkData t) => Iter t m Bool
 knownEOFI = Iter $ \c@(Chunk t eof) -> Done (eof && null t) c
 
 -- | Place data back onto the input stream, where it will be the next
--- data consumed by subsequent 'Iter's..
+-- data consumed by subsequent 'Iter's.
 ungetI :: (ChunkData t) => t -> Iter t m ()
 ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 
@@ -854,7 +864,7 @@ safeCtlI :: (CtlCmd carg cres, Monad m) =>
             carg -> Iter t m (Maybe cres)
 safeCtlI carg = Iter $ IterC . CtlArg carg return
 
--- | Issue a control request, and return the result.  Throws an
+-- | Issue a control request and return the result.  Throws an
 -- exception if the operation type was not supported by an enclosing
 -- enumerator.
 ctlI :: (CtlCmd carg cres, Monad m) =>
@@ -885,13 +895,14 @@ stepR' (IterM _) _ _              = error "stepR' (IterM)"
 stepR' _ _ notActive              = notActive
 
 -- | Step an active 'IterR' (i.e., one in the 'IterF', 'IterM', or
--- 'IterC' state) to its next state, and pass its result through a
+-- 'IterC' state) to its next state, and pass the result through a
 -- function.
 stepR :: (Monad m) =>
          IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
 stepR (IterM m) f = IterM $ liftM f m
 stepR r f         = stepR' r f (error "stepR")
 
+-- | The equivalent of 'onDone' for 'IterR's.
 onDoneR :: (Monad m) =>
            (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
 onDoneR f = let check r = if isIterActive r then stepR r check else f r
@@ -926,8 +937,8 @@ getIterError (IterF _)        = error "getIterError: no error (in IterF state)"
 getIterError _                = error "getIterError: no error to extract"
 
 -- | Get the residual data for an 'IterR' that is in no longer active
--- or in the 'IterC' state.  (It is an error to call this on an
--- 'IterR' in the 'IterF' or 'IterM' state.)
+-- or that is in the 'IterC' state.  (It is an error to call this
+-- function on an 'IterR' in the 'IterF' or 'IterM' state.)
 getResid :: IterR t m a -> Chunk t
 getResid (Done _ c)             = c
 getResid (IterFail _ c)         = c
@@ -947,6 +958,13 @@ setResid (IterF _)        = error "setResid (IterF)"
 setResid (IterM _)        = error "setResid (IterM)"
 setResid (IterC _)        = error "setResid (IterC)"
 
+-- | Feed more input to an 'Iter' that has already been run (and hence
+-- is already an 'IterR').  In the event that the 'IterR' is
+-- requesting more input (i.e., is in the 'IterF' state), this is
+-- straight forward.  However, if the 'Iter' is in some other state
+-- such as 'IterM', this function needs to save the input until such
+-- time as the 'IterR' is stepped to a new state (e.g., with 'stepR'
+-- or 'reRunIter').
 runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
 runIterR r c = if null c then r else check r
     where check (Done a c0)             = Done a (mappend c0 c)
