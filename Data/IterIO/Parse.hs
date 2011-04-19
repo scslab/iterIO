@@ -75,7 +75,7 @@ infixr 3 <|>
 -- result @r@ is added to the head of the list returned by calling
 -- @myMany@ recursively.  This idiom of partially applying a binary
 -- funciton to a result and then applying the resulting function to an
--- iter via 'fmap' is so common that there is an infix operator for
+-- 'Iter' via 'fmap' is so common that there is an infix operator for
 -- it, @'>$>'@.  Thus, the above code can be written:
 --
 -- @
