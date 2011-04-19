@@ -1,15 +1,16 @@
 
 {- | This is the main module to import for the IterIO package.  It
-   exports several other internal modules, but mostly includes
-   documentation--first a high-level overview of the iteratee model,
-   then a tutorial at <#g:1>.  See the "Data.IterIO.Iter",
-   "Data.IterIO.Inum", and "Data.IterIO.ListLike" modules for more
-   detailed documentation of data structures and functions.  In
-   addition, "Data.IterIO.Trans" contains functions to help you invoke
-   monad transformers from the mtl library from within the 'Iter'
-   monad.  You may also wish to import "Data.IterIO.Parse", which
-   includes parsec-like parsing combinators and is not exported by
-   this default module.
+   re-exports several other modules and mostly consists of
+   documentation--first this high-level overview of the iteratee
+   model, then (at <#g:1>) a more detailed tutorial.  See the
+   "Data.IterIO.Iter", "Data.IterIO.Inum", and "Data.IterIO.ListLike"
+   modules for more detailed documentation of data structures and
+   functions.  In addition, "Data.IterIO.Trans" (also re-exported by
+   this module) supplies functions that help you invoke monad
+   transformers from the mtl library from within the 'Iter' monad.
+   You may also wish to import "Data.IterIO.Parse", which includes
+   parsec-like parsing combinators and is not exported by this main
+   module.
 
    At a high level, an iteratee is a data sink that is fed chunks of
    data.  It may return a useful result, or its utility may lie in
@@ -19,8 +20,8 @@
    an instance of 'ChunkData', such as 'String' or lazy @ByteString@.)
    @m@ is the 'Monad' in which the iteratee runs--for instance 'IO'
    (or an instance of 'MonadIO') for the iteratee to perform IO.  @a@
-   is the result type of the iteratee, for when it has consumed enough
-   input to produce a result.
+   is the type that the iteratee will return when it has consumed
+   enough input to produce a result.
 
    An enumerator is a data source that feeds data chunks to an
    iteratee.  Enumerators are also iteratees.  We use the type @'Inum'
@@ -41,20 +42,21 @@
    which is just an 'Inum' with the void input type @()@.  Outer
    enumerators are sources of data.  Rather than transcode input
    data, they produce data from monadic actions (or from pure data
-   in the case of 'enumPure').  The type 'Onum' represents outer
+   in the case of 'inumPure').  The type 'Onum' represents outer
    enumerators and is a synonym for 'Inum' with an input type of
    @()@.
 
    To execute iteratee-based IO, you must apply an 'Onum' to an
    'Iter' with the '|$' (\"pipe apply\") binary operator.
 
-   An important property of enumerators and iteratees is that they
-   can be /fused/.  The '|.' operator fuses two 'Inum's together
-   (provided the output type of the first is the input type of the
-   second), yielding a new 'Inum' that transcodes from the input
-   type of the first to the output type of the second.  Similarly,
-   the '.|' operator fuses an 'Inum' to an 'Iter', yielding a new
-   'Iter' with a potentially different input type.
+   An important property of enumerators and iteratees is that they can
+   be /fused/.  The '|.' (\"fuse left\") operator fuses two 'Inum's
+   together (provided the output type of the first is the input type
+   of the second), yielding a new 'Inum' that transcodes from the
+   input type of the first to the output type of the second.
+   Similarly, the '.|' (\"fuse right\") operator fuses an 'Inum' to an
+   'Iter', yielding a new 'Iter' with a potentially different input
+   type.
 
    Enumerators of the same type can also be /concatenated/, using
    the 'cat' function.  @enum1 ``cat`` enum2@ produces an enumerator
@@ -83,7 +85,7 @@ import Data.IterIO.ListLike
 
 #tutorial#
 
-This library performs IO by hooking up sources of data, called
+The iterIO library performs IO by hooking up sources of data, called
 /enumerators/, to data sinks, called /iteratees/, in a manner
 reminiscent of Unix command pipelines.  Compared to lazy IO, the
 enumerator/iteratee paradigm provides better error handing,
@@ -228,12 +230,11 @@ the @wc -l@ command, which counts lines.  Here is an equivalent iteratee:
 @
     lineCountI :: (Monad m) => 'Iter' String m Int
     lineCountI = count 0
-        where
-          count n = do
-            line <- 'safeLineI'
-            case line of
-              Just _  -> count (n+1)
-              Nothing -> return n
+        where count n = do
+                line <- 'safeLineI'
+                case line of
+                  Just _  -> count (n+1)
+                  Nothing -> return n
 @
 
 The 'safeLineI' function is like 'lineI', but returns a @'Maybe'
