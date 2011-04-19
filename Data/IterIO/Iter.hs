@@ -148,8 +148,9 @@ class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 data CtlArg t m a = forall carg cres. (CtlCmd carg cres) =>
                     CtlArg !carg (Maybe cres -> Iter t m a) (Chunk t)
 
--- | An @IterR@ is in one of several states:  it may require more
--- input ('IterF'), it may wish to execute monadic actions in the
+-- | An @IterR@ is the result of feeding a chunk of data to an 'Iter'.
+-- An @IterR@ is in one of several states:  it may require more input
+-- ('IterF'), it may wish to execute monadic actions in the
 -- transformed monad ('IterM'), it may have a control request for an
 -- enclosing enumerator ('IterC'), it may have produced a result
 -- ('Done'), or it may have failed.  Failure is indicated by

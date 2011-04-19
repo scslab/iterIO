@@ -78,6 +78,8 @@ grep re files
     | otherwise  = foldr1 cat (map enumLines files) |$ inumGrep re .| linesOutI
     where
       enumLines file = inumCatch (enumFile file |. inumToLines) handler
+--      handler :: IOError -> IterR () IO (IterR [S.ByteString] IO a)
+--              -> Iter () IO (IterR [S.ByteString] IO a)
       handler :: IOError -> IterR () IO (IterR [S.ByteString] IO a)
               -> Iter () IO (IterR [S.ByteString] IO a)
       handler e iter = do

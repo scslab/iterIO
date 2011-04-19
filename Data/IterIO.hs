@@ -50,13 +50,13 @@
    'Iter' with the '|$' (\"pipe apply\") binary operator.
 
    An important property of enumerators and iteratees is that they can
-   be /fused/.  The '|.' (\"fuse left\") operator fuses two 'Inum's
-   together (provided the output type of the first is the input type
-   of the second), yielding a new 'Inum' that transcodes from the
-   input type of the first to the output type of the second.
-   Similarly, the '.|' (\"fuse right\") operator fuses an 'Inum' to an
-   'Iter', yielding a new 'Iter' with a potentially different input
-   type.
+   be /fused/.  The '|.' (\"fuse leftward\") operator fuses two
+   'Inum's together (provided the output type of the first is the
+   input type of the second), yielding a new 'Inum' that transcodes
+   from the input type of the first to the output type of the second.
+   Similarly, the '.|' (\"fuse rightwart\") operator fuses an 'Inum'
+   to an 'Iter', yielding a new 'Iter' with a potentially different
+   input type.
 
    Enumerators of the same type can also be /concatenated/, using
    the 'cat' function.  @enum1 ``cat`` enum2@ produces an enumerator
@@ -242,8 +242,8 @@ The 'safeLineI' function is like 'lineI', but returns a @'Maybe'
 condition.  ('lineI' throws an exception on EOF.)
 
 What about the @grep@ command?  @grep@ sits in the middle of a
-pipeline, so it acts both as a data sink and as a data source.  In the
-iteratee world, we call such a pipeline stage an
+pipeline, so it acts both as a data sink and as a data source.
+This is why we call such a pipeline stage an
 /iteratee-enumerator/, or 'Inum'.  Before defining our @grep@
 equivalent, since multiple pipeline stages are going to be considering
 the file one line at a time, let's first build an 'Inum' to separate
@@ -290,7 +290,7 @@ of arbitrary input type by feeding EOF as input.)
 Iteratee-enumerators are generally constructed using either 'mkInum'
 or `mkInumM`, and by convention most 'Inum's have names starting
 \"@inum@...\", except that 'Onum' names start \"@enum...@\".  'mkInum'
-takes an argument of type @Iter tIn m tOut@ that consumes input of
+takes an argument of type @'Iter' tIn m tOut@ that consumes input of
 type @tIn@ to produce output of type @tOut@.  (For @inumToLines@,
 @tIn@ is @S.ByteString@ and @tOut@ is @[S.ByteString]@).  This is fine
 for simple stateless translation functions, but sometimes one would
@@ -323,12 +323,11 @@ and a simple 'Inum' to count list elements (since @lineCountI ::
 @
     lengthI :: (Monad m) => 'Iter' [t] m Int
     lengthI = count 0
-        where
-          count n = do
-            line <- 'safeHeadI'
-            case line of
-              Just _  -> count (n+1)
-              Nothing -> return n
+        where count n = do
+                line <- 'safeHeadI'
+                case line of
+                  Just _  -> count (n+1)
+                  Nothing -> return n
 @
 
 Now we are almost ready to assemble all the pieces.  But recall that
@@ -343,12 +342,12 @@ the 'cat' function, producing a new data source that enumerates all of
 the data in the first 'Inum' followed by all of the data in the
 second.
 
-There are two /fusing/ operators.  The '|.' operator fuses two
-'Inum's, provided the output type of the first is the input type of
-the second.  (Mnemonic: it produces a pipeline that is open on the
-right hand side, as it still needs to be applied to an iteratee with
-'|$'.)  The '.|' operator fuses an 'Inum' to an 'Iter', producing a
-new 'Iter'.
+There are two /fusing/ operators.  The left-associative '|.' operator
+fuses two 'Inum's, provided the output type of the first is the input
+type of the second.  (Mnemonic: it produces a pipeline stage that is
+open on the right hand side, as it still needs to be applied to an
+iteratee with '|$'.)  The right-associative '.|' operator fuses an
+'Inum' to an 'Iter', producing a new 'Iter'.
 
 The fusing operators bind more tightly than the infix concatenation
 functions, which in turn bind more tightly than '|$'.  (Concatenation
@@ -442,11 +441,11 @@ Here is the @grep@ code.  We will analyze it below.
         where
           enumLines file = 'inumCatch' ('enumFile' file '|.' inumToLines) handler
           handler :: 'IOError'
-                  -> 'Iter' () IO ('Iter' ['S.ByteString'] IO a)
-                  -> 'Iter' () IO ('Iter' ['S.ByteString'] IO a)
-          handler e iter = do
+                  -> 'IterR' () IO ('IterR' [S.ByteString] IO a)
+                  -> 'Iter' () IO ('IterR' [S.ByteString] IO a)
+          handler e result = do
             liftIO (hPutStrLn stderr $ show e)
-            'resumeI' iter
+            'resumeI' result
           linesOutI = do
             mline <- 'safeHeadI'
             case mline of
@@ -458,7 +457,7 @@ Here is the @grep@ code.  We will analyze it below.
 There are two cases.  If the list of files to search is null, @grep@
 simply reads from standard input, in which case there is only one
 input stream and we do not care about resuming.  In the second case,
-we use @'foldr1' cat@ to concatenate a list of 'Onum's.  Each 'Onum'
+we use @'foldr1' 'cat'@ to concatenate a list of 'Onum's.  Each 'Onum'
 is generated by the function @enumLines@, which fuses 'enumFile' to
 our previously defined @inumToLines@, but also wraps the exception
 handler function @handler@ around the enumerator using 'inumCatch'.
@@ -470,39 +469,49 @@ exceptions are caught, which is why we must either specify an explicit
 type signature for @handler@ or somewhere specify @e@'s type
 explicitly, for instance with:
 
+>          ...
+>            liftIO (hPutStrLn stderr $ show (e :: IOError))
+>          ...
+
+Note that 'IOError' doesn't expose a type constructor, but for
+exception types that do, it often suffices to define the function with
+the exception constructor, as:
+
 >          handler e@(SomeException _) iter = do ...
 
-The second argument to @handler@, @iter@, is the failing state, which
-contains more information than just the exception.  In the case of an
-'Inum' failure, it contains the state of the 'Iter' that the 'Inum'
-was feeding when it failed.  The type of the 'iter' is the result type
-of an 'Onum'.  The function 'resumeI' extracts and returns an @'Iter'
+The second argument to @handler@, @result@, is the failed state of the
+iteratee, which contains more information than just the exception.  In
+the case of an 'Inum' failure, it contains the state of the 'Iter'
+that the 'Inum' was feeding when it failed.  The type of 'result' is
+'IterR'--which is the type returned by 'Iter's when they are fed
+chunks of data.  'IterR' takes the same three type arguments as
+'Iter'.  The function 'resumeI' extracts and returns an @'Iter'
 [S.ByteString] IO a@ from this failed result.  Thus, the next
 enumerator in a concatenated series can continue feeding it input.
 If, instead of resuming, you want to re-throw the error, it suffices
-to re-execute the failing 'OnumR' to propagate the error.  For
-instance, suppose we want to continue executing @grep@ when a named
-file does not exist, but if some other error happens, we want to
-re-throw the exception to abort the whole program.  This could be
-achieved as follows:
+to re-execute the failed result with @'reRunIter'@.  For instance,
+suppose we want to continue executing @grep@ when a named file does
+not exist, but if some other error happens, we want to re-throw the
+exception to abort the whole program.  This could be achieved as
+follows:
 
->          handler e iter = do
+>          handler e result = do
 >            if isDoesNotExistError e
 >              then do liftIO (hPutStrLn stderr $ show e)
->                      resumeI iter
->              else iter
+>                      resumeI result
+>              else reRunIter result
 
 Because printing an exception is so common, there is a function
 'verboseResumeI' that prints exceptions before resuming (also
 prefixing the program name).  Thus, we can simplify the above function
 to:
 
->          handler e iter = if isDoesNotExistError e
->                             then verboseResumeI iter
->                             else iter
+>          handler e result = if isDoesNotExistError e
+>                               then verboseResumeI result
+>                               else reRunIter result
 
 These last two @handler@ functions also do away with the need for an
-explicit type signature, because the function @isDoesNotExistError@
+explicit type signature, because the function @'isDoesNotExistError'@
 has argument type 'IOError', constraining the type of @e@ to the type
 of exceptions we want to catch.
 
