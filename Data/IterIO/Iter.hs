@@ -267,8 +267,7 @@ instance (Monad m) => Monad (Iter t m) where
               check (IterC (CtlArg a n c)) = IterC $ CtlArg a (n >=> k) c
               check (IterFail e c)         = IterFail e c
               check (InumFail e _ c)       = IterFail e c
-              check _                      = error "Iter >>="
-              -- check (Done a c)             = runIter (k a) c
+              check (Done a c)             = runIter (k a) c
 
     fail msg = Iter $ IterFail (toException $ ErrorCall msg)
 
