@@ -13,12 +13,17 @@ module Data.IterIO.Extra
       -- * Functionality missing from system libraries
     , SendRecvString(..)
     , hShutdown
+    -- * Misc debugging functions
+    , traceInput, traceI
     ) where
 
+import Control.Concurrent (myThreadId)
 import Control.Concurrent.MVar
 import Control.Monad
 import Control.Monad.Trans
+import Data.ByteString.Internal (inlinePerformIO)
 import Data.Monoid
+import Debug.Trace
 import Foreign.C
 import Foreign.Ptr
 import qualified Data.ByteString as S
@@ -248,3 +253,18 @@ hShutdown h how = do
 
 #endif /* __GLASGOW_HASKELL__ >= 612 */
   
+--
+-- Debugging
+--
+
+-- | For debugging, print a tag along with the current residual input.
+-- Not referentially transparent.
+traceInput :: (ChunkData t, Monad m) => String -> Iter t m ()
+traceInput tag = Iter $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
+
+-- | For debugging.  Print the current thread ID and a message.  Not
+-- referentially transparent.
+traceI :: (ChunkData t, Monad m) => String -> Iter t m ()
+traceI msg = return $ inlinePerformIO $ do
+               tid <- myThreadId
+               putTraceMsg $ show tid ++ ": " ++ msg

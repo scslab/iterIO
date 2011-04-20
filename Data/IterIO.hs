@@ -75,7 +75,6 @@ module Data.IterIO
 
 -- import Prelude hiding (catch)
 import Data.IterIO.Iter hiding (null, run -- names that might collide
-                               , traceI, traceInput
                                )
 import Data.IterIO.Trans
 import Data.IterIO.Inum

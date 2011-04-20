@@ -56,9 +56,10 @@ echr = toEnum . ord
 -- | An Iteratee that puts data to a consumer function, then calls an
 -- eof function.  For instance, @'handleI'@ could be defined as:
 --
--- > handleI :: (MonadIO m) => Handle -> Iter L.ByteString m ()
--- > handleI h = putI (liftIO . L.hPut h) (liftIO $ hShutdown h 1)
---
+-- @
+-- handleI :: (MonadIO m) => 'Handle' -> 'Iter' 'L.ByteString' m ()
+-- handleI h = putI ('liftIO' . 'L.hPut' h) ('liftIO' $ 'hShutdown' h 1)
+-- @
 putI :: (ChunkData t, Monad m) =>
         (t -> Iter t m a)
      -> Iter t m b
@@ -70,7 +71,13 @@ putI putfn eoffn = do
 
 -- | Send datagrams using a supplied function.  The datagrams are fed
 -- as a list of packets, where each element of the list should be a
--- separate datagram.
+-- separate datagram.  For example, to create an 'Iter' from a
+-- connected UDP socket:
+--
+-- @
+-- udpI :: ('SendRecvString' s, 'MonadIO' m) => 'Socket' -> 'Iter' s m ()
+-- udpI sock = sendI $ \s -> 'liftIO' $ 'genSendTo' sock s Nothing
+-- @
 sendI :: (Show t, Monad m) =>
          (t -> Iter [t] m a)
       -> Iter [t] m ()
@@ -84,7 +91,7 @@ sendI sendfn = do
 headLI :: (Show a, Monad m) => Iter [a] m a
 headLI = iterF $ dohead
     where dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
-          dohead c                  = IterFail (toException $ mkIterEOF "headLI") c
+          dohead c = IterFail (toException $ mkIterEOF "headLI") c
 
 -- | Return 'Just' the first element when the Iteratee data type
 -- is a list, or 'Nothing' on EOF.
@@ -207,26 +214,30 @@ data SizeC = SizeC deriving (Typeable)
 instance CtlCmd SizeC Integer
 
 -- | A control command for seeking within a file, when a file is being
--- enumerated.
+-- enumerated.  Flushes the residual input data.
 data SeekC = SeekC !SeekMode !Integer deriving (Typeable)
 instance CtlCmd SeekC ()
 
 -- | A control command for determining the current offset within a
--- file.  Note that this will only be accurate when there is not
--- left-over input data.
+-- file.  Note that this subtracts the size of the residual input data
+-- from the offset in the file.  Thus, it will only be accurate when
+-- all left-over input data is from the current file.
 data TellC = TellC deriving (Typeable)
 instance CtlCmd TellC Integer
 
 -- | A handler function for the 'SizeC', 'SeekC', and 'TellC' control
 -- requests.  @fileCtl@ is used internally by 'enumFile' and
 -- 'enumHandle', and is exposed for similar enumerators to use.
-fileCtl :: (ChunkData t, MonadIO m) =>
+fileCtl :: (ChunkData t, LL.ListLike t e, MonadIO m) =>
            Handle
         -> CtlHandler (Iter () m) t m a
 fileCtl h = (mkFlushCtl $ \(SeekC mode pos) -> liftIO (hSeek h mode pos))
-            `consCtl` (mkCtl $ \TellC -> liftIO (hTell h)) -- broken
+            `consCtl` tryTellC
             `consCtl` (mkCtl $ \SizeC -> liftIO (hFileSize h))
             `consCtl` passCtl id
+    where tryTellC TellC n c@(Chunk t _) = do
+            offset <- liftIO $ hTell h
+            return $ runIter (n $ offset - LL.genericLength t) c
 
 --
 -- Onums
@@ -342,10 +353,9 @@ inumLog path trunc iter = do
 -- file name.  Does not close the handle when done.
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle -> Inum t t m a
-inumhLog h = mkInumM $ do addCleanup (ipopresid >>= ungetI)
-                          irepeat $ do buf <- dataI
-                                       liftIO $ LL.hPutStr h buf
-                                       ifeed buf
+inumhLog h = mkInumP $ do buf <- dataI
+                          liftIO $ LL.hPutStr h buf
+                          return buf
 
 -- | Log a copy of everything to standard error.  (@inumStderr =
 -- 'inumhLog' 'stderr'@)

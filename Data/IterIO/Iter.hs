@@ -27,14 +27,11 @@ module Data.IterIO.Iter
     , onDone
     , onDoneR, stepR, stepR', runR, fmapR, reRunIter, runIterR
     , getResid, setResid
-    -- * Misc debugging functions
-    , traceInput, traceI
     ) where
 
 import Prelude hiding (null)
 import qualified Prelude
 import Control.Applicative (Applicative(..))
-import Control.Concurrent (myThreadId)
 import Control.Exception (SomeException(..), ErrorCall(..), Exception(..)
                          , try, throw)
 import Control.Monad
@@ -44,15 +41,12 @@ import Data.IORef
 import Data.List (intercalate)
 import Data.Monoid
 import Data.Typeable
-import Data.ByteString.Internal (inlinePerformIO)
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import System.IO.Error (mkIOError, eofErrorType, isEOFError)
 import System.IO.Unsafe
-
-import Debug.Trace
 
 --
 -- Iteratee types and instances
@@ -258,15 +252,23 @@ instance (Monad m) => Applicative (Iter t m) where
     a <* b = do r <- a; b >> return r
 
 instance (Monad m) => Monad (Iter t m) where
+    {-# INLINE return #-}
     return a = Iter $ Done a
 
-    m >>= k = Iter $ check . runIter m
-        where check (Done a c)             = runIter (k a) c
+    {-# INLINE (>>=) #-}
+    -- Let's hope we can at least optimize the common case of Done,
+    -- since check calls itself and (>>=) recursively, IterF and IterM
+    -- likely cannot be inlined.
+    m >>= k = Iter $ \c0 -> case runIter m c0 of
+                              (Done a c) -> runIter (k a) c
+                              r          -> check r
+        where check (IterM mm)             = IterM $ mm >>= return . check
               check (IterF i)              = IterF $ i >>= k
-              check (IterM mm)             = IterM $ mm >>= return . check
               check (IterC (CtlArg a n c)) = IterC $ CtlArg a (n >=> k) c
               check (IterFail e c)         = IterFail e c
               check (InumFail e _ c)       = IterFail e c
+              check _                      = error "Iter >>="
+              -- check (Done a c)             = runIter (k a) c
 
     fail msg = Iter $ IterFail (toException $ ErrorCall msg)
 
@@ -437,28 +439,6 @@ throwI e = Iter $ IterFail (toException e)
 -- an 'IOError' of type EOF.
 throwEOFI :: (ChunkData t) => String -> Iter t m a
 throwEOFI = throwI . mkIterEOF
-
-{-
--- | A variant of the monadic '>>=' operator that preserves 'InumFail'
--- conditions.  (@m >>= k@ always translates an 'InumFail' condition
--- in @m@ into an 'IterFail condition.)  In order to pass on the
--- 'InumFail' condition, @bindFail@ requires a conversion function to
--- translate the first monad's return type into the seconds'.
-bindFail :: (ChunkData t, Monad m) =>
-            (a -> b) -> Iter t m a -> (a -> Iter t m b) -> Iter t m b
-bindFail trans m k = onDone check m
-    where check (Done a c)       = runIter (k a) c
-          check (InumFail e a c) = InumFail e (trans a) c
-          check (IterFail e c)   = IterFail e c
-infixl 1 `bindFail`
-
-handleROr :: (Exception e) => IterR t m a -> (e -> b) -> b -> b
-handleROr r h pass = check r
-    where check (IterFail e _)   = tryh e
-          check (InumFail e _ _) = tryh e
-          check _                = pass
-          tryh e = case fromException e of Just e' -> h e'; Nothing -> pass
--}
 
 -- | Run an 'Iter'.  Catch any exception it throws (and return the
 -- failing iter state).  Transform successful results with a function.
@@ -978,19 +958,3 @@ runIterR r c = if null c then r else check r
 reRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
 reRunIter (IterF i) = i
 reRunIter r         = Iter $ runIterR r
-
---
--- Debugging
---
-
--- | For debugging, print a tag along with the current residual input.
--- Not referentially transparent.
-traceInput :: (ChunkData t, Monad m) => String -> Iter t m ()
-traceInput tag = Iter $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
-
--- | For debugging.  Print the current thread ID and a message.  Not
--- referentially transparent.
-traceI :: (ChunkData t, Monad m) => String -> Iter t m ()
-traceI msg = return $ inlinePerformIO $ do
-               tid <- myThreadId
-               putTraceMsg $ show tid ++ ": " ++ msg

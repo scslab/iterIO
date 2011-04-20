@@ -8,7 +8,7 @@ all: $(TARGETS) $(HSCS)
 
 .PHONY: all always clean build dist doc browse install hsc
 
-GHC = ghc $(WALL)
+GHC = ghc $(WALL) -O2
 WALL = -Wall -Werror
 LIBS = -lz
 

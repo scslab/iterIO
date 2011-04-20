@@ -15,6 +15,10 @@ import Data.IterIO.Iter
 import Data.IterIO.Inum
 
 -- | Feeds input to an Iteratee until some boundary string is found.
+-- The boundary string is neither consumed nor passed through to the
+-- target 'Iter'.  (Thus, if the input is at end-of-file after
+-- inumStopString returns, it means the boundary string was never
+-- encountered.)
 inumStopString :: (Monad m) =>
                   S8.ByteString
                -> Inum L8.ByteString L8.ByteString m a
