@@ -63,12 +63,6 @@ type S = S.ByteString
 strictify :: L -> S
 strictify = S.concat . L.toChunks
 
-eord :: (Enum e) => Char -> e
-eord = toEnum . ord
-
-optional :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
-optional iter = skipI iter <|> return ()
-
 --
 -- Basic pieces
 --
@@ -91,11 +85,11 @@ spaces = skipWhile1I (\c -> c == eord ' ' || c == eord '\t')
 --
 -- Parses as a single space
 lws :: (Monad m) => Iter L m L
-lws = optional crlf >> L8.singleton ' ' <$ spaces <?> "linear white space"
+lws = optionalI crlf >> L8.singleton ' ' <$ spaces <?> "linear white space"
 
--- | @olws = 'optional' 'lws'@
+-- | @olws = 'optionalI' 'lws'@
 olws :: (Monad m) => Iter L m ()
-olws = optional lws
+olws = optionalI lws
 
 -- | non-control characters
 noctl :: (Monad m) => Iter L m L
@@ -187,8 +181,8 @@ qvalue = do char 'q'; olws; char '='; olws; frac <|> one
                 char '.' \/ return 0 $ \_ ->
                     whileMinMaxI 0 3 (isDigit . w2c) \/ return 0 $ readI
       one = do char '1'
-               optional $ do char '.'
-                             optional $ whileMinMaxI 0 3 (== eord '0')
+               optionalI $ do char '.'
+                             optionalI $ whileMinMaxI 0 3 (== eord '0')
                return 1000
 -}
 
@@ -372,7 +366,7 @@ absUri = do
   scheme <- strictify <$> satisfy (isAlpha . w2c)
             <:> while1I (rfc3986_test rfc3986_schemechars)
   string "://"
-  optional $ userinfo >> string "@"
+  optionalI $ userinfo >> string "@"
   authority <- hostI
   (path, query) <- pathI
   return (scheme, fst authority, snd authority, path, query)
@@ -488,7 +482,7 @@ request_line = do
   (_, host, mport, path, query) <- uri
   spaces
   (major, minor) <- hTTPvers
-  optional spaces
+  optionalI spaces
   skipI crlf
   return defaultHttpReq {
                  reqMethod = method
@@ -563,7 +557,7 @@ any_hdr req = do
     Nothing -> return req'
     Just f  -> do
       r <- inumPure (L.fromChunks [val]) .|$
-               (f req' <* (optional spaces >> eofI)
+               (f req' <* (optionalI spaces >> eofI)
                       <?> (S8.unpack field ++ " header"))
       return r
 
@@ -605,7 +599,7 @@ inumFromChunks = mkInumM $ getchunk
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
       chunk_ext_val = do char '='; osp; token <|> quoted_string; osp
-      chunk_ext = do char ';'; osp; token; osp; optional chunk_ext_val
+      chunk_ext = do char ';'; osp; token; osp; optionalI chunk_ext_val
       getchunk = do
         size <- hexInt <* (osp >> skipMany chunk_ext >> crlf)
         if size > 0 then ipipe (inumTakeExact size) >> getchunk

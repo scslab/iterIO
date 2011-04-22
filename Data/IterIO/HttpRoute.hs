@@ -1,10 +1,14 @@
-module Data.IterIO.HttpRoute (HttpRoute(..)
-                 , routeConst, routeFn, routeReq
-                 , routeMethod, routeHost, routeTop
-                 , HttpMap, routeMap, routeName, routeVar
-                 ) where
+
+module Data.IterIO.HttpRoute
+    (HttpRoute(..)
+    , routeConst, routeFn, routeReq
+    , routeMethod, routeHost, routeTop
+    , HttpMap, routeMap, routeName, routePath, routeVar
+    , mimeTypesI, routeFileSys
+    ) where
 
 import           Control.Monad
+import           Control.Monad.Trans
 import           Data.Char (toLower)
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
@@ -13,6 +17,10 @@ import           Data.Monoid
 
 import           Data.IterIO
 import           Data.IterIO.Http
+import           Data.IterIO.Parse
+import           System.FilePath
+import           System.IO.Error (isDoesNotExistError)
+import           System.Posix.Files
 
 --
 -- Request routing
@@ -128,6 +136,14 @@ routeName name (HttpRoute route) = HttpRoute check
           check req | headok (reqPathLst req) = route $ popPath False req
           check _                             = Nothing
 
+-- | Routes a specific path, like 'routeName', except that the path
+-- can include several directories.
+routePath :: String -> HttpRoute m -> HttpRoute m
+routePath path route = foldr routeName route dirs
+    where dirs = case splitDirectories path of
+                   "/":t -> t
+                   t     -> t
+
 -- | Matches any directory name, but additionally pushes it onto the
 -- front of the 'reqPathParams' list in the 'HttpReq' structure.  This
 -- allows the name to serve as a variable argument to the eventual
@@ -138,3 +154,83 @@ routeVar (HttpRoute route) = HttpRoute check
                         _:_ -> route $ popPath True req
                         _   -> Nothing
 
+--
+-- Routing to Filesystem
+--
+
+-- | Parses mime.types file data.  Returns a function mapping file
+-- suffixes to mime types.  The argument is a default mime type for
+-- suffixes to do not match any in the mime.types data.  (Reasonable
+-- defaults might be @\"text/html\", @\"text/plain\"@, or, more
+-- pedantically but less usefully, @\"application/octet-stream\"@.)
+--
+-- Since this likely doesn't change, it is convenient just to define
+-- it once in your program, for instance with something like:
+--
+-- > mimeMap :: String -> S8.ByteString
+-- > mimeMap = unsafePerformIO $ do
+-- >             path <- findMimeTypes ["mime.types"
+-- >                                   , "/etc/mime.types"
+-- >                                   , "/var/www/conf/mime.types"]
+-- >             enumFile path |$ mimeTypesI "application/octet-stream"
+-- >     where
+-- >       findMimeTypes (h:t) = do exist <- fileExist h
+-- >                                if exist then return h else findMimeTypes t
+-- >       findMimeTypes []    = return "mime.types" -- cause error
+mimeTypesI :: (Monad m) =>
+              String
+           -> Iter S8.ByteString m (String -> S8.ByteString)
+mimeTypesI deftype = do
+  mmap <- Map.fromList <$> foldrI (++) [] ((mimeLine <|> nil) <* eol)
+  return $ \suffix -> maybe (S8.pack deftype) id $ Map.lookup suffix mmap
+    where
+      mimeLine = do
+        typ <- word
+        foldrI (\a b -> (S8.unpack a, typ):b) [] (space >> word)
+      word = while1I $ \c -> c > eord ' ' && c <= eord '~'
+      space = skipWhile1I $ \c -> c == eord ' ' || c == eord '\t'
+      comment = char '#' >> skipWhileI (/= eord '\n')
+      eol = do
+        optionalI space
+        optionalI comment
+        optionalI (char '\r'); char '\n'
+
+-- | Route a request to a file system directory tree.
+routeFileSys :: (MonadIO m) =>
+                (String -> S8.ByteString)
+             -- ^ Map of file suffixes to mime types (see 'mimeTypesI')
+             -> FilePath
+             -- ^ Default file name to append when the request is for
+             -- a directory (e.g., @\"index.html\"@)
+             -> FilePath
+             -- ^ Pathname of directory to serve from file system
+             -> HttpRoute m
+routeFileSys typemap index dir0 = HttpRoute $ Just . check
+    where dir = if null dir0 then S8.singleton '.' else S8.pack dir0
+          check req = handlerI (err req) $ do
+            let path = S8.unpack $
+                       S8.intercalate (S8.singleton '/') (dir : reqPathLst req)
+            stat <- liftIO $ getFileStatus path
+            case () of
+              _ | isDirectory stat -> return $ resp301 $ mkIndex req
+              _ | isRegularFile stat ->
+                    return $ HttpResp {
+                                 respStatus = stat200
+                               , respHeaders =
+                                   [ S8.append contentLength $
+                                     S8.pack $ show $ fileSize stat
+                                   , S8.append contentType $
+                                     typemap $ fileExt path ]
+                               , respChunk = False
+                               , respBody = enumFile path }
+              _ -> return $ resp404 req
+          contentLength = S8.pack "Content-Length: "
+          contentType = S8.pack "Content-Type: "
+          fileExt str = case takeExtension str of []  -> []; _:t -> t
+          err req e _ = return $ if isDoesNotExistError e then resp404 req
+                                 else resp500 (show e)
+          mkIndex req = context (reqPathCtx req)
+              where context (h:t) = ('/' : S8.unpack h) ++ context t
+                    context []    = path (reqPathLst req)
+                    path (h:t)    = ('/' : S8.unpack h) ++ path t
+                    path []       = '/':index

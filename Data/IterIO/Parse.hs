@@ -7,7 +7,8 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orEmpty, (<?>), expectedI
                          , someI, foldrI, foldr1I, foldrMinMaxI
                          , foldlI, foldl1I, foldMI, foldM1I
-                         , skipI, ensureI
+                         , skipI, optionalI, ensureI
+                         , eord
                          , skipWhileI, skipWhile1I
                          , whileI, while1I, whileMaxI, whileMinMaxI
                          , whileStateI
@@ -256,6 +257,11 @@ foldM1I f z0 iter = iter >>= f z0 >>= \z -> foldMI f z iter
 skipI :: Applicative f => f a -> f ()
 skipI = (() <$)
 
+-- | Execute an iteratee.  Discard the result if it succeeds.  Rewind
+-- the input and suppress the error if it fails.
+optionalI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m ()
+optionalI iter = ifParse iter (const $ return ()) (return ())
+
 -- | Ensures the next input element satisfies a predicate or throws a
 -- parse error.  Does not consume any input.
 ensureI :: (ChunkData t, LL.ListLike t e, Monad m) =>
@@ -270,6 +276,21 @@ ensureI test = do
     where
       showt :: (Monad m, ChunkData t) => t -> Iter t m String
       showt = return . chunkShow
+
+-- | A variant of the standard library 'ord' function, but that
+-- translates a 'Char' into any 'Enum' type, not just 'Int'.
+-- Particularly useful for 'Iter's that must work with both 'String's
+-- (which consist of 'Char's) and ASCII @'ByteString'@s (which consist
+-- of @'Word8'@s).  For example, to skip one or more space or TAB
+-- characters, you can use:
+--
+-- @
+--   skipSpace :: ('LL.ListLike' t e, ChunkData t, 'Eq' e, 'Enum' e, Monad m) =>
+--                'Iter' t m ()
+--   skipSpace = 'skipWhile1I' (\\c -> c == eord ' ' || c == eord '\t')
+-- @
+eord :: (Enum e) => Char -> e
+eord = toEnum . ord
 
 -- | Skip all input elements encountered until an element is found
 -- that does not match the specified predicate.
@@ -544,7 +565,7 @@ satisfy test = do
 -- | Read input that exactly matches a character.
 char :: (ChunkData t, LL.ListLike t e, Eq e, Enum e, Monad m) =>
         Char -> Iter t m e
-char target = satisfy (toEnum (ord target) ==) <?> show target
+char target = satisfy (eord target ==) <?> show target
 
 -- | Read input that exactly matches some target.
 match :: (ChunkData t, LL.ListLike t e, Eq e, Monad m) =>

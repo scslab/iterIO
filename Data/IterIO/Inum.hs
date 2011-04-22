@@ -562,6 +562,23 @@ pullupResid (a, b) = (mappend a b, mempty)
 -- | @inumNop@ passes all data through to the underlying 'Iter'.  It
 -- acts as a no-op when fused to other 'Inum's with '|.' or when fused
 -- to 'Iter's with '.|'.
+--
+-- @inumNop@ is particularly useful for conditionally fusing 'Inum's
+-- together.  Even though most 'Inum's are polymorphic in the return
+-- type, this library does not use the Rank2Types extension, which
+-- means any given 'Inum' must have a specific return type.  Here is
+-- an example of incorrect code:
+--
+-- @
+-- let enum = if debug then base_enum '|.' 'inumStderr' else base_enum -- Error
+-- @
+--
+-- This doesn't work because @base_enum@ cannot have the same type as
+-- @(base_enum |. inumStderr)@.  Instead, you can use the following:
+--
+-- @
+-- let enum = base_enum '|.' if debug then 'inumStderr' else inumNop
+-- @
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = mkInumP dataI
 

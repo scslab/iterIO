@@ -16,9 +16,7 @@ import Data.Monoid
 import qualified Network.Socket as Net
 import qualified OpenSSL as SSL
 import qualified OpenSSL.Session as SSL
-import System.Environment
 import System.IO
-import System.IO.Error (isDoesNotExistError)
 import System.Posix.Files
 
 import Data.IterIO
@@ -26,7 +24,8 @@ import Data.IterIO
 import Data.IterIO.Http
 import Data.IterIO.HttpRoute
 import Data.IterIO.SSL
--- import Data.IterIO.ListLike
+import           System.Directory (getAppUserDataDirectory)
+import           System.IO.Unsafe (unsafePerformIO)
 
 type L = L.ByteString
 
@@ -49,7 +48,7 @@ httpAccept hs = do
   (s, addr) <- Net.accept $ hsListenSock hs
   hPutStrLn stderr (show addr)
   (iter, enum) <- maybe (mkInsecure s) (mkSecure s) (hsSslCtx hs)
-  return $ maybe (iter, enum |. inumhLog undefined)
+  return $ maybe (iter, enum |. inumNop)
                 (\h -> (inumhLog h .| iter, enum |. inumhLog h))
                 (hsLog hs)
   where
@@ -69,44 +68,22 @@ mkServer port mctx = do
   hSetBuffering h NoBuffering
   return $ HttpServer sock mctx (Just h)
 
-toPath :: [S8.ByteString] -> String
-toPath = concatMap (('/':) . S8.unpack)
+mimeMap :: String -> S8.ByteString
+mimeMap = unsafePerformIO $ do
+            path <- findMimeTypes ["mime.types"
+                                  , "/etc/mime.types"
+                                  , "/var/www/conf/mime.types"]
+            enumFile path |$ mimeTypesI "application/octet-stream"
+    where
+      findMimeTypes (h:t) = do exist <- fileExist h
+                               if exist then return h else findMimeTypes t
+      findMimeTypes []    = return "mime.types" -- cause error
 
-serve_cabal :: (MonadIO m) => HttpReq -> Iter L m (HttpResp m)
-serve_cabal req = do
-  home <- liftIO $ getEnv "HOME"
-  let urlpath = toPath (reqPathLst req)
-  let path = home ++ "/.cabal/share/doc" ++ urlpath
-  estat <- liftIO $ try $ getFileStatus path
-  case estat :: Either IOError FileStatus of
-    Left e | isDoesNotExistError e -> return $ resp404 req
-    Left e                         -> return $ resp500 $ show e
-    Right stat | isDirectory stat ->
-                   return $ resp301 $ toPath $
-                          reqPathCtx req ++ reqPathLst req ++ ["index.html"]
-    _ -> do
-       h <- liftIO $ openBinaryFile path ReadMode
-       return (defaultHttpResp :: HttpResp IO) {
-                     respStatus = stat200
-                   , respHeaders = [contentType path]
-                   , respBody = enumNonBinHandle h
-                                `inumFinally` liftIO (hClose h) }
+cabal_dir :: String
+cabal_dir = (unsafePerformIO $ getAppUserDataDirectory "cabal") ++ "/share/doc"
 
-fileExt :: String -> String
-fileExt str = case dropWhile (/= '.') str of
-                []  -> str
-                _:t -> fileExt t
-
-contentType :: String -> S8.ByteString
-contentType file = S8.pack $ "Content-Type: " ++
-                   case fileExt file of
-                     "css"  -> "text/css"
-                     "png"  -> "image/png"
-                     "gif"  -> "image/gif"
-                     "jpg"  -> "image/jpeg"
-                     "jpeg" -> "image/jpeg"
-                     "pdf " -> "application/pdf"
-                     _      -> "text/html"
+serve_cabal :: (MonadIO m) => HttpRoute m
+serve_cabal = routeFileSys mimeMap "index.html" cabal_dir
 
 accept_loop :: HttpServer -> IO ()
 accept_loop srv = loop
@@ -117,7 +94,8 @@ accept_loop srv = loop
         loop
       handler req = fromMaybe (return $ resp404 req) $ runHttpRoute route req
       route = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
-                      , routeName "cabal" $ routeFn serve_cabal
+                      , routeName "cabal" $ serve_cabal
+                      , routePath cabal_dir $ serve_cabal
                       ]
 
 main :: IO ()
@@ -135,4 +113,4 @@ main = Net.withSocketsDo $ SSL.withOpenSSL $ do
   waitQSem sem
     where
       privkey = "testkey.pem"
-      secure = True
+      secure = False
