@@ -14,13 +14,15 @@ import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.Map as Map
 import           Data.Monoid
+import           Data.Time (UTCTime)
+import           Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import           System.FilePath
+import           System.IO.Error (isDoesNotExistError)
+import           System.Posix.Files
 
 import           Data.IterIO
 import           Data.IterIO.Http
 import           Data.IterIO.Parse
-import           System.FilePath
-import           System.IO.Error (isDoesNotExistError)
-import           System.Posix.Files
 
 --
 -- Request routing
@@ -195,7 +197,12 @@ mimeTypesI deftype = do
         optionalI comment
         optionalI (char '\r'); char '\n'
 
--- | Route a request to a file system directory tree.
+modTimeUTC :: FileStatus -> UTCTime
+modTimeUTC = posixSecondsToUTCTime . realToFrac . modificationTime
+
+-- | Route a request to a file system directory tree.  Bad things can
+-- happen if the directory tree is modified while this function is
+-- running.
 routeFileSys :: (MonadIO m) =>
                 (String -> S8.ByteString)
              -- ^ Map of file suffixes to mime types (see 'mimeTypesI')
@@ -205,32 +212,37 @@ routeFileSys :: (MonadIO m) =>
              -> FilePath
              -- ^ Pathname of directory to serve from file system
              -> HttpRoute m
-routeFileSys typemap index dir0 = HttpRoute $ Just . check
-    where dir = if null dir0 then S8.singleton '.' else S8.pack dir0
-          check req = handlerI (err req) $ do
-            let path = S8.unpack $
-                       S8.intercalate (S8.singleton '/') (dir : reqPathLst req)
-            stat <- liftIO $ getFileStatus path
-            case () of
-              _ | isDirectory stat -> return $ resp301 $ mkIndex req
-              _ | isRegularFile stat ->
-                    return $ HttpResp {
-                                 respStatus = stat200
-                               , respHeaders =
-                                   [ S8.append contentLength $
-                                     S8.pack $ show $ fileSize stat
-                                   , S8.append contentType $
-                                     typemap $ fileExt path ]
-                               , respChunk = False
-                               , respBody = enumFile path }
-              _ -> return $ resp404 req
-          contentLength = S8.pack "Content-Length: "
-          contentType = S8.pack "Content-Type: "
-          fileExt str = case takeExtension str of []  -> []; _:t -> t
-          err req e _ = return $ if isDoesNotExistError e then resp404 req
-                                 else resp500 (show e)
-          mkIndex req = context (reqPathCtx req)
-              where context (h:t) = ('/' : S8.unpack h) ++ context t
-                    context []    = path (reqPathLst req)
-                    path (h:t)    = ('/' : S8.unpack h) ++ path t
-                    path []       = '/':index
+routeFileSys typemap idx dir0 = HttpRoute $ Just . check
+    where
+      dir = if null dir0 then "." else dir0
+      check req = do
+        let path = dir ++ concatMap (('/' :) . S8.unpack) (reqPathLst req)
+        estat <- tryI $ liftIO $ getFileStatus path
+        case estat of
+          Right st | isRegularFile st -> doFile req path st
+                   | isDirectory st -> return $ resp301 $
+                                       S8.unpack (reqNormalPath req) ++ '/':idx
+                   | otherwise -> return $ resp404 req
+          Left (e,_ ) | isDoesNotExistError e -> return $ resp404 req
+                      | otherwise             -> return $ resp500 (show e)
+      doFile req path st
+          | reqMethod req == S8.pack "GET"
+            && maybe True (< (modTimeUTC st)) (reqIfModifiedSince req) =
+              return $ resp { respBody = enumFile path }
+          | reqMethod req == S8.pack "GET" =
+              return $ resp { respStatus = stat304 }
+          | reqMethod req == S8.pack "HEAD" =
+              return $ resp { respStatus = stat200 }
+          | otherwise = return $ resp405 req
+          where resp = defaultHttpResp { respChunk = False
+                                       , respHeaders = mkHeaders req st }
+                                            
+      mkHeaders req st =
+          [ S8.pack $ "Last-Modified: " ++ (http_fmt_time $ modTimeUTC st)
+          , S8.pack $ "Content-Length: " ++ (show $ fileSize st)
+          , S8.pack "Content-Type: " `S8.append` typemap (fileExt req) ]
+      fileExt req =
+          case reqPathLst req of
+            [] -> []
+            l  -> case takeExtension (S8.unpack $ last l) of [] -> []; _:t -> t
+

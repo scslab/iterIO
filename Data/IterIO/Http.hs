@@ -2,7 +2,7 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
 module Data.IterIO.Http (-- * HTTP Request support
-                         HttpReq(..)
+                         HttpReq(..), reqNormalPath
                         , httpReqI, inumHttpBody
                         , inumToChunks, inumFromChunks
                         , http_fmt_time, dateI
@@ -12,10 +12,11 @@ module Data.IterIO.Http (-- * HTTP Request support
                         -- * HTTP Response support
                         , HttpStatus(..)
                         , stat100, stat200, stat301, stat302, stat303, stat304
-                        , stat400, stat401, stat403, stat404, stat500, stat501
+                        , stat400, stat401, stat403, stat404, stat405
+                        , stat500, stat501
                         , HttpResp(..), defaultHttpResp
                         , mkHttpHead, mkHtmlResp, mkContentLenResp, mkOnumResp
-                        , resp301, resp303, resp404, resp500
+                        , resp301, resp303, resp404, resp405, resp500
                         , enumHttpResp
                         -- * HTTP connection handling
                         , HttpRequestHandler
@@ -445,6 +446,7 @@ data HttpReq = HttpReq {
     -- ^ Value of the content-Length header, if any.
     , reqTransferEncoding :: ![S.ByteString]
     -- ^ A list of the encodings in the Transfer-Encoding header.
+    , reqIfModifiedSince :: !(Maybe UTCTime)
     } deriving (Typeable, Show)
 
 defaultHttpReq :: HttpReq
@@ -462,7 +464,17 @@ defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqContentType = Nothing
                          , reqContentLength = Nothing
                          , reqTransferEncoding = []
+                         , reqIfModifiedSince = Nothing
                          }
+
+-- | Returns a normalized version of the path in the URL (e.g., where
+-- @\".\"@ has been eliminated, @\"..\"@ has been processed, there is
+-- exactly one @\'/\'@ between each directory component, and the query
+-- has been stripped off).
+reqNormalPath :: HttpReq -> S.ByteString
+reqNormalPath rq =
+    S.intercalate slash $ S.empty : reqPathCtx rq ++ reqPathLst rq
+    where slash = S8.singleton '/'
 
 hTTPvers :: (Monad m) => Iter L m (Int, Int)
 hTTPvers = do
@@ -503,6 +515,7 @@ request_headers = Map.fromList $
     , ("Content-Type", content_type_hdr)
     , ("Content-Length", content_length_hdr)
     , ("Transfer-Encoding", transfer_encoding_hdr)
+    , ("If-Modified-Since", if_modified_since_hdr)
     ]
 
 host_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
@@ -540,6 +553,11 @@ transfer_encoding_hdr req = do
       skipMany $ olws >> char ';' >> parameter
       return coding
 
+if_modified_since_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+if_modified_since_hdr req = do
+  modtime <- dateI
+  return req { reqIfModifiedSince = Just modtime }
+
 hdr_field_val :: (Monad m) => Iter L m (S, S)
 hdr_field_val = do
   field <- S8.map toLower <$> token
@@ -571,8 +589,7 @@ httpReqI = do
   -- it should ignore the CRLF."
   skipMany crlf
   (request_line >>= next_hdr) <* crlf
-    where
-      next_hdr req = seq req $ any_hdr req \/ return req $ next_hdr
+    where next_hdr req = seq req $ any_hdr req \/ return req $ next_hdr
 
 
 --
@@ -741,12 +758,11 @@ foldForm req = case reqContentType req of
 --       name/value pairs are separated from each other by `&'.
 --
 -- RFC 1738 says:
---
 --   ...only alphanumerics, the special characters "$-_.+!*'(),", and
 --   reserved characters used for their reserved purposes may be used
 --   unencoded within a URL.
 --
--- On the other hand, RFC 2986 says the following are reserved:
+-- On the other hand, RFC 3986 says the following are reserved:
 --   :/?#[]@!$&'()*+,;=
 --
 -- And that the only unreserved characters are:
@@ -906,7 +922,7 @@ fmtStat (HttpStatus n s) = L.fromChunks [
 
 stat100, stat200
            , stat301, stat302, stat303, stat304
-           , stat400, stat401, stat403, stat404
+           , stat400, stat401, stat403, stat404, stat405
            , stat500, stat501 :: HttpStatus
 stat100 = mkStat 100 "Continue"
 stat200 = mkStat 200 "OK"
@@ -918,6 +934,7 @@ stat400 = mkStat 400 "Bad Request"
 stat401 = mkStat 401 "Unauthorized"
 stat403 = mkStat 403 "Forbidden"
 stat404 = mkStat 404 "Not Found"
+stat405 = mkStat 405 "Method not allowed"
 stat500 = mkStat 500 "Internal Server Error"
 stat501 = mkStat 501 "Not Implemented"
 
@@ -1062,8 +1079,25 @@ resp404 req = mkHtmlResp stat404 html
                   \</HEAD><BODY>\n\
                   \<H1>Not Found</H1>\n\
                   \<P>The requested URL "
-                 , htmlEscape $ concatMap (('/':) . S8.unpack) (reqPathLst req)
+                 , htmlEscape $ S8.unpack (reqNormalPath req)
                  , L8.pack " was not found on this server.</P>\n\
+                           \</BODY></HTML>\n"]
+
+-- | Generate a 404 (method not allowed) response.
+resp405 :: (Monad m) => HttpReq -> HttpResp m
+resp405 req = mkHtmlResp stat405 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>405 Method Not Allowed</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>Method Not Allowed</H1>\n\
+                  \<P>The requested method "
+                 , L.fromChunks [reqMethod req]
+                 , L8.pack " is not allowed for the URL "
+                 , htmlEscape $ S8.unpack (reqNormalPath req)
+                 , L8.pack ".</P>\n\
                            \</BODY></HTML>\n"]
 
 -- | Generate a 500 (internal server error) response.
