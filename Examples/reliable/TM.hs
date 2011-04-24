@@ -9,11 +9,6 @@ import Data.Word
 import Network.Socket
 
 import Arc4
-import Data.IterIO.Extra
-
-sendStr :: (SendRecvString t) => Socket -> t -> IO Int
-sendStr s t = genSendTo s t Nothing
-
 
 data ServerProc = ServerProc {
       spAddr :: SockAddr

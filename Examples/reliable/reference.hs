@@ -76,8 +76,8 @@ pktPut = safeHeadI >>= process
           | otherwise      = liftIO (L.hPut stdout payload) >> pktPut
       process _            = pktPut
 
-sendStr :: (SendRecvString t) => Socket -> t -> IO Int
-sendStr s t = genSendTo s t Nothing
+-- sendStr :: (SendRecvString t) => Socket -> t -> IO Int
+-- sendStr s t = genSendTo s t Nothing
 
 test :: Bool -> Int -> SeqNo -> SockAddr -> SockAddr -> IO ()
 test d t w l r = do
@@ -90,7 +90,7 @@ test d t w l r = do
   hPutStrLn stderr $ "[listening on UDP port " ++ show port ++ "]"
   connect_fix sock r
   ep <- newEndpoint w t
-  let sender' = sendI $ liftIO . sendStr sock
+  let sender' = sendI $ liftIO . genSend sock
       sender = if d then rawPktPrint "send " .| sender' else sender'
       receiver' = enumDgram sock
       receiver = if d then receiver' |. rawPktPrint "recv " else receiver'

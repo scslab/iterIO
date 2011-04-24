@@ -194,11 +194,10 @@ sockDgramI :: (MonadIO m, SendRecvString t) =>
               Socket
            -> Maybe SockAddr
            -> Iter [t] m ()
-sockDgramI s mdest = do
-  mpkt <- safeHeadI
-  case mpkt of
-    Nothing  -> return ()
-    Just pkt -> liftIO (genSendTo s pkt mdest) >> sockDgramI s mdest
+sockDgramI s mdest = loop
+    where sendit = case mdest of Nothing   -> liftIO . genSend s
+                                 Just dest -> liftIO . flip (genSendTo s) dest
+          loop = safeHeadI >>= maybe (return ()) (\str -> sendit str >> loop)
 
 -- | An 'Iter' that uses 'LL.hPutStr' to write all output to 'stdout'.
 stdoutI :: (LL.ListLikeIO t e, ChunkData t, MonadIO m) => Iter t m ()
@@ -239,19 +238,28 @@ fileCtl h = (mkFlushCtl $ \(SeekC mode pos) -> liftIO (hSeek h mode pos))
             offset <- liftIO $ hTell h
             return $ runIter (n $ offset - LL.genericLength t) c
 
+{-
+data PeerNameC = PeerNameC
+instance CtlCmd SockNameC SockAddr
+
+data GetSocketC = GetSocketC
+instance CtlCmd GetSocketC Socket
+-}
+
 --
 -- Onums
 --
 
--- | Read datagrams from a socket and feed a list of strings (one for
--- each datagram) into an Iteratee.
+-- | Read datagrams (of up to 64KiB in size) from a socket and feed a
+-- list of strings (one for each datagram) into an Iteratee.
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> Onum [t] m a
 enumDgram sock = mkInumM $ irepeat $ do
-  (msg, r, _) <- liftIO $ genRecvFrom sock 0x10000
-  if r < 0 then throwEOFI "enumDgram" else ifeed [msg]
-
+  msg <- mapExceptionI
+         (\e -> mkIterEOF $ "enumDgram: " ++ show (e :: IOError))
+         (liftIO $ genRecv sock 0x10000)
+  ifeed [msg]
 
 -- | Read datagrams from a socket and feed a list of (Bytestring,
 -- SockAddr) pairs (one for each datagram) into an Iteratee.
@@ -259,8 +267,10 @@ enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> Onum [(t, SockAddr)] m a
 enumDgramFrom sock = mkInumM $ irepeat $ do
-  (msg, r, addr) <- liftIO $ genRecvFrom sock 0x10000
-  if r < 0 then throwEOFI "enumDgramFrom" else ifeed [(msg, addr)]
+  (msg, addr) <- mapExceptionI
+                 (\e -> mkIterEOF $ "enumDgram: " ++ show (e :: IOError))
+                 (liftIO $ genRecvFrom sock 0x10000)
+  ifeed [(msg, addr)]
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.

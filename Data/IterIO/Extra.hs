@@ -1,19 +1,17 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# OPTIONS_GHC -cpp #-}
 
 -- | This module contains miscellaneous functions plus a few pieces of
 -- functionality that are missing from the standard Haskell libraries.
 module Data.IterIO.Extra
     ( -- * Miscellaneous
-      -- chunkerToCodec
       iterLoop
     , inumSplit
     -- , fixIterPure
       -- * Functionality missing from system libraries
     , SendRecvString(..)
     , hShutdown
-    -- * Misc debugging functions
+    -- * Debugging functions
     , traceInput, traceI
     ) where
 
@@ -25,48 +23,25 @@ import Data.ByteString.Internal (inlinePerformIO)
 import Data.Monoid
 import Debug.Trace
 import Foreign.C
-import Foreign.Ptr
 import qualified Data.ByteString as S
-import qualified Data.ByteString.Internal as S
-import qualified Data.ByteString.Unsafe as S
+import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import Network.Socket
+import Network.Socket.ByteString as S
+import Network.Socket.ByteString.Lazy as L
 import System.IO
 
 import Data.IterIO.Iter
 import Data.IterIO.Inum
 
-#if __GLASGOW_HASKELL__ <= 611
-import Control.Concurrent.MVar
-import GHC.IOBase (Handle(..), Handle__(..))
-#else /* __GLASGOW_HASKELL__ >= 612 */
 import Data.Typeable
 import System.IO.Error
 import GHC.IO.FD (FD(..))
 import GHC.IO.Handle.Types (Handle__(..))
 import GHC.IO.Handle.Internals (wantWritableHandle)
-#endif /* __GLASGOW_HASKELL__ >= 612 */
 
-foreign import ccall unsafe "sys/socket.h send"
-  c_send :: CInt -> Ptr a -> CSize -> CInt -> IO CInt
 foreign import ccall unsafe "sys/socket.h shutdown"
   c_shutdown :: CInt -> CInt -> IO CInt
-
---
--- Deprecated
---
-
-{-
--- | Creates a 'Codec' from an 'Iter' that returns 'Chunk's.  The
--- 'Codec' returned will keep offering to translate more input until
--- The 'Iter' returns a 'Chunk' with the EOF bit set.
-chunkerToCodec :: (ChunkData t, Monad m) => Iter t m (Chunk a) -> Codec t m a
-chunkerToCodec iter = do
-  Chunk d eof <- iter
-  if eof
-   then return $ CodecE d
-   else return $ CodecF (chunkerToCodec iter) d
--}
 
 -- | Create a loopback @('Iter', 'Onum')@ pair.  The iteratee and
 -- enumerator can be used in different threads.  Any data fed into the
@@ -91,20 +66,16 @@ iterLoop = do
                                   Just c' -> mappend c' c
              if eof then return () else iter mv
 
+      -- Note the ifeed mempty, which is there in case the enum feeds
+      -- an iter that starts with a liftIO or something, and the other
+      -- half of the loopback interface waits for the result of that
+      -- liftIO to start producing data.
       enum mv = mkInumM (ifeed mempty >> loop)
           where loop = do p <- liftIO $ readMVar mv
                           Chunk t eof <- liftIO $ takeMVar p
                           done <- ifeed t
                           when (not $ eof || done) loop
                   
-{-
-      enum mv = let codec = do
-                      p <- liftIO $ readMVar mv
-                      Chunk c eof <- liftIO $ takeMVar p
-                      return $ if eof then CodecE c else CodecF codec c
-                in mkInum codec
--}
-
 -- | Returns an 'Iter' that always returns itself until a result is
 -- produced.  You can fuse @inumSplit@ to an 'Iter' to produce an
 -- 'Iter' that can safely be fed (e.g., with 'enumPure') from multiple
@@ -188,41 +159,35 @@ fixIterPure f = IterM $ mfix ff
 --
 
 -- | @SendRecvString@ is the class of string-like objects that can be
--- used with datagram sockets.  The 'genSendTo' method works around a
--- bug in the standard Haskell libraries that makes it hard to use
--- connected datagram sockets.  'genSendTo' accepts 'Nothing' as a
+-- used with datagram sockets.  'genSendTo' accepts 'Nothing' as a
 -- destination address and then calls the @send@ (rather than
 -- @sendto@) system call.
 class (Show t) => SendRecvString t where
-    genRecvFrom :: Socket -> Int -> IO (t, Int, SockAddr)
-    genSendTo :: Socket -> t -> Maybe SockAddr -> IO Int
+    genRecv     :: Socket -> Int -> IO t
+    genSend     :: Socket -> t -> IO ()
+    genRecvFrom :: Socket -> Int -> IO (t, SockAddr)
+    genSendTo   :: Socket -> t -> SockAddr -> IO ()
 
 instance SendRecvString [Char] where
-    genRecvFrom s len = recvFrom s len
-    genSendTo s str Nothing = send s str
-    genSendTo s str (Just dest) = sendTo s str dest
+    genRecv s len        = liftM S8.unpack $ S.recv s len
+    genSend s str        = S.sendAll s (S8.pack str)
+    genRecvFrom s len    = do (str, a) <- S.recvFrom s len
+                              return (S8.unpack str, a)
+    genSendTo s str dest = S.sendAllTo s (S8.pack str) dest
 
 instance SendRecvString S.ByteString where
-    genRecvFrom s len = do
-      (str, (r, addr)) <- S.createAndTrim' (max 0 len) callRecv
-      return (str, r, addr)
-        where
-          callRecv ptr = do (r, addr) <- recvBufFrom s ptr len
-                            return (0, max r 0, (r, addr))
-    genSendTo (MkSocket s _ _ _ _) str Nothing = do
-      r <- S.unsafeUseAsCStringLen str $
-           \(p, n) -> c_send s p (fromIntegral n) 0
-      return $ fromIntegral r
-    genSendTo s str (Just dest) = do
-      S.unsafeUseAsCStringLen str $ \(p, n) -> sendBufTo s p n dest
+    genRecv s len        = S.recv s len
+    genSend s str        = S.sendAll s str
+    genRecvFrom s len    = S.recvFrom s len
+    genSendTo s str dest = S.sendAllTo s str dest
 
 instance SendRecvString L.ByteString where
-    genRecvFrom s len = do
-      (str, r, addr) <- genRecvFrom s len
-      return (L.fromChunks [str], r, addr)
-    -- XXX should to sendTo in terms of sendmsg to use iovecs
-    genSendTo s str mdest = genSendTo s (S.concat $ L.toChunks str) mdest
-
+    genRecv s len        = do str <- S.recv s len
+                              return $ L.fromChunks [str]
+    genSend s str        = L.sendAll s str
+    genRecvFrom s len    = do (str, a) <- S.recvFrom s len
+                              return (L.fromChunks [str], a)
+    genSendTo s str dest = S.sendManyTo s (L.toChunks str) dest
 
 -- | Flushes a file handle and calls the /shutdown/ system call so as
 -- to write an EOF to a socket while still being able to read from it.
@@ -232,15 +197,6 @@ instance SendRecvString L.ByteString where
 -- TCP FIN segment), but the 'Onum' may still be reading from the
 -- socket in a different thread.
 hShutdown                            :: Handle -> CInt -> IO Int
-
-#if __GLASGOW_HASKELL__ <= 611
-hShutdown h@(FileHandle _ m) how     = hFlush h >> hShutdown' m how
-hShutdown h@(DuplexHandle _ _ m) how = hFlush h >> hShutdown' m how
-hShutdown'       :: MVar Handle__ -> CInt -> IO Int
-hShutdown' m how = do withMVar m $ \(Handle__ { haFD = fd }) ->
-                          liftM fromIntegral $ c_shutdown (fromIntegral fd) how
-
-#else /* __GLASGOW_HASKELL__ >= 612 */
 hShutdown h how = do
   hFlush h
   wantWritableHandle "hShutdown" h $ \Handle__ {haDevice = dev} ->
@@ -250,8 +206,6 @@ hShutdown h how = do
                             (mkIOError illegalOperationErrorType
                              "hShutdown" (Just h) Nothing) 
                             "handle is not a file descriptor")
-
-#endif /* __GLASGOW_HASKELL__ >= 612 */
   
 --
 -- Debugging

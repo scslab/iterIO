@@ -13,7 +13,7 @@ import System.Time
 import TM
 import Arc4
 import Data.IterIO
--- import Data.IterIO.Extra
+import Data.IterIO.Extra
 
 type NetSim a = Inum [L.ByteString] [L.ByteString] TM a
 type NetSimM = Iter [L.ByteString] TM
@@ -22,7 +22,7 @@ udpI :: (MonadIO m) => Socket -> Iter [L.ByteString] m ()
 udpI s = do
   _ <- error "udpI"
   packet <- headI
-  _ <- liftIO $ sendStr s packet
+  liftIO $ genSend s packet
   udpI s
 
 rndBoolI :: Float -> NetSimM Bool

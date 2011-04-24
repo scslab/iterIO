@@ -26,7 +26,7 @@ import Text.Printf
 -- import Debug.Trace
 
 import Data.IterIO
-import Data.IterIO.Extra (iterLoop)
+import Data.IterIO.Extra
 import Data.IterIO.Iter (run)
 
 import Arc4
@@ -180,7 +180,7 @@ spawnOrConnect = do
            liftIO $ connect udpSock $ spAddr server
            mvh <- liftIO $ newEmptyMVar
            return $ Target (enumDgram udpSock)
-                      (sendI $ liftIO . sendStr udpSock)
+                      (sendI $ liftIO . genSend udpSock)
                       (enumAccept (spListenSock server) mvh)
                       (iterMVH mvh)
                       (sClose udpSock)
@@ -214,7 +214,7 @@ spawnTarget = do
     connect_fix udpSock peer
     hSetBuffering inout NoBuffering
     when gdb $ notify (head targ) ph
-    return $ Target (enumDgram udpSock) (sendI $ liftIO . sendStr udpSock)
+    return $ Target (enumDgram udpSock) (sendI $ liftIO . genSend udpSock)
               (enumHandle inout) (handleI inout)
               (kill ph 15 >> hClose inout >> sClose udpSock)
 
