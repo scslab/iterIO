@@ -11,7 +11,6 @@ import Control.Monad.Trans
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 -- import qualified Data.ByteString.Lazy.Char8 as L8
-import Data.Maybe (fromMaybe)
 import Data.Monoid
 import qualified Network.Socket as Net
 import qualified OpenSSL as SSL
@@ -92,10 +91,12 @@ accept_loop srv = loop
         (iter, enum) <- httpAccept srv
         _ <- forkIO $ enum |$ inumHttpServer (ioHttpServer handler) .| iter
         loop
-      handler req = fromMaybe (return $ resp404 req) $ runHttpRoute route req
+      handler = runHttpRoute route
       route = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
                       , routeName "cabal" $ serve_cabal
                       , routePath cabal_dir $ serve_cabal
+                      , routePath "/usr/share/doc/ghc/html"
+                        $ routeFileSys mimeMap "" "/usr/share/doc/ghc/html"
                       ]
 
 main :: IO ()

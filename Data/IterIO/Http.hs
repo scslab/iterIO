@@ -16,7 +16,7 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , stat500, stat501
                         , HttpResp(..), defaultHttpResp
                         , mkHttpHead, mkHtmlResp, mkContentLenResp, mkOnumResp
-                        , resp301, resp303, resp404, resp405, resp500
+                        , resp301, resp303, resp403, resp404, resp405, resp500
                         , enumHttpResp
                         -- * HTTP connection handling
                         , HttpRequestHandler
@@ -236,7 +236,7 @@ rfc822_time = do
   weekdayI
   char ','
   spaces
-  mday <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Day of Month"
+  mday <- whileMinMaxI 1 2 (isDigit . w2c) >>= readI <?> "Day of Month"
   spaces
   month <- monthI
   spaces
@@ -388,12 +388,11 @@ uri = absUri
 
 -- | Turn a path into a list of components
 path2list :: S -> [S]
-path2list path = runIdentity $ inumPure path |$
-                 slash [] `catchI` \(IterNoParse _) _ -> return []
+path2list path = runIdentity $ inumPure path |$ (slash [] <?> "absolute path")
     where
       slash acc = while1I (eord '/' ==) \/ eofI *> return (reverse acc) $
                   const $ comp acc
-      comp acc  = do n <- while1I (eord '/' /=)
+      comp acc  = while1I (eord '/' /=) \/ return (reverse acc) $ \n ->
                      case () of
                        () | n == S8.pack "." -> slash acc
                        () | n == S8.pack ".." ->
@@ -467,10 +466,11 @@ defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqIfModifiedSince = Nothing
                          }
 
--- | Returns a normalized version of the path in the URL (e.g., where
--- @\".\"@ has been eliminated, @\"..\"@ has been processed, there is
--- exactly one @\'/\'@ between each directory component, and the query
--- has been stripped off).
+-- | Returns a normalized version of the full requested path
+-- (including all context in 'reqCtx') in the URL (e.g., where @\".\"@
+-- has been eliminated, @\"..\"@ has been processed, there is exactly
+-- one @\'/\'@ between each directory component, and the query has
+-- been stripped off).
 reqNormalPath :: HttpReq -> S.ByteString
 reqNormalPath rq =
     S.intercalate slash $ S.empty : reqPathCtx rq ++ reqPathLst rq
@@ -1067,6 +1067,21 @@ resp303 target =
                   \<P>The document has moved <A HREF=\""
                  , htmlEscape target
                  , L8.pack "\">here</A>.</P>\n"]
+
+-- | Generate a 403 (forbidden) response.
+resp403 :: (Monad m) => HttpReq -> HttpResp m
+resp403 req = mkHtmlResp stat403 html
+    where html = L8.concat
+                 [L8.pack
+                  "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
+                  \<HTML><HEAD>\n\
+                  \<TITLE>403 Forbidden</TITLE>\n\
+                  \</HEAD><BODY>\n\
+                  \<H1>Forbidden</H1>\n\
+                  \<P>You don't have permission to access "
+                 , htmlEscape $ S8.unpack (reqNormalPath req)
+                 , L8.pack " on this server.</P>\n\
+                           \</BODY></HTML>\n"]
 
 -- | Generate a 404 (not found) response.
 resp404 :: (Monad m) => HttpReq -> HttpResp m

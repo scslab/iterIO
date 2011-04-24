@@ -1,6 +1,7 @@
 
 module Data.IterIO.HttpRoute
     (HttpRoute(..)
+    , runHttpRoute
     , routeConst, routeFn, routeReq
     , routeMethod, routeHost, routeTop
     , HttpMap, routeMap, routeName, routePath, routeVar
@@ -13,12 +14,15 @@ import           Data.Char (toLower)
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.Map as Map
+import           Data.Maybe
 import           Data.Monoid
 import           Data.Time (UTCTime)
 import           Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import           System.FilePath
+import           System.IO
 import           System.IO.Error (isDoesNotExistError)
 import           System.Posix.Files
+import           System.Posix.IO
 
 import           Data.IterIO
 import           Data.IterIO.Http
@@ -39,20 +43,32 @@ import           Data.IterIO.Parse
 -- > simpleServer :: Iter L.ByteString IO ()  -- Output to web browser
 -- >              -> Onum L.ByteString IO ()  -- Input from web browser
 -- >              -> IO ()
--- > simpleServer iter enum = enum |$ inumHttpServer routing .| iter
--- >     where routing = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
--- >                             , routeName "cabal" $ routeFn serve_cabal
+-- > simpleServer iter enum = enum |$ inumHttpServer server .| iter
+-- >     where htdocs = "/var/www/htdocs"
+-- >           server = ioHttpServer $ runHttpRoute routing
+-- >           routing = mconcat [ routeTop $ routeConst $ resp301 "/start.html"
+-- >                             , routeName "apps" $ routeMap apps
+-- >                             , routeFileSys mimeMap "index.html" htdocs
 -- >                             ]
+-- >           apps = [ ("app1", routeFn app1)
+-- >                  , ("app2", routeFn app2) ]
+-- > 
+-- > app1 :: (Monad m) => HttpReq -> Iter L.ByteString m (HttpResp m)
+-- > app1 = ...
 --
 -- The above function will redirect requests for @/@ to the URL
--- @/cabal@ using an HTTP 301 (Moved Permanently) response.  Any
--- request for a path under @/cabal/@ will then have the first
--- component (@\"cabal\"@) stripped from 'reqPathLst', have that same
--- component added to 'reqPathCtx', and finally be routed to the
--- function @serve_cabal@.
-data HttpRoute m = HttpRoute {
-      runHttpRoute :: !(HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
-    }
+-- @/start.html@ using an HTTP 301 (Moved Permanently) response.  Any
+-- request for a path under @/apps/@ will be redirected to the
+-- functions @app1@, @app2@, etc.  Finally, any other file name will
+-- be served out of the file system under the @\"\/var\/www\/htdocs\"@
+-- directory.  (This example assumes @mimeMap@ has been constructed as
+-- discussed for 'mimeTypesI'.)
+data HttpRoute m =
+    HttpRoute !(HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
+
+runHttpRoute :: (Monad m) =>
+                HttpRoute m -> HttpReq -> Iter L.ByteString m (HttpResp m)
+runHttpRoute (HttpRoute route) rq = fromMaybe (return $ resp404 rq) $ route rq
 
 instance Monoid (HttpRoute m) where
     mempty = HttpRoute $ const Nothing
@@ -115,9 +131,18 @@ routeMethod method (HttpRoute route) = HttpRoute check
 type HttpMap m = [(String, HttpRoute m)]
 
 -- | @routeMap@ builds an efficient map out of a list of
--- @(directory_name, 'HttpRoute')@ pairs.
-routeMap :: HttpMap m -> HttpRoute m
-routeMap lst = HttpRoute check
+-- @(directory_name, 'HttpRoute')@ pairs.  It matches all requests and
+-- returns a 404 error if there is a request for a name not present in
+-- the map.
+routeMap :: (Monad m) => HttpMap m -> HttpRoute m
+routeMap lst = routeMap' lst `mappend` routeFn (return . resp404)
+
+-- | @routeMap@ is like @routeMap'@, but only matches names that exist
+-- in the map.  Thus, multiple @routeMap'@ results can be combined
+-- with 'mappend'.  By contrast, combining @routeMap@ results with
+-- 'mappend' is useless--the first one will match all requests.
+routeMap' :: HttpMap m -> HttpRoute m
+routeMap' lst = HttpRoute check
     where
       check req = case reqPathLst req of
                     h:_ -> maybe Nothing
@@ -160,11 +185,11 @@ routeVar (HttpRoute route) = HttpRoute check
 -- Routing to Filesystem
 --
 
--- | Parses mime.types file data.  Returns a function mapping file
+-- | Parses @mime.types@ file data.  Returns a function mapping file
 -- suffixes to mime types.  The argument is a default mime type for
 -- suffixes to do not match any in the mime.types data.  (Reasonable
--- defaults might be @\"text/html\", @\"text/plain\"@, or, more
--- pedantically but less usefully, @\"application/octet-stream\"@.)
+-- defaults might be @\"text\/html\"@, @\"text\/plain\"@, or, more
+-- pedantically but less usefully, @\"application\/octet-stream\"@.)
 --
 -- Since this likely doesn't change, it is convenient just to define
 -- it once in your program, for instance with something like:
@@ -200,35 +225,48 @@ mimeTypesI deftype = do
 modTimeUTC :: FileStatus -> UTCTime
 modTimeUTC = posixSecondsToUTCTime . realToFrac . modificationTime
 
--- | Route a request to a file system directory tree.  Bad things can
--- happen if the directory tree is modified while this function is
--- running.
+-- | Route a request to a directory tree in the file system.  It gets
+-- the Content-Length from the target file's attributes (after opening
+-- the file).  Thus, overwriting files on an active server could cause
+-- problems, while renaming new files into place should be safe.
 routeFileSys :: (MonadIO m) =>
                 (String -> S8.ByteString)
              -- ^ Map of file suffixes to mime types (see 'mimeTypesI')
              -> FilePath
              -- ^ Default file name to append when the request is for
-             -- a directory (e.g., @\"index.html\"@)
+             -- a directory (e.g., @\"index.html\"@).  Empty string
+             -- results in no directory access.  Do not use @\".\"@ or
+             -- @\"..\"@ or you will cause an infinite redirect cycle.
              -> FilePath
              -- ^ Pathname of directory to serve from file system
              -> HttpRoute m
-routeFileSys typemap idx dir0 = HttpRoute $ Just . check
+routeFileSys typemap index dir0 = HttpRoute $ Just . check
     where
       dir = if null dir0 then "." else dir0
       check req = do
         let path = dir ++ concatMap (('/' :) . S8.unpack) (reqPathLst req)
         estat <- tryI $ liftIO $ getFileStatus path
         case estat of
-          Right st | isRegularFile st -> doFile req path st
-                   | isDirectory st -> return $ resp301 $
-                                       S8.unpack (reqNormalPath req) ++ '/':idx
-                   | otherwise -> return $ resp404 req
+          Right st | isRegularFile st     -> doFile req path st
+                   | not (isDirectory st) -> return $ resp404 req
+                   | null index           -> return $ resp403 req
+                   | otherwise -> return $ resp301 $
+                                  S8.unpack (reqNormalPath req) ++ '/':index
           Left (e,_ ) | isDoesNotExistError e -> return $ resp404 req
                       | otherwise             -> return $ resp500 (show e)
       doFile req path st
           | reqMethod req == S8.pack "GET"
-            && maybe True (< (modTimeUTC st)) (reqIfModifiedSince req) =
-              return $ resp { respBody = enumFile path }
+            && maybe True (< (modTimeUTC st)) (reqIfModifiedSince req) = do
+              fd <- liftIO $ openFd path ReadOnly Nothing defaultFileFlags
+              -- Use attributes from opened file in case file name changes
+              (st', h) <- liftIO (liftM2 (,) (getFdStatus fd) (fdToHandle fd))
+                          `onExceptionI` (liftIO $ closeFd fd)
+              if isRegularFile st'
+                then do let body = enumHandle h `inumFinally` liftIO (hClose h)
+                        return $ resp { respHeaders = mkHeaders req st'
+                                      , respBody = body }
+                else do liftIO $ hClose h -- File no longer file -- re-try
+                        check req
           | reqMethod req == S8.pack "GET" =
               return $ resp { respStatus = stat304 }
           | reqMethod req == S8.pack "HEAD" =
@@ -245,4 +283,5 @@ routeFileSys typemap idx dir0 = HttpRoute $ Just . check
           case reqPathLst req of
             [] -> []
             l  -> case takeExtension (S8.unpack $ last l) of [] -> []; _:t -> t
+
 
