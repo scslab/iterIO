@@ -4,8 +4,8 @@ module Data.IterIO.HttpRoute
     , runHttpRoute
     , routeConst, routeFn, routeReq
     , routeMethod, routeHost, routeTop
-    , HttpMap, routeMap, routeName, routePath, routeVar
-    , mimeTypesI, routeFileSys
+    , HttpMap, routeMap, routeMap', routeName, routePath, routeVar
+    , mimeTypesI, routeFileSys, FileSystemCalls(..), routeGenFileSys
     ) where
 
 import           Control.Monad
@@ -23,6 +23,7 @@ import           System.IO
 import           System.IO.Error (isDoesNotExistError)
 import           System.Posix.Files
 import           System.Posix.IO
+import           System.Posix.Types
 
 import           Data.IterIO
 import           Data.IterIO.Http
@@ -118,7 +119,7 @@ routeHost host (HttpRoute route) = HttpRoute check
           check req | reqHost req /= shost = Nothing
                     | otherwise            = route req
 
--- | Route based on the method (GET, POST, etc.) in a request.
+-- | Route based on the method (GET, POST, HEAD, etc.) in a request.
 routeMethod :: String           -- ^ String method should match
             -> HttpRoute m      -- ^ Target route to take if method matches
             -> HttpRoute m
@@ -137,10 +138,11 @@ type HttpMap m = [(String, HttpRoute m)]
 routeMap :: (Monad m) => HttpMap m -> HttpRoute m
 routeMap lst = routeMap' lst `mappend` routeFn (return . resp404)
 
--- | @routeMap@ is like @routeMap'@, but only matches names that exist
+-- | @routeMap'@ is like @routeMap@, but only matches names that exist
 -- in the map.  Thus, multiple @routeMap'@ results can be combined
 -- with 'mappend'.  By contrast, combining @routeMap@ results with
--- 'mappend' is useless--the first one will match all requests.
+-- 'mappend' is useless--the first one will match all requests (and
+-- return a 404 error for names that do not appear in the map).
 routeMap' :: HttpMap m -> HttpRoute m
 routeMap' lst = HttpRoute check
     where
@@ -222,6 +224,31 @@ mimeTypesI deftype = do
         optionalI comment
         optionalI (char '\r'); char '\n'
 
+-- | An abstract representation of file system calls returning an
+-- opaque handle type @d@ in an 'Iter' parameterized by an arbitrary
+-- 'Monad' @m@.  This representation allows one to use
+-- 'routeGenFileSys' in a monad that is not an instance of 'MonadIO'.
+data FileSystemCalls d m = FileSystemCalls {
+      fs_stat :: !(FilePath -> Iter L.ByteString m FileStatus)
+    , fs_open :: !(FilePath -> Iter L.ByteString m d)
+    , fs_close :: !(d -> Iter L.ByteString m ())
+    , fs_fstat :: !(d -> Iter L.ByteString m FileStatus)
+    , fs_enum :: !(d -> Iter L.ByteString m
+                        (Onum L.ByteString m (IterR L.ByteString m ())))
+    }
+
+-- | Default file system calls for instances of the @MonadIO@ class.
+defaultFileSystemCalls :: (MonadIO m) => FileSystemCalls Fd m
+defaultFileSystemCalls = FileSystemCalls { fs_stat = liftIO . getFileStatus
+                                         , fs_open = liftIO . pathToFd
+                                         , fs_close = liftIO . closeFd
+                                         , fs_fstat = liftIO . getFdStatus
+                                         , fs_enum = liftIO . fdToOnum
+                                         }
+    where pathToFd path = openFd path ReadOnly Nothing defaultFileFlags
+          fdToOnum fd = do h <- fdToHandle fd
+                           return $ enumHandle h `inumFinally` liftIO (hClose h)
+
 modTimeUTC :: FileStatus -> UTCTime
 modTimeUTC = posixSecondsToUTCTime . realToFrac . modificationTime
 
@@ -240,12 +267,20 @@ routeFileSys :: (MonadIO m) =>
              -> FilePath
              -- ^ Pathname of directory to serve from file system
              -> HttpRoute m
-routeFileSys typemap index dir0 = HttpRoute $ Just . check
+routeFileSys = routeGenFileSys defaultFileSystemCalls
+
+routeGenFileSys :: (Monad m) =>
+                   FileSystemCalls d m
+                -> (String -> S8.ByteString)
+                -> FilePath
+                -> FilePath
+                -> HttpRoute m
+routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
     where
       dir = if null dir0 then "." else dir0
       check req = do
         let path = dir ++ concatMap (('/' :) . S8.unpack) (reqPathLst req)
-        estat <- tryI $ liftIO $ getFileStatus path
+        estat <- tryI $ fs_stat fs path
         case estat of
           Right st | isRegularFile st     -> doFile req path st
                    | not (isDirectory st) -> return $ resp404 req
@@ -257,15 +292,14 @@ routeFileSys typemap index dir0 = HttpRoute $ Just . check
       doFile req path st
           | reqMethod req == S8.pack "GET"
             && maybe True (< (modTimeUTC st)) (reqIfModifiedSince req) = do
-              fd <- liftIO $ openFd path ReadOnly Nothing defaultFileFlags
+              fd <- fs_open fs path
               -- Use attributes from opened file in case file name changes
-              (st', h) <- liftIO (liftM2 (,) (getFdStatus fd) (fdToHandle fd))
-                          `onExceptionI` (liftIO $ closeFd fd)
+              st' <- fs_fstat fs fd `onExceptionI` fs_close fs fd
               if isRegularFile st'
-                then do let body = enumHandle h `inumFinally` liftIO (hClose h)
+                then do body <- fs_enum fs fd `onExceptionI` fs_close fs fd
                         return $ resp { respHeaders = mkHeaders req st'
                                       , respBody = body }
-                else do liftIO $ hClose h -- File no longer file -- re-try
+                else do fs_close fs fd -- File no longer file -- re-try
                         check req
           | reqMethod req == S8.pack "GET" =
               return $ resp { respStatus = stat304 }
