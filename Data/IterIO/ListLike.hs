@@ -15,8 +15,8 @@ module Data.IterIO.ListLike
     , stdoutI
     -- * Control requests
     , SeekMode(..)
-    , SizeC(..), SeekC(..), TellC(..)
-    , fileCtl
+    , SizeC(..), SeekC(..), TellC(..), fileCtl
+    , PeerNameC(..), GetSocketC(..), socketCtl
     -- * Onums
     , enumDgram, enumDgramFrom
     , enumHandle, enumHandle', enumNonBinHandle
@@ -238,13 +238,24 @@ fileCtl h = (mkFlushCtl $ \(SeekC mode pos) -> liftIO (hSeek h mode pos))
             offset <- liftIO $ hTell h
             return $ runIter (n $ offset - LL.genericLength t) c
 
-{-
-data PeerNameC = PeerNameC
-instance CtlCmd SockNameC SockAddr
+data PeerNameC = PeerNameC deriving (Typeable)
+instance CtlCmd PeerNameC SockAddr
 
-data GetSocketC = GetSocketC
+data GetSocketC = GetSocketC deriving (Typeable)
 instance CtlCmd GetSocketC Socket
--}
+
+socketCtl :: (ChunkData t, MonadIO m) =>
+             Socket
+          -> Maybe SockAddr
+          -> CtlHandler (Iter () m) t m a
+socketCtl s Nothing =
+    (mkCtl $ \GetSocketC -> return s)
+    `consCtl` (mkCtl $ \PeerNameC -> liftIO $ getPeerName s)
+    `consCtl` passCtl id
+socketCtl s (Just addr) =
+    (mkCtl $ \GetSocketC -> return s)
+    `consCtl` (mkCtl $ \PeerNameC -> return addr)
+    `consCtl` passCtl id
 
 --
 -- Onums
