@@ -225,16 +225,24 @@ mimeTypesI deftype = do
         optionalI (char '\r'); char '\n'
 
 -- | An abstract representation of file system calls returning an
--- opaque handle type @d@ in an 'Iter' parameterized by an arbitrary
+-- opaque handle type @h@ in an 'Iter' parameterized by an arbitrary
 -- 'Monad' @m@.  This representation allows one to use
 -- 'routeGenFileSys' in a monad that is not an instance of 'MonadIO'.
-data FileSystemCalls d m = FileSystemCalls {
+data FileSystemCalls h m = FileSystemCalls {
       fs_stat :: !(FilePath -> Iter L.ByteString m FileStatus)
-    , fs_open :: !(FilePath -> Iter L.ByteString m d)
-    , fs_close :: !(d -> Iter L.ByteString m ())
-    , fs_fstat :: !(d -> Iter L.ByteString m FileStatus)
-    , fs_enum :: !(d -> Iter L.ByteString m
+    -- ^ Return file attributes.
+    , fs_open :: !(FilePath -> Iter L.ByteString m h)
+    -- ^ Open file and return an opaque handle of type @h@.
+    , fs_close :: !(h -> Iter L.ByteString m ())
+    -- ^ Close an open file.  You must call this unless you apply the
+    -- enumerator returned by @fs_enum@.
+    , fs_fstat :: !(h -> Iter L.ByteString m FileStatus)
+    -- ^ Return the attributes of an open file.
+    , fs_enum :: !(h -> Iter L.ByteString m
                         (Onum L.ByteString m (IterR L.ByteString m ())))
+    -- ^ Enumerate the contents of an open file, then close the file.
+    -- If you apply the 'Onum' returned by @fs_enum@, you do not need
+    -- to call @fs_close@.
     }
 
 -- | Default file system calls for instances of the @MonadIO@ class.
@@ -269,8 +277,11 @@ routeFileSys :: (MonadIO m) =>
              -> HttpRoute m
 routeFileSys = routeGenFileSys defaultFileSystemCalls
 
+-- | A generalized version of 'routeFileSys' that takes a
+-- 'FileSystemCalls' object and can therefore work outside of the
+-- 'MonadIO' monad.
 routeGenFileSys :: (Monad m) =>
-                   FileSystemCalls d m
+                   FileSystemCalls h m
                 -> (String -> S8.ByteString)
                 -> FilePath
                 -> FilePath
