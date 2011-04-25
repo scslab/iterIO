@@ -802,7 +802,7 @@ urlencodedFormI = sepBy controlI (char '&')
 
 inumBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
-inumBind m k = tryI' m >>= either reRunIter k
+inumBind m k = tryIr m >>= either reRunIter k
 infixl 1 `inumBind`
 
 foldControls :: (Monad m) => (a -> FormField -> Iter L m a) -> a -> Iter L m a

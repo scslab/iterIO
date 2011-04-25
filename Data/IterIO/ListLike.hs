@@ -16,7 +16,7 @@ module Data.IterIO.ListLike
     -- * Control requests
     , SeekMode(..)
     , SizeC(..), SeekC(..), TellC(..), fileCtl
-    , PeerNameC(..), GetSocketC(..), socketCtl
+    , PeerNameC(..), GetSocketC(..), socketCtl, socketPeerCtl
     -- * Onums
     , enumDgram, enumDgramFrom
     , enumHandle, enumHandle', enumNonBinHandle
@@ -64,10 +64,10 @@ putI :: (ChunkData t, Monad m) =>
         (t -> Iter t m a)
      -> Iter t m b
      -> Iter t m ()
-putI putfn eoffn = do
-  Chunk t eof <- chunkI
-  unless (null t) $ putfn t >> return ()
-  if eof then eoffn >> return () else putI putfn eoffn
+putI putfn eoffn = doput `finallyI` eoffn
+    where doput = do Chunk t eof <- chunkI
+                     unless (null t) $ putfn t >> return ()
+                     if eof then return () else doput
 
 -- | Send datagrams using a supplied function.  The datagrams are fed
 -- as a list of packets, where each element of the list should be a
@@ -76,7 +76,7 @@ putI putfn eoffn = do
 --
 -- @
 -- udpI :: ('SendRecvString' s, 'MonadIO' m) => 'Socket' -> 'Iter' s m ()
--- udpI sock = sendI $ \s -> 'liftIO' $ 'genSendTo' sock s Nothing
+-- udpI sock = sendI $ 'liftIO' . 'genSend' sock
 -- @
 sendI :: (Show t, Monad m) =>
          (t -> Iter [t] m a)
@@ -238,50 +238,52 @@ fileCtl h = (mkFlushCtl $ \(SeekC mode pos) -> liftIO (hSeek h mode pos))
             offset <- liftIO $ hTell h
             return $ runIter (n $ offset - LL.genericLength t) c
 
-data PeerNameC = PeerNameC deriving (Typeable)
-instance CtlCmd PeerNameC SockAddr
-
 data GetSocketC = GetSocketC deriving (Typeable)
 instance CtlCmd GetSocketC Socket
 
+data PeerNameC = PeerNameC deriving (Typeable)
+instance CtlCmd PeerNameC SockAddr
+
+-- | A handler for the 'GetSocketC' and 'PeerNameC' control requests.
 socketCtl :: (ChunkData t, MonadIO m) =>
-             Socket
-          -> Maybe SockAddr
-          -> CtlHandler (Iter () m) t m a
-socketCtl s Nothing =
-    (mkCtl $ \GetSocketC -> return s)
-    `consCtl` (mkCtl $ \PeerNameC -> liftIO $ getPeerName s)
-    `consCtl` passCtl id
-socketCtl s (Just addr) =
-    (mkCtl $ \GetSocketC -> return s)
-    `consCtl` (mkCtl $ \PeerNameC -> return addr)
-    `consCtl` passCtl id
+             Socket -> CtlHandler (Iter () m) t m a
+socketCtl s = (mkCtl $ \GetSocketC -> return s)
+              `consCtl` (mkCtl $ \PeerNameC -> liftIO $ getPeerName s)
+              `consCtl` passCtl id
+
+-- | A version of 'socketCtl' that hard-codes the result of
+-- 'socketPeerCtl' (e.g., when it is available from @'accept'@).
+socketPeerCtl :: (ChunkData t, MonadIO m) =>
+                 Socket -> SockAddr -> CtlHandler (Iter () m) t m a
+socketPeerCtl s addr = (mkCtl $ \GetSocketC -> return s)
+                       `consCtl` (mkCtl $ \PeerNameC -> return addr)
+                       `consCtl` passCtl id
 
 --
 -- Onums
 --
+
+errToEOF :: (ChunkData t, Monad m) => String -> Iter t m a -> Iter t m a
+errToEOF s = mapExceptionI (\e -> mkIterEOF $ s ++ ": " ++ show (e :: IOError))
 
 -- | Read datagrams (of up to 64KiB in size) from a socket and feed a
 -- list of strings (one for each datagram) into an Iteratee.
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> Onum [t] m a
-enumDgram sock = mkInumM $ irepeat $ do
-  msg <- mapExceptionI
-         (\e -> mkIterEOF $ "enumDgram: " ++ show (e :: IOError))
-         (liftIO $ genRecv sock 0x10000)
-  ifeed [msg]
+enumDgram sock = mkInumM $ setCtlHandler (socketCtl sock) >> irepeat loop
+    where loop = do msg <- errToEOF "enumDgram" (liftIO $ genRecv sock 0x10000)
+                    ifeed [msg]
 
 -- | Read datagrams from a socket and feed a list of (Bytestring,
 -- SockAddr) pairs (one for each datagram) into an Iteratee.
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> Onum [(t, SockAddr)] m a
-enumDgramFrom sock = mkInumM $ irepeat $ do
-  (msg, addr) <- mapExceptionI
-                 (\e -> mkIterEOF $ "enumDgram: " ++ show (e :: IOError))
-                 (liftIO $ genRecvFrom sock 0x10000)
-  ifeed [(msg, addr)]
+enumDgramFrom sock = mkInumM $ setCtlHandler (socketCtl sock) >> irepeat loop
+    where loop = do (msg, addr) <- errToEOF "enumDgramFrom" $
+                                   liftIO $ genRecvFrom sock 0x10000
+                    ifeed [(msg, addr)]
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.

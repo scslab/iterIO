@@ -6,16 +6,17 @@
 module Data.IterIO.Iter
     (-- * Base types
      ChunkData(..), Chunk(..), chunk, chunkEOF
-    , Iter(..), CtlCmd, CtlArg(..), IterR(..), iterF
+    , Iter(..), CtlCmd, CtlRes(..), CtlArg(..), IterR(..), iterF
     , isIterActive, iterShows, iterShow
     -- * Execution
     , run, runI
     -- * Exception types
     , IterNoParse(..), IterEOF(..), mkIterEOF, isIterEOF
     , IterExpected(..), IterMiscParseErr(..)
+    , IterCUnsupp(..)
     -- * Exception-related functions
     , throwI, throwEOFI
-    , genCatchI, catchI, handlerI, tryI, tryI', finallyI, onExceptionI
+    , genCatchI, catchI, handlerI, tryI, tryIe, tryIr, finallyI, onExceptionI
     , catchBI, handlerBI, tryBI 
     , mapExceptionI
     , ifParse, ifNoParse, multiParse
@@ -139,6 +140,16 @@ iterF f = Iter $ \c -> if null c then IterF $ iterF f else f c
 -- binds each control argument type to a unique result type.
 class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 
+-- | The outcome of an 'IterC' request.
+data CtlRes a = CtlUnsupp
+              -- ^ The request type was not supported by the enumerator.
+              | CtlFail !SomeException
+              -- ^ The request was supported, and executing it caused
+              -- an exception to be thrown.
+              | CtlDone !a
+              -- ^ The result of the control operation.
+              deriving (Typeable)
+
 -- | Used when an 'Iter' is issuing a control request to an enclosing
 -- enumerator.  Note that unlike 'IterF' or 'IterM', control requests
 -- expose the residual data, which is ordinarily fed right back to the
@@ -146,7 +157,7 @@ class (Typeable carg, Typeable cres) => CtlCmd carg cres | carg -> cres
 -- control operations (such as seek and tell) to flush, check the
 -- length of, or adjust the residual data.
 data CtlArg t m a = forall carg cres. (CtlCmd carg cres) =>
-                    CtlArg !carg (Maybe cres -> Iter t m a) (Chunk t)
+    CtlArg !carg (CtlRes cres -> Iter t m a) (Chunk t)
 
 -- | An @IterR@ is the result of feeding a chunk of data to an 'Iter'.
 -- An @IterR@ is in one of several states:  it may require more input
@@ -333,7 +344,7 @@ run i0 = check $ runIter i0 chunkEOF
     where check (Done a _)             = return a
           check (IterF i)              = run i
           check (IterM m)              = m >>= check
-          check (IterC (CtlArg _ n c)) = check $ runIter (n Nothing) c
+          check (IterC (CtlArg _ n c)) = check $ runIter (n CtlUnsupp) c
           check (IterFail e _)         = throw $ unIterEOF e
           check (InumFail e _ _)       = throw $ unIterEOF e
 
@@ -342,7 +353,7 @@ runR :: (ChunkData t1, ChunkData t2, Monad m) => IterR t1 m a -> IterR t2 m a
 runR (Done a _)             = Done a mempty
 runR (IterF i)              = runR $ runIter i chunkEOF
 runR (IterM m)              = IterM $ liftM runR m
-runR (IterC (CtlArg _ n c)) = runR $ runIter (n Nothing) c
+runR (IterC (CtlArg _ n c)) = runR $ runIter (n CtlUnsupp) c
 runR (IterFail e _)         = IterFail e mempty
 runR (InumFail e i _)       = InumFail e i mempty
 
@@ -414,6 +425,15 @@ instance Show IterMiscParseErr where
 instance Exception IterMiscParseErr where
     toException = noParseToException
     fromException = noParseFromException
+
+-- | Exception thrown by 'CtlI' when an type of control request not
+-- supported by the enumerator is attempted.
+data IterCUnsupp = forall carg cres. (CtlCmd carg cres) =>
+                   IterCUnsupp carg deriving (Typeable)
+instance Show IterCUnsupp where
+    showsPrec _ (IterCUnsupp carg) rest =
+        "Unsupported control request " ++ shows (typeOf carg) rest
+instance Exception IterCUnsupp
 
 --
 -- Exception functions
@@ -528,6 +548,14 @@ tryI :: (ChunkData t, Monad m, Exception e) =>
         Iter t m a -> Iter t m (Either (e, IterR t m a) a)
 tryI iter = genCatchI iter (curry $ return . Left) Right
 
+-- | A version of 'tryI' that returns only the exception, not the
+-- result.  The usage is thus identicaly to the standard IO 'try'
+-- function, except that the exception cannot be re-thrown without
+-- risk of losing information.
+tryIe :: (ChunkData t, Monad m, Exception e) =>
+         Iter t m a -> Iter t m (Either e a)
+tryIe iter = genCatchI iter (\e _ -> return $ Left e) Right
+
 -- | A version of 'tryI' that catches all exceptions.  Instead of
 -- returning the exception caught, it returns the failing 'IterR'
 -- (from which you can extract the exception if you really want it).
@@ -537,20 +565,20 @@ tryI iter = genCatchI iter (curry $ return . Left) Right
 -- For example, the following is a possible implementation of 'finallyI':
 --
 -- > finallyI iter cleanup = do
--- >   er <- tryI' iter
+-- >   er <- tryIr iter
 -- >   cleanup
 -- >   either reRunIter return er
 --
-tryI' :: (ChunkData t, Monad m) =>
+tryIr :: (ChunkData t, Monad m) =>
          Iter t m a -> Iter t m (Either (IterR t m a) a)
-tryI' iter = genCatchI iter (\(SomeException _) r -> return $ Left r) Right
+tryIr iter = genCatchI iter (\(SomeException _) r -> return $ Left r) Right
 
 -- | Execute an 'Iter', then perform a cleanup action regardless of
 -- whether the 'Iter' threw an exception or not.  Analogous to the
 -- standard library function @'finally'@.
 finallyI :: (ChunkData t, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m a
-finallyI iter cleanup = do er <- tryI' iter
+finallyI iter cleanup = do er <- tryIr iter
                            cleanup >> either reRunIter return er
 
 -- | Execute an 'Iter' and perform a cleanup action if the 'Iter'
@@ -837,19 +865,26 @@ knownEOFI = Iter $ \c@(Chunk t eof) -> Done (eof && null t) c
 ungetI :: (ChunkData t) => t -> Iter t m ()
 ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 
--- | Issue a control request, return 'Just' the result if the request
--- is supported by enclosing enumerators, otherwise return 'Nothing'.
+-- | Issue a control request, return 'Nothing' if the request is
+-- unsupported.  Otherwise, return @'Just' . 'Right'@ the result if
+-- the request is supported by enclosing enumerators.  If the request
+-- is supported but executing it caused an exception @e@ to be thrown,
+-- then returns @'Just' ('Left' e)@.
 safeCtlI :: (CtlCmd carg cres, Monad m) =>
-            carg -> Iter t m (Maybe cres)
+            carg -> Iter t m (CtlRes cres)
 safeCtlI carg = Iter $ IterC . CtlArg carg return
 
 -- | Issue a control request and return the result.  Throws an
 -- exception if the operation type was not supported by an enclosing
 -- enumerator.
-ctlI :: (CtlCmd carg cres, Monad m) =>
+ctlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
         carg -> Iter t m cres
-ctlI carg = safeCtlI carg >>=
-            maybe (fail $ "Unsupported CtlCmd " ++ show (typeOf carg)) return
+ctlI carg = do
+  res <- safeCtlI carg
+  case res of
+    CtlUnsupp    -> throwI $ IterCUnsupp carg
+    CtlFail e    -> throwI e
+    CtlDone cres -> return cres
 
 --
 -- Iter manipulation functions

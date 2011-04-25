@@ -110,7 +110,7 @@ relSend ep fork iter = doSend 0 1
 
       rerun :: IterR t m a -> m (IterR t m a)
       rerun (IterM m)              = m >>= rerun
-      rerun (IterC (CtlArg _ n c)) = rerun $ runIter (n Nothing) c
+      rerun (IterC (CtlArg _ n c)) = rerun $ runIter (n CtlUnsupp) c
       rerun i                      = return i
       -- rerun (IterC _ fr) = rerun $ fr Nothing
       -- rerun i            = return i

@@ -28,6 +28,7 @@ module Data.IterIO.Inum
 import Prelude hiding (null)
 import Control.Exception (Exception(..), SomeException(..))
 import Control.Monad.Trans
+import Data.Maybe
 import Data.Monoid
 import Data.Typeable
 import System.Environment (getProgName)
@@ -198,7 +199,7 @@ cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
        Inum tIn tOut m a      -- ^
     -> Inum tIn tOut m a
     -> Inum tIn tOut m a
-cat a b iter = tryI' (runInum a iter) >>= either reRunIter (b . reRunIter)
+cat a b iter = tryIr (runInum a iter) >>= either reRunIter (b . reRunIter)
 -- Note this was carefully constructed to preserve InumFail errors.
 -- Something like:  cat a b iter = a iter >>= b . reRunIter
 -- would not preserve InumFail errors; since the input and output
@@ -213,7 +214,7 @@ lcat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-lcat a b iter = tryI' (runInum a iter) >>= either reRunIter check
+lcat a b iter = tryIr (runInum a iter) >>= either reRunIter check
     where check r = if isIterActive r then b $ reRunIter r else return r
 infixr 3 `lcat`
 
@@ -404,7 +405,7 @@ type CtlHandler m1 t m a = CtlArg t m a -> m1 (IterR t m a)
 
 -- | Reject all control requests.
 noCtl :: (Monad m1) => CtlHandler m1 t m a
-noCtl (CtlArg _ n c) = return $ runIter (n Nothing) c
+noCtl (CtlArg _ n c) = return $ runIter (n CtlUnsupp) c
 
 -- | Pass all control requests through to the enclosing 'Iter' monad.
 -- The 'ResidHandler' argument says how to adjust residual data, in
@@ -424,19 +425,21 @@ passCtl adj (CtlArg a n c0) = withResidHandler adj c0 runn
 -- rightmost handler being either 'noCtl' or 'passCtl'.  Has fixity:
 --
 -- > infixr 9 `consCtl`
-consCtl :: (CtlCmd carg cres) =>
-           (carg -> (cres -> Iter t m a) -> Chunk t -> m1 (IterR t m a))
-        -> CtlHandler m1 t m a
-        -> CtlHandler m1 t m a
+consCtl :: (CtlCmd carg cres, ChunkData tIn, Monad mIn) =>
+           (carg -> (cres -> Iter t m a) -> Chunk t
+                 -> Iter tIn mIn (IterR t m a))
+        -> CtlHandler (Iter tIn mIn) t m a
+        -> CtlHandler (Iter tIn mIn) t m a
 consCtl fn fallback ca@(CtlArg a0 n c) = maybe (fallback ca) runfn $ cast a0
-    where runfn a = fn a (n . cast) c
+    where runfn a = fn a (n . fromJust . cast) c
+                    `catchI` \e _ -> return $ runIter (n $ CtlFail e) c
 infixr 9 `consCtl`
 
 -- | Make a control function suitable for use as the first argument to
 -- 'consCtl'.
 mkCtl :: (CtlCmd carg cres, Monad m1) =>
-         (carg -> m1 cres)
-      -> carg -> (cres -> Iter t m a) -> Chunk t -> m1 (IterR t m a)
+         (carg -> Iter t1 m1 cres)
+      -> carg -> (cres -> Iter t m a) -> Chunk t -> Iter t1 m1 (IterR t m a)
 mkCtl f a n c = do cres <- f a; return $ runIter (n cres) c
 
 -- | Like 'mkCtl', except that it flushes all input and clears the EOF
@@ -602,7 +605,7 @@ enumPure = inumPure
 inumRepeat :: (ChunkData tIn, Monad m) =>
               Inum tIn tOut m a -> Inum tIn tOut m a
 inumRepeat inum iter0 = do
-  er <- tryI' $ runInum inum iter0
+  er <- tryIr $ runInum inum iter0
   stop <- atEOFI
   case (stop, er) of
     (False, Right (IterF iter)) -> inumRepeat inum iter
