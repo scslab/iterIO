@@ -547,10 +547,9 @@ mkInumC adj ch codec iter0 = doIter iter0
                       | otherwise   = Iter $ InumFail e (IterF iter)
       doInput iter input = do
         r <- runIterMC ch iter (Chunk input False)
-        stop <- knownEOFI
-        case (stop, r) of
-          (False, IterF i) -> doIter i
-          (_, r1) | isIterActive r1 -> return r1
+        case r of
+          (IterF i) -> doIter i
+          _ | isIterActive r -> return r
           _ -> withResidHandler adj (getResid r) $ return . setResid r
 
 -- | Create an 'Inum' based on an 'Iter' that transcodes the input to

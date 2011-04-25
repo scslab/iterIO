@@ -22,7 +22,7 @@ module Data.IterIO.Iter
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
     , nullI, dataI, pureI, chunkI, currentChunkI
-    , peekI, atEOFI, knownEOFI, ungetI
+    , peekI, atEOFI, ungetI
     , safeCtlI, ctlI
     -- * Internal functions
     , onDone
@@ -845,20 +845,6 @@ peekI = onDoneInput setResid
 -- is no more input data to be had.
 atEOFI :: (Monad m, ChunkData t) => Iter t m Bool
 atEOFI = iterF $ \c@(Chunk t _) -> Done (null t) c
-
--- | If this 'Iter' returns 'True', then there is no more input
--- data--i.e., it is known that we are at EOF.  If it returns 'False',
--- then there may or may not be more input data; it is posible the EOF
--- cannot be known without requesting more input data.
---
--- Essentially this is a less reliable version of 'atEOFI', but it has
--- the advantage of never requesting more input.  Thus, @knownEOFI@ is
--- primarily useful for situations where for one reason or another you
--- do not want to request more input (a case that sometimes arises
--- inside 'Inum' implementations).  This is a somewhat fringe case.
--- Thus, when in doubt, use 'atEOFI' in preference to @knownEOFI@.
-knownEOFI :: (Monad m, ChunkData t) => Iter t m Bool
-knownEOFI = Iter $ \c@(Chunk t eof) -> Done (eof && null t) c
 
 -- | Place data back onto the input stream, where it will be the next
 -- data consumed by subsequent 'Iter's.

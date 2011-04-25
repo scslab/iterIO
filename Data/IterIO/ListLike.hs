@@ -271,33 +271,27 @@ socketPeerCtl s addr = (mkCtl $ \GetSocketC -> return s)
 -- Onums
 --
 
-errToEOF :: (ChunkData t, Monad m) => String -> Iter t m a -> Iter t m a
-errToEOF s = mapExceptionI (\e -> mkIterEOF $ s ++ ": " ++ show (e :: IOError))
-
 -- | Read datagrams (of up to 64KiB in size) from a socket and feed a
 -- list of strings (one for each datagram) into an Iteratee.
 enumDgram :: (MonadIO m, SendRecvString t) =>
              Socket
           -> Onum [t] m a
-enumDgram sock = mkInumM $ setCtlHandler (socketCtl sock) >> irepeat loop
-    where loop = do msg <- errToEOF "enumDgram" (liftIO $ genRecv sock 0x10000)
-                    ifeed [msg]
+enumDgram sock = mkInumC id (socketCtl sock) $
+                 liftIO $ liftM (: []) $ genRecv sock 0x10000
 
 -- | Read datagrams from a socket and feed a list of (Bytestring,
 -- SockAddr) pairs (one for each datagram) into an Iteratee.
 enumDgramFrom :: (MonadIO m, SendRecvString t) =>
                  Socket
               -> Onum [(t, SockAddr)] m a
-enumDgramFrom sock = mkInumM $ setCtlHandler (socketCtl sock) >> irepeat loop
-    where loop = do (msg, addr) <- errToEOF "enumDgramFrom" $
-                                   liftIO $ genRecvFrom sock 0x10000
-                    ifeed [(msg, addr)]
+enumDgramFrom sock = mkInumC id (socketCtl sock) $
+                     liftIO $ liftM (: []) $ genRecvFrom sock 0x10000
 
 -- | Read data from a stream (e.g., TCP) socket.
 enumStream :: (MonadIO m, ChunkData t, SendRecvString t) =>
               Socket -> Onum t m a
-enumStream sock = mkInumC id (socketCtl sock)
-                  (liftIO $ genRecv sock defaultChunkSize)
+enumStream sock = mkInumC id (socketCtl sock) $
+                  liftIO $ genRecv sock defaultChunkSize
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.
@@ -321,12 +315,13 @@ enumHandle h iter = do
 enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
                  -> Onum t m a
-enumNonBinHandle h = mkInumM $ do
-  setCtlHandler (fileCtl h)
-  irepeat $ liftIO (hWaitForInput h (-1) >>
-                    LL.hGetNonBlocking h defaultChunkSize) >>= ifeed1
+enumNonBinHandle h = mkInumC id (fileCtl h) $ do
+  dat <- liftIO $ hWaitForInput h (-1) >> LL.hGetNonBlocking h defaultChunkSize
+  if null dat then throwEOFI "enumNonBinHandle" else return dat
 -- Note that hGet can block when there is some (but not enough) data
 -- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
+-- ByteString introduced the call hGetSome for this purpose, but it is
+-- not supported by the ListLike package yet.
 
 -- | Enumerate the contents of a file as a series of lazy
 -- 'L.ByteString's.  (This is a type-restricted version of

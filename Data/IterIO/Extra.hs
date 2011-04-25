@@ -219,6 +219,7 @@ traceInput tag = Iter $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
 -- | For debugging.  Print the current thread ID and a message.  Not
 -- referentially transparent.
 traceI :: (ChunkData t, Monad m) => String -> Iter t m ()
-traceI msg = return $ inlinePerformIO $ do
+traceI msg = Iter $ \c -> inlinePerformIO $ do
                tid <- myThreadId
                putTraceMsg $ show tid ++ ": " ++ msg
+               return $ Done () c
