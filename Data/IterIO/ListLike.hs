@@ -16,7 +16,7 @@ module Data.IterIO.ListLike
     -- * Control requests
     , SeekMode(..)
     , SizeC(..), SeekC(..), TellC(..), fileCtl
-    , PeerNameC(..), GetSocketC(..), socketCtl, socketPeerCtl
+    , GetSocketC(..), socketCtl
     -- * Onums
     , enumDgram, enumDgramFrom, enumStream
     , enumHandle, enumHandle', enumNonBinHandle
@@ -25,8 +25,8 @@ module Data.IterIO.ListLike
     -- * Inums
     , inumTake, inumTakeExact
     , inumLog, inumhLog, inumStderr
-    -- * Functions on Iter-Inum pairs
-    , pairFinalizer
+    -- * Functions for Iter-Inum pairs
+    , pairFinalizer, iterHandle, iterStream
     ) where
 
 import Prelude hiding (null)
@@ -246,26 +246,16 @@ fileCtl h = (mkFlushCtl $ \(SeekC mode pos) -> liftIO (hSeek h mode pos))
             offset <- liftIO $ hTell h
             return $ runIter (n $ offset - LL.genericLength t) c
 
+-- | A control request that returns the 'Socket' from an enclosing
+-- socket enumerator.
 data GetSocketC = GetSocketC deriving (Typeable)
 instance CtlCmd GetSocketC Socket
 
-data PeerNameC = PeerNameC deriving (Typeable)
-instance CtlCmd PeerNameC SockAddr
-
--- | A handler for the 'GetSocketC' and 'PeerNameC' control requests.
+-- | A handler for the 'GetSocketC' control request.
 socketCtl :: (ChunkData t, MonadIO m) =>
              Socket -> CtlHandler (Iter () m) t m a
 socketCtl s = (mkCtl $ \GetSocketC -> return s)
-              `consCtl` (mkCtl $ \PeerNameC -> liftIO $ getPeerName s)
               `consCtl` passCtl id
-
--- | A version of 'socketCtl' that hard-codes the result of
--- 'socketPeerCtl' (e.g., when it is available from @'accept'@).
-socketPeerCtl :: (ChunkData t, MonadIO m) =>
-                 Socket -> SockAddr -> CtlHandler (Iter () m) t m a
-socketPeerCtl s addr = (mkCtl $ \GetSocketC -> return s)
-                       `consCtl` (mkCtl $ \PeerNameC -> return addr)
-                       `consCtl` passCtl id
 
 --
 -- Onums
@@ -373,10 +363,11 @@ inumLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            FilePath             -- ^ Path to log to
         -> Bool                 -- ^ True to truncate file
         -> Inum t t m a
-inumLog path trunc iter = do
-  h <- liftIO $ openBinaryFile path (if trunc then WriteMode else AppendMode)
-  liftIO $ hSetBuffering h NoBuffering
-  inumhLog h iter `finallyI` liftIO (hClose h)
+inumLog path trunc = inumBracket openLog (liftIO . hClose) inumhLog
+    where openLog = liftIO $ do
+            h <- openBinaryFile path (if trunc then WriteMode else AppendMode)
+            hSetBuffering h NoBuffering
+            return h
 
 -- | Like 'inumLog', but takes a writeable file handle rather than a
 -- file name.  Does not close the handle when done.
@@ -409,5 +400,13 @@ pairFinalizer :: (ChunkData t, ChunkData t1, MonadIO m) =>
 pairFinalizer iter inum cleanup = do
   mc <- newMVar False
   let end = modifyMVar mc $ \cleanit ->
-            do when cleanit cleanup; return (True, ())
+            when cleanit cleanup >> return (True, ())
   return (iter `finallyI` liftIO end, inum `inumFinally` liftIO end)
+
+iterHandle :: (LL.ListLikeIO t e, ChunkData t, MonadIO m) =>
+              Handle -> IO (Iter t m (), Onum t m a)
+iterHandle h = pairFinalizer (handleI h) (enumHandle h) (hClose h)
+
+iterStream :: (SendRecvString t, ChunkData t, MonadIO m) =>
+              Socket -> IO (Iter t m (), Onum t m a)
+iterStream s = pairFinalizer (sockStreamI s) (enumStream s) (sClose s)

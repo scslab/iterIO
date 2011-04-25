@@ -30,12 +30,11 @@ instance CtlCmd SslC SslConnection
 
 -- | Simple OpenSSL 'Onum'.
 enumSsl :: (MonadIO m) => SSL.SSL -> Onum L.ByteString m a
-enumSsl ssl = mkInumM $ do
-  setCtlHandler $ mkCtl (\SslC -> return $ SslConnection ssl)
-                    `consCtl` (socketCtl $ SSL.sslSocket ssl)
-  irepeat loop
-    where loop = liftIO (SSL.read ssl defaultChunkSize) >>=
-                 ifeed1 . L.fromChunks . (: [])
+enumSsl ssl = mkInumC id ch codec
+    where ch = mkCtl (\SslC -> return $ SslConnection ssl)
+               `consCtl` (socketCtl $ SSL.sslSocket ssl)
+          codec = do buf <- liftIO (SSL.read ssl defaultChunkSize)
+                     returnSome $ L.fromChunks [buf]
 
 -- | Simple OpenSSL 'Iter'.  Does a uni-directional SSL shutdown when
 -- it receives a 'Chunk' with the EOF bit 'True'.
@@ -51,6 +50,9 @@ sslI ssl = loop
 -- bi-directional shutdown and closes the socket when both a) the enum
 -- completes and b) the iter has received an EOF chunk.
 --
+-- If the SSL handshake fails, then @iterSSL@ closes the socket before
+-- throwing an exception.
+--
 -- This funciton must only be invoked from within a call to
 -- @withOpenSSL@.
 iterSSL :: (MonadIO m) =>
@@ -63,7 +65,8 @@ iterSSL :: (MonadIO m) =>
         -> IO (Iter L.ByteString m (), Onum L.ByteString m a)
 iterSSL ctx sock server = do
   ssl <- SSL.connection ctx sock `onException` Net.sClose sock
-  if server then SSL.accept ssl else SSL.connect ssl
+  (if server then SSL.accept ssl else SSL.connect ssl)
+                          `onException` Net.sClose sock
   liftIO $ pairFinalizer (sslI ssl) (enumSsl ssl) $
          SSL.shutdown ssl SSL.Bidirectional `finally` Net.sClose sock
 

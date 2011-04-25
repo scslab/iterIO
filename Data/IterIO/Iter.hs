@@ -193,6 +193,7 @@ data IterR t m a = IterF !(Iter t m a)
 -- enumerator--i.e., the 'IterR' is not 'Done' and is not in one of
 -- the error states.
 isIterActive :: IterR t m a -> Bool
+{-# INLINE isIterActive #-}
 isIterActive (IterF _)     = True
 isIterActive (IterM _)     = True
 isIterActive (IterC _)     = True
@@ -905,8 +906,8 @@ stepR r f         = stepR' r f (error "stepR")
 -- | The equivalent of 'onDone' for 'IterR's.
 onDoneR :: (Monad m) =>
            (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
-onDoneR f = let check r = if isIterActive r then stepR r check else f r
-            in check
+onDoneR f = check
+    where check r = if isIterActive r then stepR r check else f r
 
 -- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
 -- 'InumFail' state, then use a function to transform the 'IterR'.

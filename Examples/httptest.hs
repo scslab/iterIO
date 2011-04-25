@@ -57,7 +57,6 @@ httpAccept hs = do
       return (handleI h, enumHandle h `inumFinally` liftIO (hClose h))
     mkSecure s ctx = iterSSL ctx s True `catch` \e@(SomeException _) -> do
                        hPutStrLn stderr ("iterSSL: " ++ show e)
-                       Net.sClose s
                        return (nullI, inumNull)
                   
 mkServer :: Net.PortNumber -> Maybe SSL.SSLContext -> IO HttpServer
