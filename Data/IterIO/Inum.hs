@@ -221,6 +221,16 @@ infixr 3 `lcat`
 -- | Transforms the result of an 'Inum' into the result of the 'Iter'
 -- that it contains.  Used by '|.' and '.|' to collapse their result
 -- types.
+--
+-- Note that because the input type if the inner 'Iter', @tMid@, gets
+-- squeezed out of the return type, @joinR@ will feed an EOF to the
+-- inner 'Iter' if it is still active.  This is what ensures that
+-- active 'Iter's end up seeing an EOF, even though 'Inum's themselves
+-- are never supposed to feed an EOF to the underlying 'Iter'.  All
+-- 'Iter's in right-hand arguments of '.|' and '|.' get fed an EOF by
+-- @joinR@ (if they don't finish on their own), while the outermost
+-- 'Inum' is fed an iter by the 'run' function (or by '|$' which
+-- invokes 'run' internally).
 joinR :: (ChunkData tIn, ChunkData tMid, Monad m) =>
          IterR tIn m (IterR tMid m a)
       -> IterR tIn m a
