@@ -290,8 +290,8 @@ enumDgramFrom sock = mkInumC id (socketCtl sock) $
 -- | Read data from a stream (e.g., TCP) socket.
 enumStream :: (MonadIO m, ChunkData t, SendRecvString t) =>
               Socket -> Onum t m a
-enumStream sock = mkInumC id (socketCtl sock) $
-                  liftIO $ genRecv sock defaultChunkSize
+enumStream sock = mkInumC id (socketCtl sock) $ returnSome =<<
+                  liftIO (genRecv sock defaultChunkSize)
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.
@@ -304,9 +304,9 @@ enumHandle' = enumHandle
 enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
               Handle
            -> Onum t m a
-enumHandle h iter = do
-  liftIO $ hSetBinaryMode h True
-  enumNonBinHandle h iter
+enumHandle h iter = tryIe (liftIO $ hSetBinaryMode h True) >>= check
+    where check (Left e)  = Iter $ InumFail e (IterF iter)
+          check (Right _) = enumNonBinHandle h iter
 
 -- | Feeds an 'Iter' with data from a file handle, using any input
 -- type in the 'LL.ListLikeIO' class.  Note that @enumNonBinHandle@
@@ -315,9 +315,9 @@ enumHandle h iter = do
 enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
                  -> Onum t m a
-enumNonBinHandle h = mkInumC id (fileCtl h) $ do
-  dat <- liftIO $ hWaitForInput h (-1) >> LL.hGetNonBlocking h defaultChunkSize
-  if null dat then throwEOFI "enumNonBinHandle" else return dat
+enumNonBinHandle h =
+    mkInumC id (fileCtl h) $ returnSome =<<
+    liftIO (hWaitForInput h (-1) >> LL.hGetNonBlocking h defaultChunkSize)
 -- Note that hGet can block when there is some (but not enough) data
 -- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
 -- ByteString introduced the call hGetSome for this purpose, but it is
@@ -334,11 +334,8 @@ enumFile' = enumFile
 -- 'openBinaryFile' to ensure binary mode.
 enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             FilePath -> Onum t m a
-enumFile path = mkInumM $ do
-  h <- liftIO $ openBinaryFile path ReadMode
-  addCleanup $ liftIO $ hClose h
-  setCtlHandler $ fileCtl h
-  irepeat $ liftIO (LL.hGet h defaultChunkSize) >>= ifeed1
+enumFile path = inumBracket (liftIO $ openBinaryFile path ReadMode)
+                (liftIO . hClose) enumNonBinHandle
 
 -- | Enumerate standard input.
 enumStdin :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) => Onum t m a

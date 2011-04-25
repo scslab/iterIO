@@ -447,7 +447,7 @@ instance Exception IterCUnsupp
 -- the 'MonadIO' class, and so cannot use 'catch' or @'onException'@
 -- to clean up after exceptions.)  Use 'throwI' in preference to
 -- 'throw' whenever possible.
-throwI :: (ChunkData t, Exception e) => e -> Iter t m a
+throwI :: (Exception e) => e -> Iter t m a
 throwI e = Iter $ IterFail (toException e)
 
 -- | Throw an exception of type 'IterEOF'.  This will be interpreted
@@ -456,7 +456,7 @@ throwI e = Iter $ IterFail (toException e)
 -- exception of type 'IterNoParse'.  If not caught within the 'Iter'
 -- monad, the exception will be rethrown by 'run' (and hence '|$') as
 -- an 'IOError' of type EOF.
-throwEOFI :: (ChunkData t) => String -> Iter t m a
+throwEOFI :: String -> Iter t m a
 throwEOFI = throwI . mkIterEOF
 
 -- | Run an 'Iter'.  Catch any exception it throws (and return the

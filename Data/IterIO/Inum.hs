@@ -12,6 +12,7 @@ module Data.IterIO.Inum
     -- $mkInumIntro
     , ResidHandler, CtlHandler
     , mkInumC, mkInum, mkInumP
+    , inumBracket, returnSome
     -- * Utilities
     , pullupResid
     , noCtl, passCtl, consCtl, mkCtl, mkFlushCtl
@@ -567,6 +568,28 @@ mkInumP = mkInumC pullupResid (passCtl pullupResid)
 pullupResid :: (ChunkData t) => (t, t) -> (t, t)
 pullupResid (a, b) = (mappend a b, mempty)
 
+-- | Bracket an 'Inum' with a start and end function, which instance
+-- be used to acquire and release a resource.
+inumBracket :: (ChunkData tIn, Monad m) =>
+               Iter tIn m b
+            -- ^ Computation to run first
+            -> (b -> Iter tIn m c)
+            -- ^ Computation to run last
+            -> (b -> Inum tIn tOut m a)
+            -- ^ Inum to bracket
+            -> Inum tIn tOut m a
+inumBracket start end inum iter = tryIe start >>= check
+    where check (Left e)  = Iter $ InumFail e (IterF iter)
+          check (Right b) = inum b iter `finallyI` end b
+
+-- | Return some data, supplied as the function's argument.  However,
+-- if the data is 'null', then throw an EOF error.  (This is the
+-- 'mkInum' equivalent of `mkInumM`'s 'ifeed1' function.)
+returnSome :: (ChunkData t, Monad m) => t -> Iter t' m t
+returnSome t | null t    = throwI end
+             | otherwise = return t
+    where end = mkIterEOF "returnSome"
+
 --
 -- Basic Inums
 --
@@ -955,7 +978,8 @@ ifeed = ipipe . inumPure
 -- if the data being fed is 'null'.  Convenient when reading input
 -- with a function (such as "Data.ListLike"'s @hget@) that returns 0
 -- bytes instead of throwing an EOF exception to indicate end of file.
--- For instance, the main loop of @'enumFile'@ looks like:
+-- For instance, the main loop of @'enumFile'@ could be implemented
+-- as:
 --
 -- @
 --  'irepeat' $ 'liftIO' ('LL.hGet' h 'defaultChunkSize') >>= 'ifeed1'
