@@ -25,9 +25,12 @@ module Data.IterIO.ListLike
     -- * Inums
     , inumTake, inumTakeExact
     , inumLog, inumhLog, inumStderr
+    -- * Functions on Iter-Inum pairs
+    , pairFinalizer
     ) where
 
 import Prelude hiding (null)
+import Control.Concurrent
 import Control.Exception (toException)
 import Control.Monad
 import Control.Monad.Trans
@@ -385,3 +388,23 @@ inumhLog h = mkInumP $ do buf <- dataI
 inumStderr :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
               Inum t t m a
 inumStderr = inumhLog stderr
+
+--
+-- Iter-Onum pairs
+--
+
+-- | Add a finalizer to run when an 'Iter' has received an EOF and an
+-- 'Inum' has finished.  This works regardless of the order in which
+-- the two events happen.
+pairFinalizer :: (ChunkData t, ChunkData t1, MonadIO m) =>
+                 Iter t m a
+              -> Inum t1 t2 m b
+              -> IO ()
+              -- ^ Cleanup action
+              -> IO (Iter t m a, Inum t1 t2 m b)
+              -- ^ Cleanup action will run when these two are both done
+pairFinalizer iter inum cleanup = do
+  mc <- newMVar False
+  let end = modifyMVar mc $ \cleanit ->
+            do when cleanit cleanup; return (True, ())
+  return (iter `finallyI` liftIO end, inum `inumFinally` liftIO end)

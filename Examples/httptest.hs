@@ -56,7 +56,7 @@ httpAccept hs = do
       hSetBuffering h NoBuffering
       return (handleI h, enumHandle h `inumFinally` liftIO (hClose h))
     mkSecure s ctx = iterSSL ctx s True `catch` \e@(SomeException _) -> do
-                       hPutStrLn stderr (show e)
+                       hPutStrLn stderr ("iterSSL: " ++ show e)
                        Net.sClose s
                        return (nullI, inumNull)
                   
@@ -114,4 +114,4 @@ main = Net.withSocketsDo $ SSL.withOpenSSL $ do
   waitQSem sem
     where
       privkey = "testkey.pem"
-      secure = False
+      secure = True
