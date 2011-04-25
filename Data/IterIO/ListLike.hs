@@ -11,14 +11,14 @@ module Data.IterIO.ListLike
     , headI, safeHeadI
     , lineI, safeLineI
     , takeExactI, takeI
-    , handleI, sockDgramI
+    , handleI, sockDgramI, sockStreamI
     , stdoutI
     -- * Control requests
     , SeekMode(..)
     , SizeC(..), SeekC(..), TellC(..), fileCtl
     , PeerNameC(..), GetSocketC(..), socketCtl, socketPeerCtl
     -- * Onums
-    , enumDgram, enumDgramFrom
+    , enumDgram, enumDgramFrom, enumStream
     , enumHandle, enumHandle', enumNonBinHandle
     , enumFile, enumFile'
     , enumStdin
@@ -202,6 +202,11 @@ sockDgramI s mdest = loop
                                  Just dest -> liftIO . flip (genSendTo s) dest
           loop = safeHeadI >>= maybe (return ()) (\str -> sendit str >> loop)
 
+sockStreamI :: (ChunkData t, SendRecvString t, MonadIO m) =>
+               Socket -> Iter t m ()
+sockStreamI sock = putI (liftIO . genSend sock)
+                   (liftIO $ shutdown sock ShutdownSend)
+
 -- | An 'Iter' that uses 'LL.hPutStr' to write all output to 'stdout'.
 stdoutI :: (LL.ListLikeIO t e, ChunkData t, MonadIO m) => Iter t m ()
 stdoutI = putI (liftIO . LL.hPutStr stdout) (return ())
@@ -287,6 +292,12 @@ enumDgramFrom sock = mkInumM $ setCtlHandler (socketCtl sock) >> irepeat loop
     where loop = do (msg, addr) <- errToEOF "enumDgramFrom" $
                                    liftIO $ genRecvFrom sock 0x10000
                     ifeed [(msg, addr)]
+
+-- | Read data from a stream (e.g., TCP) socket.
+enumStream :: (MonadIO m, ChunkData t, SendRecvString t) =>
+              Socket -> Onum t m a
+enumStream sock = mkInumC id (socketCtl sock)
+                  (liftIO $ genRecv sock defaultChunkSize)
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.
