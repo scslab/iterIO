@@ -10,7 +10,7 @@ module Data.IterIO.ListLike
     , headLI, safeHeadLI
     , headI, safeHeadI
     , lineI, safeLineI
-    , takeExactI, takeI
+    , dataMaxI, takeI
     , handleI, sockDgramI, sockStreamI
     , stdoutI
     -- * Control requests
@@ -23,7 +23,8 @@ module Data.IterIO.ListLike
     , enumFile, enumFile'
     , enumStdin
     -- * Inums
-    , inumTake, inumTakeExact
+    -- , inumTake
+    , inumTakeExact
     , inumLog, inumhLog, inumStderr
     -- * Functions for Iter-Inum pairs
     , pairFinalizer, iterHandle, iterStream
@@ -152,24 +153,30 @@ lineI = do
     Just line -> return line
 
 -- | Return 'LL.ListLike' data that is at most the number of elements
--- specified by the first argument, and at least one element unless
--- EOF is encountered or 0 elements are requested, in which case
--- 'LL.empty' is returned.
-takeI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
-takeI maxlen | maxlen <= 0 = return mempty
-             | otherwise   = iterF $ \(Chunk s eof) ->
-                             case LL.splitAt maxlen s of
-                               (h, t) -> Done h $ Chunk t eof
+-- specified by the first argument, and at least one element (as long
+-- as a positive number is requested).  Throws an exception if a
+-- positive number of items is requested and an EOF is encountered.
+dataMaxI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
+dataMaxI maxlen | maxlen <= 0 = return mempty
+                | otherwise   = iterF $ \c@(Chunk s eof) ->
+                                if null s then IterFail eoferr c
+                                else case LL.splitAt maxlen s of
+                                       (h, t) -> Done h $ Chunk t eof
+    where eoferr = toException $ mkIterEOF "dataMaxI"
 
--- | Return 'LL.ListLike' data that is exactly some number of
--- elements, unless an EOF is encountered in which case fewer may be
--- returned.
-takeExactI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
-takeExactI len | len <= 0  = return mempty
-               | otherwise = do
-  t <- takeI len
-  let tlen = LL.length t
-  if tlen >= len then return t else LL.append t `liftM` takeI (len - tlen)
+-- | Return the next @len@ elements of an 'LL.ListLike' data stream,
+-- unless an EOF is encountered, in which case fewer may be returned.
+takeI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
+takeI len | len <= 0  = return mempty
+          | otherwise =
+              iterF $ \(Chunk s eof) ->
+                  case LL.splitAt len s of
+                    (h, t) | eof || not (null t) || LL.length h == len ->
+                               Done h (Chunk t eof)
+                           | otherwise ->
+                               IterF $ LL.append h
+                                         `liftM` takeI (len - LL.length h)
+-- XXX fix me
 
 -- | Puts strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
 -- writes an EOF to the handle.
@@ -347,11 +354,13 @@ inumTakeExact = mkInumM . loop
             _ <- ifeed1 h       -- Keep feeding even if Done
             loop $ n - LL.length h
 
+{-
 -- | Feed some number of list elements (bytes in the case of
 -- 'L.ByteString's) to an 'Iter', or feed fewer if an EOF is
 -- encountered.
 inumTake :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
 inumTake n = mkInumM $ setAutoEOF True >> ipipe (inumTakeExact n)
+-}
 
 
 -- | This inner enumerator is like 'inumNop' in that it passes

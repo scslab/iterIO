@@ -21,7 +21,7 @@ module Data.IterIO.Iter
     , mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
-    , nullI, dataI, pureI, chunkI, currentChunkI
+    , nullI, dataI, pureI, chunkI
     , peekI, atEOFI, ungetI
     , safeCtlI, ctlI
     -- * Internal functions
@@ -98,6 +98,7 @@ instance Functor Chunk where
     fmap f (Chunk t eof) = Chunk (f t) eof
 
 instance (ChunkData t) => Monoid (Chunk t) where
+    {-# INLINE mempty #-}
     mempty = Chunk mempty False
 
     mappend ca@(Chunk a eofa) cb@(Chunk b eofb)
@@ -116,10 +117,12 @@ instance (ChunkData t) => ChunkData (Chunk t) where
 -- | Constructor function that builds a chunk containing data and a
 -- 'False' EOF flag.
 chunk :: t -> Chunk t
+{-# INLINE chunk #-}
 chunk t = Chunk t False
 
 -- | An chunk with 'mempty' data and the EOF flag 'True'.
 chunkEOF :: (Monoid t) => Chunk t
+{-# INLINE chunkEOF #-}
 chunkEOF = Chunk mempty True
 
 -- | The basic Iteratee type is @Iter t m a@, where @t@ is the type of
@@ -134,6 +137,7 @@ newtype Iter t m a = Iter { runIter :: Chunk t -> IterR t m a }
 -- | Builds an 'Iter' that keeps requesting input until it receives a
 -- non-'null' chunk.
 iterF :: (ChunkData t) => (Chunk t -> IterR t m a) -> Iter t m a
+{-# INLINE iterF #-}
 iterF f = Iter $ \c -> if null c then IterF $ iterF f else f c
 
 -- | Class of control commands for enclosing enumerators.  The class
@@ -288,6 +292,7 @@ instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
     mplus a b = ifParse a return b
 
 instance MonadTrans (Iter t) where
+    {-# INLINE lift #-}
     lift m = Iter $ \c -> IterM $ m >>= return . flip Done c
 
 translateIterEOF :: IO a -> IO (Iter t m a)
@@ -327,7 +332,7 @@ fixMonadIO f = do
   return r
 
 instance (MonadIO m) => MonadFix (Iter t m) where
-    mfix f = fixMonadIO f
+    mfix = fixMonadIO
 
 --
 -- Core functions
@@ -449,6 +454,7 @@ instance Exception IterCUnsupp
 -- to clean up after exceptions.)  Use 'throwI' in preference to
 -- 'throw' whenever possible.
 throwI :: (Exception e) => e -> Iter t m a
+{-# INLINE throwI #-}
 throwI e = Iter $ IterFail (toException e)
 
 -- | Throw an exception of type 'IterEOF'.  This will be interpreted
@@ -458,6 +464,7 @@ throwI e = Iter $ IterFail (toException e)
 -- monad, the exception will be rethrown by 'run' (and hence '|$') as
 -- an 'IOError' of type EOF.
 throwEOFI :: String -> Iter t m a
+{-# INLINE throwEOFI #-}
 throwEOFI = throwI . mkIterEOF
 
 -- | Run an 'Iter'.  Catch any exception it throws (and return the
@@ -816,6 +823,7 @@ nullI = Iter $ \(Chunk _ eof) ->
 -- | Returns any non-empty amount of input data, or throws an
 -- exception if EOF is encountered and there is no data.
 dataI :: (Monad m, ChunkData t) => Iter t m t
+{-# INLINE dataI #-}
 dataI = iterF nextChunk
     where nextChunk c@(Chunk d True) | null d = IterFail eoferr c
           nextChunk (Chunk d eof)             = Done d (Chunk mempty eof)
@@ -829,13 +837,8 @@ pureI = do peekI nullI; Iter $ \(Chunk t _) -> Done t chunkEOF
 -- | Returns the next 'Chunk' that either contains non-'null' data or
 -- has the EOF bit set.
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
+{-# INLINE chunkI #-}
 chunkI = iterF $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
-
--- | Returns the current chunk.  Unlike 'chunkI', @currentChunkI@ may
--- return an empty chunk with no data, even when more data is
--- available upon requested.
-currentChunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
-currentChunkI = Iter $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
 
 -- | Runs an 'Iter' without consuming any input.  (See 'tryBI' if you
 -- want to avoid consuming input just when the 'Iter' fails.)

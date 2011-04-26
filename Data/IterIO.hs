@@ -204,16 +204,16 @@ Here is an example of an 'Iter' with side effects:
     liftIOexampleI = do
       line <- 'lineI'
       'liftIO' $ putStrLn $ \"First line is: \" ++ line
-      next <- 'takeExactI' 40
+      next <- 'takeI' 40
       'liftIO' $ putStrLn $ \"And the next 40 bytes are: \" ++ next
 @
 
 Unlike @lines2I@, @liftIOexampleI@ does not return any interesting
 result, but it uses the @'liftIO'@ monad transformer method to output
 the first line of the file, followed by the next 40 bytes.  The
-'takeExactI' iteratee returns a 'String' (or @ByteString@) with
-exactly the requested number of characters or bytes, unless an EOF
-(end-of-file) is encountered.
+'takeI' iteratee returns a 'String' (or @ByteString@) with exactly the
+requested number of characters or bytes, unless an EOF (end-of-file)
+is encountered.
 
 Of course, the real power of command pipelines is that you can hook
 multiple commands together.  For instance, say you want to know how

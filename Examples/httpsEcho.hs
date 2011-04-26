@@ -99,7 +99,7 @@ parmsI :: (Monad m) => HttpReq -> Iter L m Parms
 parmsI req = foldForm req getPart []
  where
   getPart parts mp = do
-    front <- takeExactI 50
+    front <- takeI 50
     backLen <- countI
     return ((mp,front,backLen):parts)
 

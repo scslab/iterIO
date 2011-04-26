@@ -42,7 +42,7 @@ liftIOexampleI :: (MonadIO m) => Iter String m ()
 liftIOexampleI = do
   line <- lineI
   liftIO $ putStrLn $ "First line is: " ++ line
-  next <- takeExactI 40
+  next <- takeI 40
   liftIO $ putStrLn $ "And the next 40 bytes are: " ++ next
 
 lineCountI :: (Monad m) => Iter String m Int

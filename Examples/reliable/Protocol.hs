@@ -66,6 +66,12 @@ killEndpoint :: Endpoint -> IO ()
 killEndpoint ep = do
   modifyMVar_ (epLAR ep) $ \ack -> return $ xor ack 0x80000000
 
+upToI :: (Monad m) => Int -> Iter L.ByteString m L.ByteString
+upToI maxlen | maxlen <= 0 = return mempty
+             | otherwise   = iterF $ \(Chunk s eof) ->
+                             case L.splitAt (fromIntegral maxlen) s of
+                               (h, t) -> Done h $ Chunk t eof
+
 -- | Feed pure data directly to an iteratee.
 inWindow :: SeqNo -> SeqNo -> SeqNo -> Bool
 inWindow wsz next seqno
@@ -89,7 +95,7 @@ relSend ep fork iter = doSend 0 1
         when (acked == acked') $ liftIO $ readSampleVar (epAck ep)
         doSend acked' next
       doSend acked next = do
-        payload <- takeI 500
+        payload <- upToI 500
         liftIO $ modifyMVar_ (epLFS ep) $ \_ -> do
           when (L.null payload) $ modifyMVar_ (epWEOF ep) (\_ -> return True)
           liftIO $ writeSampleVar (epSnd ep) ()
