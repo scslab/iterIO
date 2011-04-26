@@ -21,11 +21,11 @@ module Data.IterIO.Iter
     , mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
-    , nullI, dataI, pureI, chunkI
+    , nullI, data0I, dataI, pureI, chunkI
     , peekI, atEOFI, ungetI
     , safeCtlI, ctlI
     -- * Internal functions
-    , onDone
+    , onDone, fmapI
     , onDoneR, stepR, stepR', runR, fmapR, reRunIter, runIterR
     , getResid, setResid
     ) where
@@ -243,7 +243,15 @@ instance (Typeable t, Typeable1 m, Typeable a) => Typeable (Iter t m a) where
     typeOf = typeOfDefault
 
 instance (Monad m) => Functor (Iter t m) where
-    fmap = onDone . fmap
+    fmap = fmapI
+
+-- | @fmapI@ is like 'liftM', but differs in one important respect:
+-- it preserves 'InumFail' states (and in fact maps the non-failed
+-- iter state).  By contrast, 'liftM', which is equivalent to
+-- @'liftM' f i = i '>>=' 'return' . f@, transforms 'InumFail' states
+-- to 'IterFail' ones because of its use of '>>='.
+fmapI :: (Monad m) => (a -> b) -> Iter t m a -> Iter t m b
+fmapI = onDone . fmapR
 
 -- | Maps the result of an 'IterR' like 'fmap', but only if the
 -- 'IterR' is no longer active.  It is an error to call this function
@@ -481,6 +489,14 @@ throwEOFI = throwI . mkIterEOF
 -- 'InumFail', the expression @iter >>= return . Right@ will be
 -- 'IterFail'.)  This could be particularly bad in cases where the
 -- exception is not even caught by the 'tryI' expression.
+--
+-- Similarly, trying to implement 'catchI' in terms of 'tryI' doesn't
+-- quite work.  Something like
+--
+-- > catchI iter handler = tryI iter >>= either (uncurry handler) return
+--
+-- would convert any 'InumFail' exceptions /not/ caught by the handler
+-- into 'IterFail' states.
 genCatchI :: (ChunkData t, Monad m, Exception e) =>
              Iter t m a
           -- ^ 'Iter' that might throw an exception
@@ -820,9 +836,15 @@ nullI :: (Monad m, ChunkData t) => Iter t m ()
 nullI = Iter $ \(Chunk _ eof) ->
         if eof then Done () chunkEOF else IterF nullI
 
--- | Returns any non-empty amount of input data, or throws an
--- exception if EOF is encountered and there is no data.
-dataI :: (Monad m, ChunkData t) => Iter t m t
+-- | Returns a non-empty amount of input data if there is any input
+-- left.  Returns 'mempty' on an end of file condition.
+data0I :: (ChunkData t) => Iter t m t
+{-# INLINE data0I #-}
+data0I = iterF $ \(Chunk d eof) -> Done d (Chunk mempty eof)
+
+-- | Like 'data0I', but always returns non-empty data.  Throws an
+-- exception on an EOF condition.
+dataI :: (ChunkData t) => Iter t m t
 {-# INLINE dataI #-}
 dataI = iterF nextChunk
     where nextChunk c@(Chunk d True) | null d = IterFail eoferr c
@@ -853,6 +875,7 @@ atEOFI = iterF $ \c@(Chunk t _) -> Done (null t) c
 -- | Place data back onto the input stream, where it will be the next
 -- data consumed by subsequent 'Iter's.
 ungetI :: (ChunkData t) => t -> Iter t m ()
+{-# INLINE ungetI #-}
 ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 
 -- | Issue a control request, return 'Nothing' if the request is

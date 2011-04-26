@@ -10,7 +10,7 @@ module Data.IterIO.ListLike
     , headLI, safeHeadLI
     , headI, safeHeadI
     , lineI, safeLineI
-    , dataMaxI, takeI
+    , dataMaxI, data0MaxI, takeI
     , handleI, sockDgramI, sockStreamI
     , stdoutI
     -- * Control requests
@@ -153,6 +153,16 @@ lineI = do
     Just line -> return line
 
 -- | Return 'LL.ListLike' data that is at most the number of elements
+-- specified by the first argument, and at least one element unless
+-- EOF is encountered or 0 elements are requested, in which case
+-- 'mempty' is returned.
+data0MaxI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
+data0MaxI maxlen | maxlen <= 0 = return mempty
+                 | otherwise   = iterF $ \(Chunk s eof) ->
+                                 case LL.splitAt maxlen s of
+                                   (h, t) -> Done h $ Chunk t eof
+
+-- | Return 'LL.ListLike' data that is at most the number of elements
 -- specified by the first argument, and at least one element (as long
 -- as a positive number is requested).  Throws an exception if a
 -- positive number of items is requested and an EOF is encountered.
@@ -164,19 +174,16 @@ dataMaxI maxlen | maxlen <= 0 = return mempty
                                        (h, t) -> Done h $ Chunk t eof
     where eoferr = toException $ mkIterEOF "dataMaxI"
 
--- | Return the next @len@ elements of an 'LL.ListLike' data stream,
+-- | Return the next @len@ elements of a 'LL.ListLike' data stream,
 -- unless an EOF is encountered, in which case fewer may be returned.
 takeI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
 takeI len | len <= 0  = return mempty
-          | otherwise =
-              iterF $ \(Chunk s eof) ->
-                  case LL.splitAt len s of
-                    (h, t) | eof || not (null t) || LL.length h == len ->
-                               Done h (Chunk t eof)
-                           | otherwise ->
-                               IterF $ LL.append h
-                                         `liftM` takeI (len - LL.length h)
--- XXX fix me
+          | otherwise = do
+  t <- data0MaxI len
+  let tlen = LL.length t
+  if tlen == len || tlen == 0
+    then return t
+    else LL.append t `liftM` takeI (len - tlen)
 
 -- | Puts strings (or 'LL.ListLikeIO' data) to a file 'Handle', then
 -- writes an EOF to the handle.

@@ -573,8 +573,8 @@ match :: (ChunkData t, LL.ListLike t e, Eq e, Monad m) =>
 match ft = doMatch ft
     where doMatch target | LL.null target = return ft
                          | otherwise      = do
-            m <- dataMaxI (LL.length target) <?> chunkShow target
-            if LL.isPrefixOf m target
+            m <- data0MaxI $ LL.length target
+            if not (LL.null m) && LL.isPrefixOf m target
               then doMatch $ LL.drop (LL.length m) target
               else expectedI (chunkShow m) $ chunkShow target
 
@@ -594,7 +594,7 @@ stringCase ft = doMatch LL.empty $ ft
                      then False else LL.tail a `prefix` LL.tail b
       doMatch acc target | LL.null target = return acc
                          | otherwise      = do
-        m <- dataMaxI (LL.length target) <?> chunkShow target
-        if m `prefix` target
+        m <- data0MaxI $ LL.length target
+        if not (LL.null m) && m `prefix` target
           then doMatch (LL.append acc m) $ LL.drop (LL.length m) target
           else expectedI (chunkShow m) $ chunkShow target
