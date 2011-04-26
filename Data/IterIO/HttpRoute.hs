@@ -289,17 +289,17 @@ routeGenFileSys :: (Monad m) =>
 routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
     where
       dir = if null dir0 then "." else dir0
-      check req = do
+      checkErr req e _ | isDoesNotExistError e = return $ resp404 req
+                       | otherwise             = return $ resp500 (show e)
+      check req = handlerI (checkErr req) $ do
         let path = dir ++ concatMap (('/' :) . S8.unpack) (reqPathLst req)
-        estat <- tryI $ fs_stat fs path
-        case estat of
-          Right st | isRegularFile st     -> doFile req path st
-                   | not (isDirectory st) -> return $ resp404 req
-                   | null index           -> return $ resp403 req
-                   | otherwise -> return $ resp301 $
-                                  S8.unpack (reqNormalPath req) ++ '/':index
-          Left (e,_ ) | isDoesNotExistError e -> return $ resp404 req
-                      | otherwise             -> return $ resp500 (show e)
+        st <- fs_stat fs path
+        case () of
+          _ | isRegularFile st     -> doFile req path st
+            | not (isDirectory st) -> return $ resp404 req
+            | null index           -> return $ resp403 req
+            | otherwise -> return $ resp301 $
+                           S8.unpack (reqNormalPath req) ++ '/':index
       doFile req path st
           | reqMethod req == S8.pack "GET"
             && maybe True (< (modTimeUTC st)) (reqIfModifiedSince req) = do
@@ -319,7 +319,7 @@ routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
           | otherwise = return $ resp405 req
           where resp = defaultHttpResp { respChunk = False
                                        , respHeaders = mkHeaders req st }
-                                            
+
       mkHeaders req st =
           [ S8.pack $ "Last-Modified: " ++ (http_fmt_time $ modTimeUTC st)
           , S8.pack $ "Content-Length: " ++ (show $ fileSize st)
