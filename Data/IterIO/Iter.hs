@@ -135,7 +135,9 @@ chunkEOF = Chunk mempty True
 newtype Iter t m a = Iter { runIter :: Chunk t -> IterR t m a }
 
 -- | Builds an 'Iter' that keeps requesting input until it receives a
--- non-'null' chunk.
+-- non-'null' 'Chunk'.  In other words, the 'Chunk' fed to the
+-- argument function is guaranteed either to contain data or to have
+-- the EOF flag true (or both).
 iterF :: (ChunkData t) => (Chunk t -> IterR t m a) -> Iter t m a
 {-# INLINE iterF #-}
 iterF f = Iter $ \c -> if null c then IterF $ iterF f else f c
@@ -376,9 +378,10 @@ runR (InumFail e i _)       = InumFail e i mempty
 -- ('run' iter)@.  However, if @iter@ fails, 'run' throws a
 -- language-level exception, which cannot be caught within other
 -- 'Iter' monads.  By contrast, @runI@ throws a monadic exception that
--- can be caught.  In short, use @runI@ in preference to @run@
--- whenever possible.  See a more detailed discussion of the same
--- issue in the documentation for @'.|$'@ in "Data.IterIO.Inum".
+-- can be caught.  In short, use @runI@ in preference to @run@ in
+-- situations where both are applicable.  See a more detailed
+-- discussion of the same issue with examples in the documentation for
+-- @'.|$'@ in "Data.IterIO.Inum".
 runI :: (ChunkData t1, ChunkData t2, Monad m) => Iter t1 m a -> Iter t2 m a
 runI i = Iter $ runIterR (runR $ runIter i chunkEOF)
 
@@ -400,7 +403,15 @@ noParseFromException s = do IterNoParse e <- fromException s; cast e
 noParseToException :: (Exception e) => e -> SomeException
 noParseToException = toException . IterNoParse
 
--- | End-of-file occured in an Iteratee that required more input.
+-- | An end-of-file occured in an Iteratee that required more input.
+-- Note that the 'liftIO' function re-parents all IO EOF errors under
+-- this exception.  Thus, if you are attempting to catch an EOF
+-- 'IOError' outside of the 'liftIO' block, you will need to match
+-- @IterEOF@ exceptions rather, e.g.:
+--
+-- @
+--  ('liftIO' $ ...) ``catchI`` \\(IterEOF e) _ -> ...
+-- @
 data IterEOF = IterEOF IOError deriving (Typeable)
 instance Show IterEOF where
     showsPrec _ (IterEOF e) rest = show e ++ rest
@@ -440,8 +451,8 @@ instance Exception IterMiscParseErr where
     toException = noParseToException
     fromException = noParseFromException
 
--- | Exception thrown by 'CtlI' when an type of control request not
--- supported by the enumerator is attempted.
+-- | Exception thrown by 'CtlI' when the type of the control request
+-- is not supported by the enclosing enumerator.
 data IterCUnsupp = forall carg cres. (CtlCmd carg cres) =>
                    IterCUnsupp carg deriving (Typeable)
 instance Show IterCUnsupp where
@@ -488,7 +499,7 @@ throwEOFI = throwI . mkIterEOF
 -- '>>=' operator has this effect.  (I.e., even if @iter@ is
 -- 'InumFail', the expression @iter >>= return . Right@ will be
 -- 'IterFail'.)  This could be particularly bad in cases where the
--- exception is not even caught by the 'tryI' expression.
+-- exception is not even of a type caught by the 'tryI' expression.
 --
 -- Similarly, trying to implement 'catchI' in terms of 'tryI' doesn't
 -- quite work.  Something like
@@ -512,10 +523,10 @@ genCatchI iter0 handler conv = onDone check iter0
                                  (getResid r)
                       Nothing -> fmap conv r
 
--- | Catch an exception thrown by an 'Iter' or an enclosing 'Inum'
--- (for instance one applied with '.|$').  If you wish to catch just
--- errors thrown within 'Inum's, see the function @'inumCatch'@ in
--- "Data.IterIO.Inum".
+-- | Catch an exception thrown by an 'Iter', including exceptions
+-- thrown by any 'Inum's fused to the 'Iter' (or applied to it with
+-- '.|$').  If you wish to catch just errors thrown within 'Inum's,
+-- see the function @'inumCatch'@ in "Data.IterIO.Inum".
 --
 -- On exceptions, @catchI@ invokes a handler passing it both the
 -- exception thrown and the state of the failing 'IterR', which may
@@ -531,7 +542,7 @@ genCatchI iter0 handler conv = onDone check iter0
 --
 -- @
 --  onExceptionI iter cleanup =
---      iter \`catchI\` \\('SomeException' _) r -> cleanup >> reRunIter r
+--      iter \`catchI\` \\('SomeException' _) r -> cleanup >> 'reRunIter' r
 -- @
 --
 -- Note that @catchI@ only works for /synchronous/ exceptions, such as
