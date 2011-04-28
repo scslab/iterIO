@@ -848,7 +848,7 @@ nullI = Iter $ \(Chunk _ eof) ->
         if eof then Done () chunkEOF else IterF nullI
 
 -- | Returns a non-empty amount of input data if there is any input
--- left.  Returns 'mempty' on an end of file condition.
+-- left.  Returns 'mempty' on an EOF condition.
 data0I :: (ChunkData t) => Iter t m t
 {-# INLINE data0I #-}
 data0I = iterF $ \(Chunk d eof) -> Done d (Chunk mempty eof)
@@ -862,8 +862,8 @@ dataI = iterF nextChunk
           nextChunk (Chunk d eof)             = Done d (Chunk mempty eof)
           eoferr = toException $ mkIterEOF "dataI"
 
--- | A variant of 'dataI' that reads the whole input up to an
--- end-of-file and returns it.
+-- | A variant of 'data0I' that reads the whole input up to an EOF and
+-- returns it.
 pureI :: (Monad m, ChunkData t) => Iter t m t
 pureI = do peekI nullI; Iter $ \(Chunk t _) -> Done t chunkEOF
 
@@ -889,18 +889,18 @@ ungetI :: (ChunkData t) => t -> Iter t m ()
 {-# INLINE ungetI #-}
 ungetI t = Iter $ \c -> Done () (mappend (chunk t) c)
 
--- | Issue a control request, return 'Nothing' if the request is
--- unsupported.  Otherwise, return @'Just' . 'Right'@ the result if
--- the request is supported by enclosing enumerators.  If the request
--- is supported but executing it caused an exception @e@ to be thrown,
--- then returns @'Just' ('Left' e)@.
+-- | Issue a control request.  Returns 'CtlUnsupp' if the request type
+-- is unsupported.  Otherwise, returns 'CtlDone' with the result if
+-- the request succeeds, or return @'CtlFail'@ if the request type is
+-- supported but attempting to execute the request caused an
+-- exception.
 safeCtlI :: (CtlCmd carg cres, Monad m) =>
             carg -> Iter t m (CtlRes cres)
 safeCtlI carg = Iter $ IterC . CtlArg carg return
 
 -- | Issue a control request and return the result.  Throws an
--- exception if the operation type was not supported by an enclosing
--- enumerator.
+-- exception of type 'IterCUnsupp' if the operation type was not
+-- supported by an enclosing enumerator.
 ctlI :: (CtlCmd carg cres, ChunkData t, Monad m) =>
         carg -> Iter t m cres
 ctlI carg = do
@@ -914,7 +914,7 @@ ctlI carg = do
 -- Iter manipulation functions
 --
 
--- | A variant of 'IterR' that only works for the 'IterF' and 'IterC'
+-- | A variant of 'stepR' that only works for the 'IterF' and 'IterC'
 -- states, not the 'IterM' state.  (Because of this additional
 -- restriction, the input and output 'Monad' types @m1@ and @m2@ do
 -- not need to be the same.)
