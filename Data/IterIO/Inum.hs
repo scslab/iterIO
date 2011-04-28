@@ -54,26 +54,29 @@ import Data.IterIO.Trans
 --
 -- > type Inum' tIn tOut m a = Iter tOut m a -> Iter tIn m a
 --
--- In fact, given an 'Inum' object @inum@, it is possible to construct
+-- In fact, given an @Inum@ object @inum@, it is possible to construct
 -- a function of type @Inum'@ with @(inum '.|')@.  But sometimes one
--- might like to concatenate 'Inum's.  For instance, consider a
+-- might like to concatenate @Inum@s.  For instance, consider a
 -- network protocol that changes encryption or compression modes
--- midstream.  Transcoding is done by 'Inum's.  To change transcoding
+-- midstream.  Transcoding is done by @Inum@s.  To change transcoding
 -- methods after applying an @Inum@ to an iteratee requires the
--- ability to \"pop\" the iteratee back out of the 'Inum' so as to be
--- able to hand it to another 'Inum'.  `Inum`'s return type (@Iter tIn
+-- ability to \"pop\" the iteratee back out of the @Inum@ so as to be
+-- able to hand it to another @Inum@.  @Inum@'s return type (@Iter tIn
 -- m (IterR tOut m a)@ as opposed to @Iter tIn m a@) allows the
--- monadic bind operator '>>=' to accomplish this popping.
+-- monadic bind operator '>>=' to accomplish this popping in
+-- conjunction with the 'reRunIter' function.
 --
 -- An @Inum@ must never feed an EOF chunk to its iteratee.  Instead,
 -- upon receiving EOF, the @Inum@ should simply return the state of
 -- the inner 'Iter' (this is how \"popping\" the iteratee back out
--- works, in conjunction with the 'reRunIter' function).  An @Inum@
--- should also return when the iteratee returns a result or fails, or
--- when the @Inum@ itself fails.  An @Inum@ may also unilaterally
--- return the state of the iteratee at any earlier point, for instance
--- if it has reached some logical message boundary (e.g., many
--- protocols finish processing headers upon reading a blank line).
+-- works--If the @Inum@ passed the EOF through to the 'Iter', the
+-- 'Iter' would stop requesting more input and could not be handed off
+-- to a new @Inum@).  An @Inum@ should also return when the iteratee
+-- returns a result or fails, or when the @Inum@ itself fails.  An
+-- @Inum@ may also unilaterally return the state of the iteratee at
+-- any earlier point, for instance if it has reached some logical
+-- message boundary (e.g., many protocols finish processing headers
+-- upon reading a blank line).
 --
 -- @Inum@s are generally constructed with the one of the 'mkInum' or
 -- 'mkInumM' functions, which hide most of the error handling details.
@@ -176,7 +179,7 @@ infixr 2 .|$
 -- See 'lcat' if you want to stop when the 'Iter' no longer requires
 -- input.  If you want to continue executing even in the event of an
 -- 'InumFail' condition, you can wrap the first 'Inum' with
--- 'inumCatch'.
+-- 'inumCatch' and invoke 'resumeI' from within the exception handler.
 --
 -- @cat@ (and 'lcat', described below) are useful in right folds.
 -- Say, for instance, that @files@ is a list of files you wish to
@@ -189,9 +192,9 @@ infixr 2 .|$
 --
 -- Note the use of 'inumNull' as the starting value for 'foldr'.  This
 -- is not to be confused with 'inumNop'.  'inumNull' acts as a no-op
--- for concatentation (i.e., producing no output analogously to
--- @\/dev\/null@), while 'inumNop' is the no-op for fusing (because it
--- passes all data through untouched).
+-- for concatentation, producing no output analogously to
+-- @\/dev\/null@.  By contrast 'inumNop' is the no-op for fusing (see
+-- '|.' and '.|' below) because it passes all data through untouched.
 --
 -- @cat@ has fixity:
 --
@@ -210,7 +213,7 @@ infixr 3 `cat`
 
 -- | Lazy cat.  Like 'cat', except that it does not run the second
 -- 'Inum' if the 'Iter' is no longer active after completion of the
--- first 'Inum'.
+-- first 'Inum'.  Also has fixity @infixr 3 \`lcat\`@.
 lcat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
@@ -249,9 +252,9 @@ joinR _                = error "joinR: not done"
 -- @tOut@ to @tOut2@, then @inum1 |. inum2@ produces a new 'Inum' that
 -- transcodes from @tIn@ to @tOut2@.
 --
--- Typically @i@ and @iR@ are types @'Iter' tOut2 m a@ and
--- @'IterR' tOut2 m a@ respectively, in which case the second
--- argument and result of @|.@ are also 'Inum's.
+-- Typically @i@ and @iR@ are types @'Iter' tOut2 m a@ and @'IterR'
+-- tOut2 m a@, respectively, in which case the second argument and
+-- result of @|.@ are also 'Inum's.
 --
 -- Has fixity:
 --
@@ -313,7 +316,7 @@ infixr 4 .|
 -- or fusing operators.
 --
 -- As noted for 'catchI', exception handlers receive both the
--- exception thrown and the failing 'Iter'.  Particularly in the case
+-- exception thrown and the failed 'IterR'.  Particularly in the case
 -- of @inumCatch@, it is important to re-throw exceptions by
 -- re-executing the failed 'Iter' with 'reRunIter', not passing the
 -- exception itself to 'throwI'.  That way, if the exception is
@@ -396,9 +399,12 @@ verboseResumeI _                = error "verboseResumeI: not InumFail"
 -- data of the target 'Iter' and sticking the result back into the
 -- `Inum`'s residual data.
 --
--- The two most commond @ResidHandler@s are 'pullupResid' (to pull the
+-- The two most common @ResidHandler@s are 'pullupResid' (to pull the
 -- target `Iter`'s residual data back up to the 'Inum' as is), and
 -- 'id' (to do no adjustment of residual data).
+--
+-- @ResidHandler@s are used by the 'mkInumC' function, and by the
+-- 'passCtl' 'CtlHandler'.
 type ResidHandler tIn tOut = (tIn, tOut) -> (tIn, tOut)
 
 withResidHandler :: ResidHandler tIn tOut
@@ -433,7 +439,21 @@ passCtl adj (CtlArg a n c0) = withResidHandler adj c0 runn
 -- | Create a 'CtlHandler' given a function of a particular control
 -- argument type and a fallback 'CtlHandler' to run if the argument
 -- type does not match.  @consCtl@ is used to chain handlers, with the
--- rightmost handler being either 'noCtl' or 'passCtl'.  Has fixity:
+-- rightmost handler being either 'noCtl' or 'passCtl'.
+--
+-- For example, to create a control handler that implements seek on
+-- @'SeekC'@ requests, returns the size of the file on @'SizeC'@
+-- requests, and passes everything else out to the enclosing
+-- enumerator (if any), you could use the following:
+--
+-- @
+-- fileCtl :: (ChunkData t, MonadIO m) => Handle -> CtlHandler (Iter () m) t m a
+-- fileCtl h = ('mkFlushCtl' $ \(SeekC mode pos) -> liftIO (hSeek h mode pos))
+--             \`consCtl\` ('mkCtl' $ \SizeC -> liftIO (hFileSize h))
+--             \`consCtl\` 'passCtl' 'id'
+-- @
+--
+-- Has fixity:
 --
 -- > infixr 9 `consCtl`
 consCtl :: (CtlCmd carg cres, ChunkData tIn, Monad mIn) =>
@@ -524,7 +544,7 @@ runInum inum = onDone check . inum
 
 -- | A generalized versin of 'mkInum' that allows residual data to be
 -- adjusted and specifies a handler for control requests.  For
--- example, pass up control requests and ensure no residual data is
+-- example, to pass up control requests and ensure no residual data is
 -- lost when the 'Inum' is fused to an 'Iter', the @inumConcat@
 -- function given previously for 'mkInum' at <#mkInumExample> could be
 -- re-written:
@@ -555,12 +575,16 @@ mkInumC adj ch codec iter0 = doIter iter0
 
 -- | Create an 'Inum' based on an 'Iter' that transcodes the input to
 -- the output type.  Rejects all control requests.
+--
+-- > mkInum = mkInumC id noCtl
 mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           Iter tIn m tOut -> Inum tIn tOut m a
 mkInum = mkInumC id noCtl
 
 -- | Like 'mkInum' but passes all control requests to enclosing
 -- enumerators and pulls up residual data.
+--
+-- > mkInumP = mkInumC pullupResid (passCtl pullupResid)
 mkInumP :: (ChunkData t, Monad m) => Iter t m t -> Inum t t m a
 mkInumP = mkInumC pullupResid (passCtl pullupResid)
 
@@ -568,8 +592,15 @@ mkInumP = mkInumC pullupResid (passCtl pullupResid)
 pullupResid :: (ChunkData t) => (t, t) -> (t, t)
 pullupResid (a, b) = (mappend a b, mempty)
 
--- | Bracket an 'Inum' with a start and end function, which instance
--- be used to acquire and release a resource.
+-- | Bracket an 'Inum' with a start and end function, which can be
+-- used to acquire and release a resource, must like the IO monad's
+-- @'bracket'@ function.  For example:
+--
+-- > enumFile :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
+-- >             FilePath -> Onum t m a
+-- > enumFile path = inumBracket (liftIO $ openBinaryFile path ReadMode)
+-- >                             (liftIO . hClose)
+-- >                             enumHandle
 inumBracket :: (ChunkData tIn, Monad m) =>
                Iter tIn m b
             -- ^ Computation to run first
@@ -831,8 +862,9 @@ defaultInumState = InumState {
 --
 -- Another important thing to note about the 'InumM' monad, as
 -- described in the documentation for 'mkInumM', is that you must call
--- @'lift'@ twice execute actions in monad @m@, and you must use the
--- 'liftIterM' function to execute actions in monad @'Iter' t m a@.
+-- @'lift'@ twice to execute actions in monad @m@, and you must use
+-- the 'liftIterM' function to execute actions in monad @'Iter' t m
+-- a@.
 type InumM tIn tOut m a = Iter tIn (IterStateT (InumState tIn tOut m a) m)
 
 data InumDone = InumDone deriving (Show, Typeable)
@@ -1030,17 +1062,19 @@ irepeat action = do
   imodify $ \s -> s { insAutoEOF = True, insAutoDone = True }
   let loop = action >> loop in loop
 
--- | If the target 'Iter' being fed by the 'Inum' is in the 'Done'
--- state, this funciton pops the residual data out of the 'Iter' and
--- returns it.  If the target is in any other state, returns 'mempty'.
+-- | If the target 'Iter' being fed by the 'Inum' is no longer active
+-- (i.e., if it is in the 'Done' state or in an error state), this
+-- funciton pops the residual data out of the 'Iter' and returns it.
+-- If the target is in any other state, returns 'mempty'.
 ipopresid :: (ChunkData tIn, ChunkData tOut, Monad m) =>
              InumM tIn tOut m a tOut
 ipopresid = do
   s <- iget
   case insIter s of
-    Done a (Chunk t eof) -> iput s { insIter = Done a $ Chunk mempty eof } >>
-                            return t
-    _                    -> return mempty
+    r | isIterActive r -> return mempty
+      | otherwise      -> do let (Chunk t _) = getResid r
+                             iput s { insIter = setResid r mempty }
+                             return t
 
 -- | Immediately perform a successful exit from an 'InumM' monad,
 -- terminating the 'Inum' and returning the current state of the

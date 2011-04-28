@@ -171,10 +171,10 @@ the @lines2I@ function:  @'Iter' String m (String, String)@.  The
 iteratee.  The last type, @(String, String)@ in this case, specifies
 the result type of the iteratee.  Finally, the middle type, @m@, is a
 monad, because @'Iter' t@ (for a given input type @t@) is a monad
-transformer.  In this case, when @head2File@ invokes @lines2I@, @m@
-will be @IO@, because @head2File@ is returning a result in the @IO@
-monad.  However, @lines2I@ would work equally well with any other
-monad.
+transformer (i.e., it is an instance of the 'MonadTrans' class).  In
+this case, when @head2File@ invokes @lines2I@, @m@ will be @IO@,
+because @head2File@ is returning a result in the @IO@ monad.  However,
+@lines2I@ would work equally well with any other monad.
 
 Next, notice the functioning of @'Iter' String m@ as a monad.  The
 type of 'lineI' in the above example is @'Iter' String m String@.  The
@@ -435,7 +435,7 @@ Here is the @grep@ code.  We will analyze it below.
 @
     grep :: String -> [FilePath] -> IO ()
     grep re files
-        | null files = 'enumHandle' stdin '|.' inumToLines '|$' inumGrep re '.|' linesOutI
+        | null files = 'enumStdin' '|.' inumToLines '|$' inumGrep re '.|' linesOutI
         | otherwise  = foldr1 'cat' (map enumLines files) '|$' inumGrep re '.|' linesOutI
         where
           enumLines file = 'inumCatch' ('enumFile' file '|.' inumToLines) handler
@@ -476,7 +476,7 @@ Note that 'IOError' doesn't expose a type constructor, but for
 exception types that do, it often suffices to define the function with
 the exception constructor, as:
 
->          handler e@(SomeException _) iter = do ...
+>          handler e@(SomeException _) result = do ...
 
 The second argument to @handler@, @result@, is the failed state of the
 iteratee, which contains more information than just the exception.  In
