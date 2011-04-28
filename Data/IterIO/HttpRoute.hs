@@ -5,7 +5,7 @@ module Data.IterIO.HttpRoute
     , routeConst, routeFn, routeReq
     , routeMethod, routeHost, routeTop
     , HttpMap, routeMap, routeMap', routeName, routePath, routeVar
-    , mimeTypesI, routeFileSys, FileSystemCalls(..), routeGenFileSys
+    , mimeTypesI, dirRedir, routeFileSys, FileSystemCalls(..), routeGenFileSys
     ) where
 
 import           Control.Monad
@@ -257,6 +257,12 @@ defaultFileSystemCalls = FileSystemCalls { fs_stat = liftIO . getFileStatus
           fdToOnum fd = do h <- fdToHandle fd
                            return $ enumHandle h `inumFinally` liftIO (hClose h)
 
+-- | @dirRedir indexFileName@ redirects requests to the URL formed by
+-- appending @\"/\" ++ indexFileName@ to the requested URL.
+dirRedir :: (Monad m) => FilePath -> FilePath -> HttpRoute m
+dirRedir index _path = routeFn $ \req -> return $
+                       resp301 $ S8.unpack (reqNormalPath req) ++ '/':index
+
 modTimeUTC :: FileStatus -> UTCTime
 modTimeUTC = posixSecondsToUTCTime . realToFrac . modificationTime
 
@@ -267,11 +273,19 @@ modTimeUTC = posixSecondsToUTCTime . realToFrac . modificationTime
 routeFileSys :: (MonadIO m) =>
                 (String -> S8.ByteString)
              -- ^ Map of file suffixes to mime types (see 'mimeTypesI')
-             -> FilePath
-             -- ^ Default file name to append when the request is for
-             -- a directory (e.g., @\"index.html\"@).  Empty string
-             -- results in no directory access.  Do not use @\".\"@ or
-             -- @\"..\"@ or you will cause an infinite redirect cycle.
+             -> (FilePath -> HttpRoute m)
+             -- ^ Handler to invoke when the URL maps to a directory
+             -- in the file system.  Reasonable options include:
+             --
+             -- * @('const' 'mempty')@ to do nothing, which results in a
+             --   403 forbidden,
+             --
+             -- * @('dirRedir' \"index.html\")@ to redirect directory
+             --   accesses to an index file, and
+             --
+             -- * a recursive invocation such as @(routeFileSys
+             -- typemap . (++ \"/index.html\"))@ to re-route the
+             -- request directly to an index file.
              -> FilePath
              -- ^ Pathname of directory to serve from file system
              -> HttpRoute m
@@ -279,11 +293,12 @@ routeFileSys = routeGenFileSys defaultFileSystemCalls
 
 -- | A generalized version of 'routeFileSys' that takes a
 -- 'FileSystemCalls' object and can therefore work outside of the
--- 'MonadIO' monad.
+-- 'MonadIO' monad.  Other than the 'FileSystemCalls' object, the
+-- arguments and their meaning are identical to 'routeFileSys'.
 routeGenFileSys :: (Monad m) =>
                    FileSystemCalls h m
                 -> (String -> S8.ByteString)
-                -> FilePath
+                -> (FilePath -> HttpRoute m)
                 -> FilePath
                 -> HttpRoute m
 routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
@@ -297,9 +312,8 @@ routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
         case () of
           _ | isRegularFile st     -> doFile req path st
             | not (isDirectory st) -> return $ resp404 req
-            | null index           -> return $ resp403 req
-            | otherwise -> return $ resp301 $
-                           S8.unpack (reqNormalPath req) ++ '/':index
+            | otherwise -> runHttpRoute
+                           (index path `mappend` routeConst (resp403 req)) req
       doFile req path st
           | reqMethod req == S8.pack "GET"
             && maybe True (< (modTimeUTC st)) (reqIfModifiedSince req) = do

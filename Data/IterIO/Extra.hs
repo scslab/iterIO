@@ -18,7 +18,6 @@ module Data.IterIO.Extra
 import Control.Concurrent (myThreadId)
 import Control.Concurrent.MVar
 import Control.Monad
-import Control.Monad.Fix
 import Control.Monad.Trans
 import Data.ByteString.Internal (inlinePerformIO)
 import Data.Monoid

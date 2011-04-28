@@ -81,7 +81,7 @@ cabal_dir :: String
 cabal_dir = (unsafePerformIO $ getAppUserDataDirectory "cabal") ++ "/share/doc"
 
 serve_cabal :: (MonadIO m) => HttpRoute m
-serve_cabal = routeFileSys mimeMap "index.html" cabal_dir
+serve_cabal = routeFileSys mimeMap (dirRedir "index.html") cabal_dir
 
 accept_loop :: HttpServer -> IO ()
 accept_loop srv = loop
@@ -95,7 +95,8 @@ accept_loop srv = loop
                       , routeName "cabal" $ serve_cabal
                       , routePath cabal_dir $ serve_cabal
                       , routePath "/usr/share/doc/ghc/html"
-                        $ routeFileSys mimeMap "" "/usr/share/doc/ghc/html"
+                        $ routeFileSys mimeMap (const mempty)
+                              "/usr/share/doc/ghc/html"
                       ]
 
 main :: IO ()
