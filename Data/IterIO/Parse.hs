@@ -31,6 +31,7 @@ import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
 import Data.Monoid
+import Data.Word
 
 import Data.IterIO.Iter
 import Data.IterIO.ListLike
@@ -113,32 +114,6 @@ infixr 3 >$>
 ($>) = flip (<$)
 infixl 4 $>
 
-
-{-
--- | @orI@ is a version of '<|>' with infinite backtracking, allowing
--- LL(*) instead of LL(1) parsing.  @orI a b@ executes @a@, keeping a
--- copy of all input consumed.  If @a@ throws an exception of class
--- 'IterNoParse' (e.g., by calling 'expectedI' or 'throwEOFI'), then
--- @b@ is executed on the same input.
---
--- Because @orI@ must keep a copy of all input fed to @a@, @a@ must
--- not read unbounded input.  If @a@ is a compound Iteratee such as @a
--- = ma >>= k@ and backtracking is only required on the first part
--- (@ma@), then it is preferable to use '\/', as in:
---
--- @
---   ma '\/' b '$' k
--- @
---
--- Has fixity:
---
--- > infixr 3 `orI`
---
-orI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a -> Iter t m a
-orI a b = ifParse a return b
-infixr 3 `orI`
--}
-
 -- | Defined as @orEmpty = ('\/' return 'mempty')@, and useful when
 -- parse failures should just return an empty 'Monoid'.  For example,
 -- a type-restricted 'many' can be implemented as:
@@ -197,7 +172,8 @@ someI iter = flip (<?>) "someI" $ do
 -- results.
 foldrI :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldrI f z iter = iter \/ return z $ f >$> foldrI f z iter
+foldrI f z iter = loop
+    where loop = iter \/ return z $ f >$> loop
 
 -- | A variant of 'foldrI' that requires the 'Iter' to succeed at
 -- least once.
@@ -290,16 +266,19 @@ ensureI test = do
 --   skipSpace = 'skipWhile1I' (\\c -> c == eord ' ' || c == eord '\t')
 -- @
 eord :: (Enum e) => Char -> e
+{-# SPECIALIZE INLINE eord :: Char -> Char #-}
+{-# SPECIALIZE INLINE eord :: Char -> Word8 #-}
 eord = toEnum . ord
 
 -- | Skip all input elements encountered until an element is found
 -- that does not match the specified predicate.
 skipWhileI :: (ChunkData t, LL.ListLike t e, Monad m) =>
               (e -> Bool) -> Iter t m ()
-skipWhileI test = iterF $ \(Chunk t eof) ->
-                  case LL.dropWhile test t of
-                    t1 | LL.null t1 && not eof -> IterF $ skipWhileI test
-                    t1 -> Done () $ Chunk t1 eof
+skipWhileI test = loop
+    where loop = iterF $ \(Chunk t eof) ->
+                 case LL.dropWhile test t of
+                   t1 | LL.null t1 && not eof -> IterF loop
+                   t1 -> Done () $ Chunk t1 eof
 
 -- | Like 'skipWhileI', but fails if at least one element does not
 -- satisfy the predicate.
@@ -554,6 +533,7 @@ sepEndBy1 item sep =
 
                  
 -- | Read the next input element if it satisfies some predicate.
+-- Otherwise throw an error.
 satisfy :: (ChunkData t, LL.ListLike t e, Enum e, Monad m) =>
            (e -> Bool) -> Iter t m e
 satisfy test = do

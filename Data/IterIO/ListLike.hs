@@ -2,8 +2,8 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 
 -- | This module contains basic iteratees and enumerators for working
--- with strings, 'LL.ListLike' objects, file handles, and datagram
--- sockets.
+-- with strings, 'LL.ListLike' objects, file handles, and stream and
+-- datagram sockets.
 module Data.IterIO.ListLike
     ( -- * Iteratees
       putI, sendI
@@ -221,6 +221,8 @@ sockDgramI s mdest = loop
                                  Just dest -> liftIO . flip (genSendTo s) dest
           loop = safeHeadI >>= maybe (return ()) (\str -> sendit str >> loop)
 
+-- | Sends output to a stream socket.  Calls shutdown (e.g., to send a
+-- TCP FIN packet) upon receiving EOF.
 sockStreamI :: (ChunkData t, SendRecvString t, MonadIO m) =>
                Socket -> Iter t m ()
 sockStreamI sock = putI (liftIO . genSend sock)
@@ -378,8 +380,7 @@ inumTake n = mkInumM $ setAutoEOF True >> ipipe (inumTakeExact n)
 -- | This inner enumerator is like 'inumNop' in that it passes
 -- unmodified 'Chunk's straight through to an iteratee.  However, it
 -- also logs the 'Chunk's to a file (which can optionally be truncated
--- or appended to, based on the second argument).  Does not close the
--- file handle when done.
+-- or appended to, based on the second argument).
 inumLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
            FilePath             -- ^ Path to log to
         -> Bool                 -- ^ True to truncate file
@@ -406,7 +407,7 @@ inumStderr :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
 inumStderr = inumhLog stderr
 
 -- | An 'Inum' that converts input in the lazy 'L.ByteString' format
--- to string 'S.ByteString's.
+-- to strict 'S.ByteString's.
 inumLtoS :: (Monad m) => Inum L.ByteString S.ByteString m a
 inumLtoS = mkInumP rh loop
     where rh (a, b) = (L.chunk b a, S.empty)
@@ -430,12 +431,12 @@ inumStoL = mkInumP rh loop
 -- | Add a finalizer to run when an 'Iter' has received an EOF and an
 -- 'Inum' has finished.  This works regardless of the order in which
 -- the two events happen.
-pairFinalizer :: (ChunkData t, ChunkData t1, MonadIO m) =>
+pairFinalizer :: (ChunkData t, ChunkData t1, MonadIO m, MonadIO m1) =>
                  Iter t m a
-              -> Inum t1 t2 m b
+              -> Inum t1 t2 m1 b
               -> IO ()
               -- ^ Cleanup action
-              -> IO (Iter t m a, Inum t1 t2 m b)
+              -> IO (Iter t m a, Inum t1 t2 m1 b)
               -- ^ Cleanup action will run when these two are both done
 pairFinalizer iter inum cleanup = do
   mc <- newMVar False
@@ -443,10 +444,16 @@ pairFinalizer iter inum cleanup = do
             when cleanit cleanup >> return (True, ())
   return (iter `finallyI` liftIO end, inum `inumFinally` liftIO end)
 
+-- | \"Iterizes\" a file 'Handle' by turning into an 'Onum' (for
+-- reading) and an 'Iter' (for writing).  Uses 'pairFinalizer' to
+-- 'hClose' the 'Handle' when both the 'Iter' and 'Onum' are finished.
 iterHandle :: (LL.ListLikeIO t e, ChunkData t, MonadIO m) =>
               Handle -> IO (Iter t m (), Onum t m a)
 iterHandle h = pairFinalizer (handleI h) (enumHandle h) (hClose h)
 
+-- | \"Iterizes\" a stream 'Socket' by turning into an 'Onum' (for
+-- reading) and an 'Iter' (for writing).  Uses 'pairFinalizer' to
+-- 'sClose' the 'Socket' when both the 'Iter' and 'Onum' are finished.
 iterStream :: (SendRecvString t, ChunkData t, MonadIO m) =>
               Socket -> IO (Iter t m (), Onum t m a)
 iterStream s = pairFinalizer (sockStreamI s) (enumStream s) (sClose s)
