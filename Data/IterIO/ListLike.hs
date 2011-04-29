@@ -26,7 +26,7 @@ module Data.IterIO.ListLike
     -- , inumTake
     , inumTakeExact
     , inumLog, inumhLog, inumStderr
-    , inumL2S, inumS2L
+    , inumLtoS, inumStoL
     -- * Functions for Iter-Inum pairs
     , pairFinalizer, iterHandle, iterStream
     ) where
@@ -407,18 +407,18 @@ inumStderr = inumhLog stderr
 
 -- | An 'Inum' that converts input in the lazy 'L.ByteString' format
 -- to string 'S.ByteString's.
-inumL2S :: (Monad m) => Inum L.ByteString S.ByteString m a
-inumL2S = mkInumP rh loop
+inumLtoS :: (Monad m) => Inum L.ByteString S.ByteString m a
+inumLtoS = mkInumP rh loop
     where rh (a, b) = (L.chunk b a, S.empty)
           loop = iterF $ \c@(Chunk lbs eof) ->
                  case lbs of
                    L.Chunk bs rest -> Done bs (Chunk rest eof)
                    _               -> Done S.empty c
 
--- | The dual of 'inumS2L' -- converts input from strict
+-- | The dual of 'inumLtoS'--converts input from strict
 -- 'S.ByteString's to lazy 'L.ByteString's.
-inumS2L :: (Monad m) => Inum S.ByteString L.ByteString m a
-inumS2L = mkInumP rh loop
+inumStoL :: (Monad m) => Inum S.ByteString L.ByteString m a
+inumStoL = mkInumP rh loop
     where rh (a, b) = (S.concat (L.toChunks b ++ [a]), L.empty)
           loop = iterF $ \(Chunk bs eof) ->
                  Done (L.chunk bs L.Empty) (Chunk S.empty eof)
