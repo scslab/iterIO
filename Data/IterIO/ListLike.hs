@@ -26,6 +26,7 @@ module Data.IterIO.ListLike
     -- , inumTake
     , inumTakeExact
     , inumLog, inumhLog, inumStderr
+    , inumL2S, inumS2L
     -- * Functions for Iter-Inum pairs
     , pairFinalizer, iterHandle, iterStream
     ) where
@@ -35,8 +36,10 @@ import Control.Concurrent
 import Control.Exception (toException)
 import Control.Monad
 import Control.Monad.Trans
+import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
-import Data.ByteString.Lazy.Internal (defaultChunkSize)
+import qualified Data.ByteString.Lazy.Internal as L
+    (defaultChunkSize, chunk, ByteString(..))
 import Data.Char
 import Data.Monoid
 import Data.Typeable
@@ -93,9 +96,10 @@ sendI sendfn = do
 
 -- | Return the first element when the Iteratee data type is a list.
 headLI :: (Show a, Monad m) => Iter [a] m a
-headLI = iterF $ dohead
+headLI = iterF dohead
     where dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
-          dohead c = IterFail (toException $ mkIterEOF "headLI") c
+          dohead c = IterFail err c
+          err = toException $ mkIterEOF "headLI"
 
 -- | Return 'Just' the first element when the Iteratee data type
 -- is a list, or 'Nothing' on EOF.
@@ -109,8 +113,9 @@ safeHeadLI = iterF $ dohead
 headI :: (ChunkData t, LL.ListLike t e, Monad m) =>
          Iter t m e
 headI = iterF $ \c@(Chunk t eof) ->
-        if null t then IterFail (toException $ mkIterEOF "headI") c
+        if null t then IterFail err c
                   else Done (LL.head t) $ Chunk (LL.tail t) eof
+    where err = toException $ mkIterEOF "headI"
 
 -- | Like 'safeHeadLI', but works for any 'LL.ListLike' data type.
 safeHeadI :: (ChunkData t, LL.ListLike t e, Monad m) =>
@@ -294,8 +299,8 @@ enumDgramFrom sock = mkInumC id (socketCtl sock) $
 -- | Read data from a stream (e.g., TCP) socket.
 enumStream :: (MonadIO m, ChunkData t, SendRecvString t) =>
               Socket -> Onum t m a
-enumStream sock = mkInumC id (socketCtl sock) $ returnSome =<<
-                  liftIO (genRecv sock defaultChunkSize)
+enumStream sock = mkInumC id (socketCtl sock) $
+                  liftIO (genRecv sock L.defaultChunkSize)
 
 -- | A variant of 'enumHandle' type restricted to input in the Lazy
 -- 'L.ByteString' format.
@@ -320,8 +325,8 @@ enumNonBinHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
                     Handle
                  -> Onum t m a
 enumNonBinHandle h =
-    mkInumC id (fileCtl h) $ returnSome =<<
-    liftIO (hWaitForInput h (-1) >> LL.hGetNonBlocking h defaultChunkSize)
+    mkInumC id (fileCtl h) $
+    liftIO (hWaitForInput h (-1) >> LL.hGetNonBlocking h L.defaultChunkSize)
 -- Note that hGet can block when there is some (but not enough) data
 -- available.  Thus, we use hWaitForInput followed by hGetNonBlocking.
 -- ByteString introduced the call hGetSome for this purpose, but it is
@@ -358,7 +363,7 @@ inumTakeExact = mkInumM . loop
             t <- dataI
             let (h, r) = LL.splitAt n t
             ungetI r
-            _ <- ifeed1 h       -- Keep feeding even if Done
+            _ <- ifeed h        -- Keep feeding even if Done
             loop $ n - LL.length h
 
 {-
@@ -389,15 +394,34 @@ inumLog path trunc = inumBracket openLog (liftIO . hClose) inumhLog
 -- file name.  Does not close the handle when done.
 inumhLog :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
             Handle -> Inum t t m a
-inumhLog h = mkInumP $ do buf <- dataI
-                          liftIO $ LL.hPutStr h buf
-                          return buf
+inumhLog h = mkInumP pullupResid $ do
+               buf <- data0I
+               unless (null buf) $ liftIO $ LL.hPutStr h buf
+               return buf
 
 -- | Log a copy of everything to standard error.  (@inumStderr =
 -- 'inumhLog' 'stderr'@)
 inumStderr :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
               Inum t t m a
 inumStderr = inumhLog stderr
+
+-- | An 'Inum' that converts input in the lazy 'L.ByteString' format
+-- to string 'S.ByteString's.
+inumL2S :: (Monad m) => Inum L.ByteString S.ByteString m a
+inumL2S = mkInumP rh loop
+    where rh (a, b) = (L.chunk b a, S.empty)
+          loop = iterF $ \c@(Chunk lbs eof) ->
+                 case lbs of
+                   L.Chunk bs rest -> Done bs (Chunk rest eof)
+                   _               -> Done S.empty c
+
+-- | The dual of 'inumS2L' -- converts input from strict
+-- 'S.ByteString's to lazy 'L.ByteString's.
+inumS2L :: (Monad m) => Inum S.ByteString L.ByteString m a
+inumS2L = mkInumP rh loop
+    where rh (a, b) = (S.concat (L.toChunks b ++ [a]), L.empty)
+          loop = iterF $ \(Chunk bs eof) ->
+                 Done (L.chunk bs L.Empty) (Chunk S.empty eof)
 
 --
 -- Iter-Onum pairs

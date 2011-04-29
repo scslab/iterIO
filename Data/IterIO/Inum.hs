@@ -11,8 +11,9 @@ module Data.IterIO.Inum
     -- * Simple enumerator construction function
     -- $mkInumIntro
     , ResidHandler, CtlHandler
+    , whileNullI
     , mkInumC, mkInum, mkInumP
-    , inumBracket, returnSome
+    , inumBracket
     -- * Utilities
     , pullupResid
     , noCtl, passCtl, consCtl, mkCtl, mkFlushCtl
@@ -542,12 +543,33 @@ runInum inum = onDone check . inum
       check (Done (IterM m) c) = IterM $ m >>= \r -> return $ check $ Done r c
       check r = r
 
--- | A generalized versin of 'mkInum' that allows residual data to be
--- adjusted and specifies a handler for control requests.  For
--- example, to pass up control requests and ensure no residual data is
--- lost when the 'Inum' is fused to an 'Iter', the @inumConcat@
--- function given previously for 'mkInum' at <#mkInumExample> could be
--- re-written:
+-- | Keep running an 'Iter' until either its output is not 'null' or
+-- we have reached EOF.  Return the the 'Iter'\'s value on the last
+-- (i.e., usually non-'null') iteration.
+whileNullI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+              Iter tIn m tOut -> Iter tIn m tOut
+whileNullI iter = loop
+    where loop = do buf <- iter
+                    if null buf
+                      then do eof <- atEOFI
+                              if eof then return buf else loop
+                      else return buf
+
+-- | Create a stateless 'Inum' from a \"codec\" 'Iter' that transcodes
+-- the input type to the output type.  The codec is invoked repeately
+-- until one of the following occurs:  The codec returns 'null' data,
+-- the codec throws an exception, or the underlying target 'Iter' is
+-- no longer active.  If the codec throws an exception of type
+-- 'IterEOF', this is considered normal termination and the error is
+-- not further propagated.
+--
+-- @mkInumC@ requires two other arguments before the codec.  First, a
+-- 'ResidHandler' allows residual data to be adjusted between the
+-- input and output 'Iter' monads.  Second, a 'CtlHandler' specifies a
+-- handler for control requests.  For example, to pass up control
+-- requests and ensure no residual data is lost when the 'Inum' is
+-- fused to an 'Iter', the @inumConcat@ function given previously for
+-- 'mkInum' at <#mkInumExample> could be re-written:
 --
 -- > inumConcat :: (Monad m) => Inum [L.ByteString] L.ByteString m a
 -- > inumConcat = mkInumC reList (passCtl reList) iterConcat
@@ -563,30 +585,34 @@ mkInumC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         -> Inum tIn tOut m a
 mkInumC adj ch codec iter0 = doIter iter0
     where
-      doIter iter = tryI codec >>= either (inputErr iter . fst) (doInput iter)
+      doIter iter = tryIe codec >>= either (inputErr iter) (doInput iter)
       inputErr iter e | isIterEOF e = return $ IterF iter
                       | otherwise   = Iter $ InumFail e (IterF iter)
       doInput iter input = do
         r <- runIterMC ch iter (Chunk input False)
         case r of
-          (IterF i) -> doIter i
+          (IterF i) | not (null input) -> doIter i
           _ | isIterActive r -> return r
           _ -> withResidHandler adj (getResid r) $ return . setResid r
 
 -- | Create an 'Inum' based on an 'Iter' that transcodes the input to
--- the output type.  Rejects all control requests.
+-- the output type.  This is a simplified version of 'mkInumC' that
+-- rejects all control requests and does not adjust residual data.
 --
 -- > mkInum = mkInumC id noCtl
 mkInum :: (ChunkData tIn, ChunkData tOut, Monad m) =>
           Iter tIn m tOut -> Inum tIn tOut m a
 mkInum = mkInumC id noCtl
 
--- | Like 'mkInum' but passes all control requests to enclosing
--- enumerators and pulls up residual data.
+-- | A simplified version of 'mkInum' that passes all control requests
+-- to enclosing enumerators.  It requires a 'ResidHandler' to describe
+-- how to adjust residual data.  (E.g., use 'pullupResid' when @tIn@
+-- and @tOut@ are the same type.)
 --
--- > mkInumP = mkInumC pullupResid (passCtl pullupResid)
-mkInumP :: (ChunkData t, Monad m) => Iter t m t -> Inum t t m a
-mkInumP = mkInumC pullupResid (passCtl pullupResid)
+-- > mkInumP adj = mkInumC adj (passCtl adj)
+mkInumP :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+           ResidHandler tIn tOut -> Iter tIn m tOut -> Inum tIn tOut m a
+mkInumP adj = mkInumC adj (passCtl adj)
 
 -- | @pullupResid (a, b) = (mappend a b, mempty)@.  See 'ResidHandler'.
 pullupResid :: (ChunkData t) => (t, t) -> (t, t)
@@ -613,14 +639,6 @@ inumBracket start end inum iter = tryIe start >>= check
     where check (Left e)  = Iter $ InumFail e (IterF iter)
           check (Right b) = inum b iter `finallyI` end b
 
--- | Return some data, supplied as the function's argument.  However,
--- if the data is 'null', then throw an EOF error.  (This is the
--- 'mkInum' equivalent of `mkInumM`'s 'ifeed1' function.)
-returnSome :: (ChunkData t, Monad m) => t -> Iter t' m t
-returnSome t | null t    = throwI end
-             | otherwise = return t
-    where end = mkIterEOF "returnSome"
-
 --
 -- Basic Inums
 --
@@ -646,7 +664,7 @@ returnSome t | null t    = throwI end
 -- let enum = base_enum '|.' if debug then 'inumStderr' else inumNop
 -- @
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
-inumNop = mkInumP dataI
+inumNop = mkInumP pullupResid dataI
 
 -- | @inumNull@ feeds empty data to the underlying 'Iter'.  It acts as
 -- a no-op when concatenated to other 'Inum's with 'cat' or 'lcat'.

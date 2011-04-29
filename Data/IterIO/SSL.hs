@@ -6,8 +6,9 @@ module Data.IterIO.SSL where
 import Control.Exception (throwIO, ErrorCall(..), finally, onException)
 import Control.Monad
 import Control.Monad.Trans
+import Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
-import Data.ByteString.Lazy.Internal (defaultChunkSize)
+import Data.ByteString.Lazy.Internal as L (defaultChunkSize)
 import Data.Typeable
 import qualified Network.Socket as Net
 import qualified OpenSSL.Session as SSL
@@ -33,8 +34,10 @@ enumSsl :: (MonadIO m) => SSL.SSL -> Onum L.ByteString m a
 enumSsl ssl = mkInumC id ch codec
     where ch = mkCtl (\SslC -> return $ SslConnection ssl)
                `consCtl` (socketCtl $ SSL.sslSocket ssl)
-          codec = do buf <- liftIO (SSL.read ssl defaultChunkSize)
-                     returnSome $ L.fromChunks [buf]
+          codec = do buf <- liftIO (SSL.read ssl L.defaultChunkSize)
+                     if S.null buf
+                       then return L.empty
+                       else return $ L.fromChunks [buf]
 
 -- | Simple OpenSSL 'Iter'.  Does a uni-directional SSL shutdown when
 -- it receives a 'Chunk' with the EOF bit 'True'.

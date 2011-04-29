@@ -17,7 +17,7 @@ module Data.IterIO.Iter
     -- * Exception-related functions
     , throwI, throwEOFI
     , genCatchI, catchI, handlerI, tryI, tryIe, tryIr, finallyI, onExceptionI
-    , catchBI, handlerBI, tryBI 
+    , catchBI, tryBI 
     , mapExceptionI
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
@@ -644,6 +644,7 @@ catchBI iter0 handler = onDoneInput check iter0
                                    Nothing -> r
                                    Just e  -> runIter (handler e) c
 
+{-
 -- | 'catchBI' with the arguments reversed.
 handlerBI :: (Exception e, ChunkData t, Monad m) =>
              (e -> Iter t m a)
@@ -652,6 +653,7 @@ handlerBI :: (Exception e, ChunkData t, Monad m) =>
           -- ^ 'Iter' that might throw an exception
           -> Iter t m a
 handlerBI = flip catchBI
+-}
 
 -- | Simlar to 'tryI', but saves all data that has been fed to the
 -- 'Iter', and rewinds the input if the 'Iter' fails.  (The @B@ in
@@ -1014,5 +1016,6 @@ runIterR r c = if null c then r else check r
 
 -- | Turn an 'IterR' back into an 'Iter'.
 reRunIter :: (ChunkData t, Monad m) => IterR t m a -> Iter t m a
+{-# INLINE reRunIter #-}
 reRunIter (IterF i) = i
 reRunIter r         = Iter $ runIterR r
