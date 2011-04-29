@@ -49,6 +49,7 @@ import Data.IterIO.ListLike
 -- > infixr 3 <|>
 (<|>) :: (ChunkData t, Monad m) =>
          Iter t m a -> Iter t m a -> Iter t m a
+{-# INLINE (<|>) #-}
 (<|>) = multiParse
 infixr 3 <|>
 
@@ -93,6 +94,7 @@ infixr 3 <|>
 --
 (\/) :: (ChunkData t, Monad m) => 
         Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
+{-# INLINE (\/) #-}
 (\/) = ifNoParse
 infix 2 \/
 
@@ -115,6 +117,7 @@ infixr 3 >$>
 --
 -- > infixl 4 $>
 ($>) :: (Functor f) => f a -> b -> f b
+{-# INLINE ($>) #-}
 ($>) = flip (<$)
 infixl 4 $>
 
@@ -133,7 +136,8 @@ infixl 4 $>
 --
 orEmpty :: (ChunkData t, Monad m, Monoid b) =>
            Iter t m a -> (a -> Iter t m b) -> Iter t m b
-orEmpty = (\/ return mempty)
+{-# INLINE orEmpty #-}
+orEmpty = (\/ nil)
 infixr 3 `orEmpty`
 
 -- | @iter \<?\> token@ replaces any kind of parse failure in @iter@
@@ -271,8 +275,7 @@ ensureI test = do
 --   skipSpace = 'skipWhile1I' (\\c -> c == eord ' ' || c == eord '\t')
 -- @
 eord :: (Enum e) => Char -> e
-{-# SPECIALIZE INLINE eord :: Char -> Char #-}
-{-# SPECIALIZE INLINE eord :: Char -> Word8 #-}
+{-# INLINE eord #-}
 eord = toEnum . ord
 
 -- | Skip all input elements encountered until an element is found
@@ -355,6 +358,8 @@ whilePredsI preds = do
 -- the specified predicate.
 whileI :: (ChunkData t, LL.ListLike t e, Monad m)
           => (e -> Bool) -> Iter t m t
+{-# SPECIALIZE whileI :: (Monad m) =>
+  (Word8 -> Bool) -> Iter L.ByteString m L.ByteString #-}
 whileI test = more id
     where
       more acc = Iter $ \(Chunk t eof) ->
@@ -365,6 +370,8 @@ whileI test = more id
 
 -- | Like 'whileI', but fails if at least one element does not satisfy
 -- the predicate.
+{-# SPECIALIZE while1I :: (Monad m) =>
+  (Word8 -> Bool) -> Iter L.ByteString m L.ByteString #-}
 while1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
 while1I test = ensureI test >> whileI test <?> "while1I"
@@ -447,12 +454,14 @@ infixr 5 <++>
 --
 -- > infixr 5 <:>
 (<:>) :: (LL.ListLike t e, Applicative f) => f e -> f t -> f t
+{-# INLINE (<:>) #-}
 (<:>) = liftA2 LL.cons
 infixr 5 <:>
 
 -- | @nil = 'pure' 'mempty'@--An empty 'Monoid' injected into an
 -- 'Applicative' type.
 nil :: (Applicative f, Monoid t) => f t
+{-# INLINE nil #-}
 nil = pure mempty
 
 -- $Parseclike
@@ -463,6 +472,7 @@ nil = pure mempty
 -- | Run an 'Iter' zero or more times (until it fails) and return a
 -- list-like container of the results.
 many :: (ChunkData t, LL.ListLike f a, Monad m) => Iter t m a -> Iter t m f
+{-# INLINE many #-}
 many = foldrI LL.cons LL.empty
 
 -- | Repeatedly run an 'Iter' until it fails and discard all the

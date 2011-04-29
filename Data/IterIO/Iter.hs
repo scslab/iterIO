@@ -674,6 +674,7 @@ handlerBI = flip catchBI
 -- consume a bounded amount of data.
 tryBI :: (ChunkData t, Monad m, Exception e) =>
          Iter t m a -> Iter t m (Either e a)
+{-# INLINABLE tryBI #-}
 tryBI = onDoneInput errToEither
     where errToEither (Done a c) _ = Done (Right a) c
           errToEither r c = case fromException $ getIterError r of
@@ -803,6 +804,9 @@ combineExpected (IterNoParse e) r =
 -- purpose.)
 multiParse :: (ChunkData t, Monad m) =>
               Iter t m a -> Iter t m a -> Iter t m a
+{-# INLINABLE multiParse #-}
+{-# SPECIALIZE multiParse :: (Monad m) =>
+  Iter L.ByteString m a -> Iter L.ByteString m a -> Iter L.ByteString m a #-}
 multiParse a b = Iter $ \c -> check (runIter a c) (runIter b c)
     where
       check ra@(Done _ _) _ = ra
@@ -835,6 +839,7 @@ ifParse :: (ChunkData t, Monad m) =>
         -- ^ @failure@ action
         -> Iter t m b
         -- ^ result
+{-# INLINE ifParse #-}
 ifParse iter yes no =
     tryBI iter >>= either (\e -> onDone (combineExpected e) no) yes
 
@@ -842,6 +847,7 @@ ifParse iter yes no =
 -- reversed.
 ifNoParse :: (ChunkData t, Monad m) =>
              Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
+{-# INLINE ifNoParse #-}
 ifNoParse = flip . ifParse
 
 
@@ -883,6 +889,8 @@ chunkI = iterF $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
 -- | Runs an 'Iter' without consuming any input.  (See 'tryBI' if you
 -- want to avoid consuming input just when the 'Iter' fails.)
 peekI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a
+{-# SPECIALIZE peekI :: (Monad m) =>
+  Iter L.ByteString m a -> Iter L.ByteString m a #-}
 peekI = onDoneInput setResid
 
 -- | Does not actually consume any input, but returns 'True' if there
@@ -970,6 +978,11 @@ onDoneInput :: (ChunkData t, Monad m) =>
                (IterR t m a -> Chunk t -> IterR t m b)
             -> Iter t m a
             -> Iter t m b
+{-# INLINABLE onDoneInput #-}
+{-# SPECIALIZE onDoneInput :: (Monad m) =>
+  (IterR L.ByteString m a -> Chunk L.ByteString -> IterR L.ByteString m b)
+  -> Iter L.ByteString m a
+  -> Iter L.ByteString m b #-}
 onDoneInput f = Iter . next id
     where next acc iter c =
               let check (IterF i) = IterF $ Iter $ next (acc . mappend c) i
