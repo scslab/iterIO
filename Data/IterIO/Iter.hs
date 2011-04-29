@@ -101,6 +101,7 @@ instance (ChunkData t) => Monoid (Chunk t) where
     {-# INLINE mempty #-}
     mempty = Chunk mempty False
 
+    {-# INLINABLE mappend #-}
     mappend ca@(Chunk a eofa) cb@(Chunk b eofb)
         | eofa      = error $ "mappend to EOF: " ++ show ca
                                            ++ " `mappend` " ++ show cb
@@ -366,6 +367,7 @@ run i0 = check $ runIter i0 chunkEOF
 
 -- | The equivalent for 'runI' for 'IterR's.
 runR :: (ChunkData t1, ChunkData t2, Monad m) => IterR t1 m a -> IterR t2 m a
+{-# INLINABLE runR #-}
 runR (Done a _)             = Done a mempty
 runR (IterF i)              = runR $ runIter i chunkEOF
 runR (IterM m)              = IterM $ liftM runR m
@@ -383,6 +385,7 @@ runR (InumFail e i _)       = InumFail e i mempty
 -- discussion of the same issue with examples in the documentation for
 -- @'.|$'@ in "Data.IterIO.Inum".
 runI :: (ChunkData t1, ChunkData t2, Monad m) => Iter t1 m a -> Iter t2 m a
+{-# INLINABLE runI #-}
 runI i = Iter $ runIterR (runR $ runIter i chunkEOF)
 
 --
@@ -928,6 +931,7 @@ stepR' :: IterR t m1 a
        -> IterR t m2 b
        -- ^ Fallback if the 'IterR' is no longer active.
        -> IterR t m2 b
+{-# INLINABLE stepR' #-}
 stepR' (IterF (Iter i)) f _       = IterF $ Iter $ f . i
 stepR' (IterC (CtlArg a n c)) f _ =
     IterC $ CtlArg a (Iter . (f .) . runIter . n) c
@@ -939,6 +943,7 @@ stepR' _ _ notActive              = notActive
 -- function.
 stepR :: (Monad m) =>
          IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
+{-# INLINABLE stepR #-}
 stepR (IterM m) f = IterM $ liftM f m
 stepR r f         = stepR' r f (error "stepR")
 
@@ -980,6 +985,7 @@ getIterError _                = error "getIterError: no error to extract"
 -- or that is in the 'IterC' state.  (It is an error to call this
 -- function on an 'IterR' in the 'IterF' or 'IterM' state.)
 getResid :: IterR t m a -> Chunk t
+{-# INLINABLE getResid #-}
 getResid (Done _ c)             = c
 getResid (IterFail _ c)         = c
 getResid (InumFail _ _ c)       = c
@@ -991,6 +997,7 @@ getResid (IterM _)              = error "getResid (IterM)"
 -- error to call this on an 'IterR' in the 'Done', 'IterM', or 'IterC'
 -- states.)
 setResid :: IterR t1 m1 a -> Chunk t2 -> IterR t2 m2 a
+{-# INLINABLE setResid #-}
 setResid (Done a _)       = Done a
 setResid (IterFail e _)   = IterFail e
 setResid (InumFail e a _) = InumFail e a
@@ -1006,6 +1013,7 @@ setResid (IterC _)        = error "setResid (IterC)"
 -- time as the 'IterR' is stepped to a new state (e.g., with 'stepR'
 -- or 'reRunIter').
 runIterR :: (ChunkData t, Monad m) => IterR t m a -> Chunk t -> IterR t m a
+{-# INLINABLE runIterR #-}
 runIterR r c = if null c then r else check r
     where check (Done a c0)             = Done a (mappend c0 c)
           check (IterF i)               = runIter i c

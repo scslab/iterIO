@@ -1,6 +1,7 @@
 
 PKG = $(basename $(wildcard *.cabal))
 TARGETS := $(basename $(shell find Examples -name '[a-z]*.hs' -print))
+TESTS := $(basename $(shell find tests -name '[a-z]*.hs' -print))
 HSCS := $(patsubst %.hsc,%.hs,$(shell find . -name '*.hsc' -print))
 HSCCLEAN = $(patsubst %.hs,%_hsc.[ch],$(HSCS))
 
@@ -17,6 +18,9 @@ always:
 
 Examples/%: always $(HSCS)
 	$(GHC) --make -i$(dir $@) $@.hs $(LIBS)
+
+tests/%: always $(HSCS)
+	$(GHC) --make $@.hs
 
 %.hs: %.hsc
 	hsc2hs $<
@@ -58,6 +62,6 @@ browse: doc
 
 clean:
 	rm -rf dist
-	rm -f Setup $(TARGETS) $(HSCS) $(HSCCLEAN)
+	rm -f Setup $(TARGETS) $(TESTS) $(HSCS) $(HSCCLEAN)
 	find . \( -name '*~' -o -name '*.hi' -o -name '*.o' \) -print0 \
 		| xargs -0 rm -f --

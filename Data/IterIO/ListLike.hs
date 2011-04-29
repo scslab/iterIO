@@ -95,6 +95,7 @@ sendI sendfn = do
 
 -- | Return the first element when the Iteratee data type is a list.
 headLI :: (Show a, Monad m) => Iter [a] m a
+{-# INLINABLE headLI #-}
 headLI = iterF dohead
     where dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
           dohead c = IterFail err c
@@ -103,6 +104,7 @@ headLI = iterF dohead
 -- | Return 'Just' the first element when the Iteratee data type
 -- is a list, or 'Nothing' on EOF.
 safeHeadLI :: (Show a, Monad m) => Iter [a] m (Maybe a)
+{-# INLINABLE safeHeadLI #-}
 safeHeadLI = iterF $ dohead
     where dohead (Chunk (a:as) eof) = Done (Just a) $ Chunk as eof
           dohead _                  = Done Nothing chunkEOF
@@ -111,6 +113,7 @@ safeHeadLI = iterF $ dohead
 -- | Like 'headLI', but works for any 'LL.ListLike' data type.
 headI :: (ChunkData t, LL.ListLike t e, Monad m) =>
          Iter t m e
+{-# INLINABLE headI #-}
 headI = iterF $ \c@(Chunk t eof) ->
         if null t then IterFail err c
                   else Done (LL.head t) $ Chunk (LL.tail t) eof
@@ -119,6 +122,7 @@ headI = iterF $ \c@(Chunk t eof) ->
 -- | Like 'safeHeadLI', but works for any 'LL.ListLike' data type.
 safeHeadI :: (ChunkData t, LL.ListLike t e, Monad m) =>
              Iter t m (Maybe e)
+{-# INLINABLE safeHeadI #-}
 safeHeadI = iterF $ \c@(Chunk t eof) ->
             if null t then Done Nothing c
                       else Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
@@ -423,6 +427,7 @@ inumStderr = inumhLog stderr
 -- | An 'Inum' that converts input in the lazy 'L.ByteString' format
 -- to strict 'S.ByteString's.
 inumLtoS :: (Monad m) => Inum L.ByteString S.ByteString m a
+{-# INLINABLE inumLtoS #-}
 inumLtoS = mkInumP rh loop
     where rh (a, b) = (L.chunk b a, S.empty)
           loop = iterF $ \c@(Chunk lbs eof) ->
