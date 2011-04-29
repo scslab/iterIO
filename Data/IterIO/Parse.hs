@@ -26,6 +26,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
 
 import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>), liftA2)
+import Control.Exception (SomeException(..))
 import Control.Monad
 import qualified Data.ByteString.Lazy as L
 import Data.Char
@@ -104,6 +105,7 @@ infix 2 \/
 -- > infixl 3 >$>
 --
 (>$>) :: (Functor f) => (t -> a -> b) -> f a -> t -> f b
+{-# INLINE (>$>) #-}
 (>$>) f a t = f t <$> a
 infixr 3 >$>
 
@@ -156,7 +158,8 @@ expectedI :: (ChunkData t) =>
              String             -- ^ Input actually received
           -> String             -- ^ Description of input that was wanted
           -> Iter t m a
-expectedI saw target = throwI $ IterExpected saw [target]
+expectedI saw target =
+    Iter $ IterFail (SomeException $ IterNoParse $ IterExpected saw [target])
 
 -- | Takes an 'Iter' returning a 'LL.ListLike' type, executes the
 -- 'Iter' once, and throws a parse error if the returned value is
@@ -352,8 +355,6 @@ whilePredsI preds = do
 -- the specified predicate.
 whileI :: (ChunkData t, LL.ListLike t e, Monad m)
           => (e -> Bool) -> Iter t m t
-{-# SPECIALIZE whileI :: (Monad m) =>
-  (Word8 -> Bool) -> Iter L.ByteString m L.ByteString #-}
 whileI test = more id
     where
       more acc = Iter $ \(Chunk t eof) ->

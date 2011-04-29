@@ -246,6 +246,7 @@ instance (Typeable t, Typeable1 m, Typeable a) => Typeable (Iter t m a) where
     typeOf = typeOfDefault
 
 instance (Monad m) => Functor (Iter t m) where
+    {-# INLINE fmap #-}
     fmap = fmapI
 
 -- | @fmapI@ is like 'liftM', but differs in one important respect:
@@ -254,6 +255,7 @@ instance (Monad m) => Functor (Iter t m) where
 -- @'liftM' f i = i '>>=' 'return' . f@, transforms 'InumFail' states
 -- to 'IterFail' ones because of its use of '>>='.
 fmapI :: (Monad m) => (a -> b) -> Iter t m a -> Iter t m b
+{-# INLINE fmapI #-}
 fmapI = onDone . fmapR
 
 -- | Maps the result of an 'IterR' like 'fmap', but only if the
@@ -931,7 +933,7 @@ stepR' :: IterR t m1 a
        -> IterR t m2 b
        -- ^ Fallback if the 'IterR' is no longer active.
        -> IterR t m2 b
-{-# INLINABLE stepR' #-}
+{-# INLINE stepR' #-}
 stepR' (IterF (Iter i)) f _       = IterF $ Iter $ f . i
 stepR' (IterC (CtlArg a n c)) f _ =
     IterC $ CtlArg a (Iter . (f .) . runIter . n) c
@@ -943,18 +945,20 @@ stepR' _ _ notActive              = notActive
 -- function.
 stepR :: (Monad m) =>
          IterR t m a -> (IterR t m a -> IterR t m b) -> IterR t m b
-{-# INLINABLE stepR #-}
+{-# INLINE stepR #-}
 stepR (IterM m) f = IterM $ liftM f m
 stepR r f         = stepR' r f (error "stepR")
 
 -- | The equivalent of 'onDone' for 'IterR's.
 onDoneR :: (Monad m) =>
            (IterR t m a -> IterR t m b) -> IterR t m a -> IterR t m b
+{-# INLINE onDoneR #-}
 onDoneR f = check
     where check r = if isIterActive r then stepR r check else f r
 
 -- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
 -- 'InumFail' state, then use a function to transform the 'IterR'.
+{-# INLINE onDone #-}
 onDone :: (Monad m) =>
           (IterR t m a -> IterR t m b) -> Iter t m a -> Iter t m b
 onDone f i = Iter $ onDoneR f . runIter i
