@@ -23,8 +23,7 @@ module Data.IterIO.ListLike
     , enumFile, enumFile'
     , enumStdin
     -- * Inums
-    -- , inumTake
-    , inumTakeExact
+    , inumMax, inumTakeExact
     , inumLog, inumhLog, inumStderr
     , inumLtoS, inumStoL
     -- * Functions for Iter-Inum pairs
@@ -368,15 +367,30 @@ inumTakeExact = mkInumM . loop
             _ <- ifeed h        -- Keep feeding even if Done
             loop $ n - LL.length h
 
-{-
--- | Feed some number of list elements (bytes in the case of
--- 'L.ByteString's) to an 'Iter', or feed fewer if an EOF is
--- encountered.
-inumTake :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
-inumTake n = mkInumM $ setAutoEOF True >> ipipe (inumTakeExact n)
--}
-
-
+-- | Feed up to some number of list elements (bytes in the case of
+-- 'L.ByteString's) to an 'Iter', or feed fewer if the 'Iter' returns
+-- or an EOF is encountered.  The formulation @inumMax n '.|' iter@
+-- can be used to prevent @iter@ from consuming unbounded amounts of
+-- input.
+inumMax :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Inum t t m a
+{-# SPECIALIZE inumMax :: (Monad m) =>
+  Int -> Inum L.ByteString L.ByteString m a #-}
+{-# SPECIALIZE inumMax :: (Monad m) =>
+  Int -> Inum S.ByteString S.ByteString m a #-}
+inumMax n0 i | n0 <= 0 = runner i mempty
+             | otherwise = do
+  (t, more) <- next n0
+  r <- runner i $ chunk t
+  case r of
+    IterF i1 | more -> inumMax (n0 - LL.length t) i1
+    _ | isIterActive r -> return r
+    _ -> case getResid r of
+           Chunk t1 _ -> ungetI t1 >> return (setResid r mempty) 
+    where runner = runIterMC (passCtl pullupResid)
+          next n = Iter $ \(Chunk t eof) ->
+                   case LL.splitAt n t of
+                     (t1, t2) -> Done (t1, not eof && LL.null t2) (Chunk t2 eof)
+                   
 -- | This inner enumerator is like 'inumNop' in that it passes
 -- unmodified 'Chunk's straight through to an iteratee.  However, it
 -- also logs the 'Chunk's to a file (which can optionally be truncated

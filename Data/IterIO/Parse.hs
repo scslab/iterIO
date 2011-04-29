@@ -27,6 +27,7 @@ module Data.IterIO.Parse (-- * Iteratee combinators
 import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>), liftA2)
 import Control.Monad
+import qualified Data.ByteString.Lazy as L
 import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
@@ -34,6 +35,7 @@ import Data.Monoid
 import Data.Word
 
 import Data.IterIO.Iter
+import Data.IterIO.Inum
 import Data.IterIO.ListLike
 
 -- | An infix synonym for 'multiParse' that allows LL(*) parsing of
@@ -350,13 +352,15 @@ whilePredsI preds = do
 -- the specified predicate.
 whileI :: (ChunkData t, LL.ListLike t e, Monad m)
           => (e -> Bool) -> Iter t m t
-whileI test = more LL.empty
+{-# SPECIALIZE whileI :: (Monad m) =>
+  (Word8 -> Bool) -> Iter L.ByteString m L.ByteString #-}
+whileI test = more id
     where
-      more t0 = iterF $ \(Chunk t eof) ->
-                case LL.span test t of
-                  (t1, t2) | not (LL.null t2) || eof ->
-                               Done (LL.append t0 t1) $ Chunk t2 eof
-                  (t1, _) -> IterF $ more (LL.append t0 t1)
+      more acc = Iter $ \(Chunk t eof) ->
+                 case LL.span test t of
+                   (t1, t2) | not (LL.null t2) || eof ->
+                                     Done (acc t1) $ Chunk t2 eof
+                   (t1, _) -> IterF $ more (acc . LL.append t1)
 
 -- | Like 'whileI', but fails if at least one element does not satisfy
 -- the predicate.
@@ -369,13 +373,7 @@ whileMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
              Int                  -- ^ Maximum number to match
           -> (e -> Bool)          -- ^ Predicate test
           -> Iter t m t
-whileMaxI nmax test = iterF $ \(Chunk t eof) ->
-        let s = LL.takeWhile test $ LL.take nmax t
-            slen = LL.length s
-            rest = LL.drop slen t
-        in if slen >= nmax || not (LL.null rest) || eof
-           then Done s $ Chunk rest eof
-           else LL.append s <$> IterF (whileMaxI (nmax - slen) test)
+whileMaxI nmax test = inumMax nmax .| whileI test
 
 -- | A variant of 'whileI' with a minimum and maximum number matches.
 whileMinMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
@@ -451,7 +449,7 @@ infixr 5 <++>
 (<:>) = liftA2 LL.cons
 infixr 5 <:>
 
--- | @nil = 'pure' 'mempty'@ -- An empty 'Monoid' injected into an
+-- | @nil = 'pure' 'mempty'@--An empty 'Monoid' injected into an
 -- 'Applicative' type.
 nil :: (Applicative f, Monoid t) => f t
 nil = pure mempty
