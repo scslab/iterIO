@@ -16,7 +16,7 @@ module Data.IterIO.Iter
     , IterCUnsupp(..)
     -- * Exception-related functions
     , throwI, throwEOFI, throwParseI
-    , genCatchI, catchI, handlerI, tryI, tryFI, tryIe, tryRI, tryEOFI
+    , catchI, tryI, tryFI, tryRI, tryEOFI
     , finallyI, onExceptionI
     , tryBI, tryFBI
     , mapIterFail
@@ -148,7 +148,8 @@ newtype Iter t m a = Iter { runIter :: Chunk t -> IterR t m a }
 -- the EOF flag true (or both).
 iterF :: (ChunkData t) => (Chunk t -> IterR t m a) -> Iter t m a
 {-# INLINE iterF #-}
-iterF f = Iter $ \c -> if null c then IterF $ iterF f else f c
+iterF f = loop
+    where loop = Iter $ \c -> if null c then IterF $ loop else f c
 
 -- | Class of control commands for enclosing enumerators.  The class
 -- binds each control argument type to a unique result type.
@@ -337,12 +338,13 @@ instance (Monad m) => Monad (Iter t m) where
                                        Nothing . Just
 
 instance (ChunkData t, Monad m) => MonadPlus (Iter t m) where
+    {-# INLINE mzero #-}
     mzero = Iter $ const $ Fail IterMzero Nothing Nothing
     mplus a b = ifParse a return b
 
 instance MonadTrans (Iter t) where
     {-# INLINE lift #-}
-    lift m = Iter $ \c -> IterM $ m >>= return . flip Done c
+    lift m = Iter $ \c -> IterM $ m >>= \a -> return $ Done a c
 
 -- | The 'Iter' instance of 'MonadIO' handles errors specially.  If
 -- the lifted operation throws an exception, 'liftIO' catches the
@@ -436,16 +438,10 @@ instance Show IterCUnsupp where
         "Unsupported control request " ++ shows (typeOf carg) rest
 instance Exception IterCUnsupp
 
--- | Language-level exception thrown by 'run' and @'|$'@ when an
--- 'Iter' parse error or 'mzero' is uncaught.
-data IterUncaught = IterUncaught !IterFail
-                   deriving (Show, Typeable)
-instance Exception IterUncaught
 
 --
 -- Exception functions
 --
-
 -- | Throw an exception from an Iteratee.  The exception will be
 -- propagated properly through nested Iteratees, which will allow it
 -- to be categorized properly and avoid situations in which, for
@@ -455,7 +451,6 @@ instance Exception IterUncaught
 -- to clean up after exceptions.)  Use 'throwI' in preference to
 -- 'throw' whenever possible.
 throwI :: (Exception e) => e -> Iter t m a
-{-# INLINE throwI #-}
 throwI e = Iter $ Fail (IterException $ toException e) Nothing . Just
 
 -- | Throw an exception of type 'IterEOF'.  This will be interpreted
@@ -471,6 +466,7 @@ throwEOFI s = Iter $ Fail (mkIterEOF s) Nothing . Just
 -- | Throw a miscellaneous parse error (after which input is assumed
 -- to be unsynchronized and thus is discarded).
 throwParseI :: String -> Iter t m a
+{-# INLINE throwParseI #-}
 throwParseI s = Iter $ \_ -> Fail (IterParseErr s) Nothing Nothing
 
 -- | Run an 'Iter'.  Catch any exception it throws (and return the
@@ -482,19 +478,19 @@ throwParseI s = Iter $ \_ -> Fail (IterParseErr s) Nothing Nothing
 --
 -- > tryI iter = catchI (iter >>= return . Right) ...
 --
--- would turn 'InumFail' states into 'IterFail' states, because the
--- '>>=' operator has this effect.  (I.e., even if @iter@ is
--- 'InumFail', the expression @iter >>= return . Right@ will be
--- 'IterFail'.)  This could be particularly bad in cases where the
--- exception is not even of a type caught by the 'tryI' expression.
+-- would remove the possibly unfailed 'Iter' state from failed 'Inum'
+-- results, because the '>>=' operator has this effect.  (I.e., if
+-- @iter@ is @'Fail' e ('Just' i) c@, the expression @iter >>= return
+-- . Right@ will be @'Fail' e Nothing c@.)  This could be particularly
+-- bad in cases where the exception is not even of a type caught by
+-- the 'tryI' expression.
 --
 -- Similarly, trying to implement 'catchI' in terms of 'tryI' doesn't
 -- quite work.  Something like
 --
 -- > catchI iter handler = tryI iter >>= either (uncurry handler) return
 --
--- would convert any 'InumFail' exceptions /not/ caught by the handler
--- into 'IterFail' states.
+-- would erase state from 'Inum' failures /not/ caught by the handler.
 genCatchI :: (ChunkData t, Monad m, Exception e) =>
              Iter t m a
           -- ^ 'Iter' that might throw an exception
@@ -503,9 +499,6 @@ genCatchI :: (ChunkData t, Monad m, Exception e) =>
           -> (a -> b)
           -- ^ Conversion function for result and 'InumFail' errors.
           -> Iter t m b
-{-# SPECIALIZE genCatchI :: (ChunkData t, Monad m) =>
-  Iter t m a -> (SomeException -> IterR t m a -> Iter t m b) -> (a -> b)
-  -> Iter t m b #-}
 genCatchI iter0 handler conv = onDone check iter0
     where check (Done a c) = Done (conv a) c
           check r@(Fail e0 _ _) =
@@ -556,19 +549,6 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
 {-# INLINE catchI #-}
 catchI iter handler = genCatchI iter handler id
 
--- | A version of 'catchI' with the arguments reversed, analogous to
--- @'handle'@ in the standard library.  (A more logical name for this
--- function might be @handleI@, but that name is used for the file
--- handle iteratee in "Data.IterIO.ListLike".)
-handlerI :: (Exception e, ChunkData t, Monad m) =>
-          (e -> IterR t m a -> Iter t m a)
-         -- ^ Exception handler
-         -> Iter t m a
-         -- ^ 'Iter' that might throw an exception
-         -> Iter t m a
-{-# INLINE handlerI #-}
-handlerI = flip catchI
-
 -- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
 -- the 'Iter' throws an exception @e@, returns @'Left' (e, r)@ where
 -- @r@ is the state of the failing 'Iter'.
@@ -576,15 +556,6 @@ tryI :: (ChunkData t, Monad m, Exception e) =>
         Iter t m a -> Iter t m (Either (e, IterR t m a) a)
 {-# INLINE tryI #-}
 tryI iter = genCatchI iter (curry $ return . Left) Right
-
--- | A version of 'tryI' that returns only the exception, not the
--- result.  The usage is thus identicaly to the standard IO 'try'
--- function, except that the exception cannot be re-thrown without
--- risk of losing information.
-tryIe :: (ChunkData t, Monad m, Exception e) =>
-         Iter t m a -> Iter t m (Either e a)
-{-# INLINE tryIe #-}
-tryIe iter = genCatchI iter (\e _ -> return $ Left e) Right
 
 -- | A version of 'tryI' that catches all exceptions.  Instead of
 -- returning the exception caught, it returns the failing 'IterR'
@@ -653,8 +624,6 @@ onExceptionI iter cleanup =
 -- consume a bounded amount of data.
 tryBI :: (ChunkData t, Monad m, Exception e) =>
          Iter t m a -> Iter t m (Either e a)
-{-# SPECIALIZE tryBI :: (ChunkData t, Monad m) =>
-  Iter t m a -> Iter t m (Either SomeException a) #-}
 tryBI = onDoneInput errToEither
     where errToEither (Done a c) _ = Done (Right a) c
           errToEither r@(Fail ie _ _) c =
@@ -801,7 +770,7 @@ multiParse a b = Iter $ \c -> check (runIter a c) (runIter b c)
                       _ -> error "multiParse"
 
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
--- all input consumed using 'tryBI'.  (This means @iter@ must not
+-- all input consumed using 'tryFBI'.  (This means @iter@ must not
 -- consume unbounded amounts of input!  See 'multiParse' for such
 -- cases.)  If @iter@ suceeds, its result is passed to the function
 -- @success@.  If @iter@ throws an exception of type 'IterNoParse',
@@ -832,7 +801,7 @@ ifParse iter yes no = tryFBI iter >>= check
 ifNoParse :: (ChunkData t, Monad m) =>
              Iter t m a -> Iter t m b -> (a -> Iter t m b) -> Iter t m b
 {-# INLINE ifNoParse #-}
-ifNoParse = flip . ifParse
+ifNoParse iter no yes = ifParse iter yes no
 
 
 --

@@ -306,7 +306,7 @@ routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
       dir = if null dir0 then "." else dir0
       checkErr req e _ | isDoesNotExistError e = return $ resp404 req
                        | otherwise             = return $ resp500 (show e)
-      check req = handlerI (checkErr req) $ do
+      check req = flip catchI (checkErr req) $ do
         let path = dir ++ concatMap (('/' :) . S8.unpack) (reqPathLst req)
         st <- fs_stat fs path
         case () of

@@ -11,7 +11,6 @@ module Data.IterIO.Parse (-- * Iteratee combinators
                          , eord
                          , skipWhileI, skipWhile1I
                          , whileI, while1I, whileMaxI, whileMinMaxI
-                         , whileStateI
                          , concatI, concat1I, concatMinMaxI
                          , readI, eofI
                          -- * Applicative combinators
@@ -27,12 +26,10 @@ module Data.IterIO.Parse (-- * Iteratee combinators
 import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>), liftA2)
 import Control.Monad
-import qualified Data.ByteString.Lazy as L
 import Data.Char
 import Data.Functor ((<$>), (<$))
 import qualified Data.ListLike as LL
 import Data.Monoid
-import Data.Word
 
 import Data.IterIO.Iter
 import Data.IterIO.Inum
@@ -87,6 +84,16 @@ infixr 3 <|>
 --   myMany iter = iter \\/ return [] '$' (:) '>$>' myMany iter
 -- @
 --
+-- Of course, using 'fmap' is not the most efficient way to implement
+-- @myMany@.  If you are going to use this pattern for something
+-- performance critical, you should use an accumulator rather than
+-- build up long chains of 'fmap's.  A faster implementation would be:
+--
+-- @
+--   myMany iter = loop id
+--       where loop ac = iter \\/ return (acc []) '$' \a -> loop (acc . (a :))
+-- @
+--
 -- @\\/@ has fixity:
 --
 -- > infix 2 \/
@@ -97,9 +104,12 @@ infixr 3 <|>
 (\/) = ifNoParse
 infix 2 \/
 
--- | @(f >$> a) t@ is equivalent to @f t '<$>' a@.  Particularly
--- useful with infix combinators such as '\/' and ``orEmpty`` when
--- chaining parse actions.  See examples at '\/' and 'orEmpty'.
+-- | @(f >$> a) t@ is equivalent to @f t '<$>' a@ (where '<$>' is and
+-- infix alias for 'fmap').  Particularly useful with infix
+-- combinators such as '\/' and ``orEmpty`` when chaining parse
+-- actions.  See examples at '\/' and 'orEmpty'.  Note 'fmap' is not
+-- always the most efficient solution (see an example in the
+-- description of '\/').
 --
 -- Has fixity:
 --
@@ -160,11 +170,11 @@ infixr 3 `orEmpty`
       r              -> slowPath (show c) expected r
     where
       {-# NOINLINE slowPath #-}
-      slowPath saw expected = onDoneR $ \r ->
-        case r of
+      slowPath saw exp1 = onDoneR $ \r0 ->
+        case r0 of
           r@(Fail e _ _) -> case e of
                               IterException _ -> r
-                              _ -> Fail (IterExpected [(saw, expected)])
+                              _ -> Fail (IterExpected [(saw, exp1)])
                                    Nothing Nothing
           r -> r
 infix 0 <?>
@@ -194,14 +204,18 @@ someI iter = (<?> "someI") $ do
 -- results.
 foldrI :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldrI f z iter = loop id
+foldrI = innerFoldrI id
+
+innerFoldrI :: (ChunkData t, Monad m) =>
+               (b -> b) -> (a -> b -> b) -> b -> Iter t m a -> Iter t m b
+innerFoldrI acc0 f z iter = loop acc0
     where loop acc = iter \/ return (acc z) $ \a -> loop (acc . f a)
 
 -- | A variant of 'foldrI' that requires the 'Iter' to succeed at
 -- least once.
 foldr1I :: (ChunkData t, Monad m) =>
-          (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldr1I f z iter = f <$> iter <*> foldrI f z iter
+           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
+foldr1I f z iter = iter >>= \a -> innerFoldrI (f a) f z iter
 
 -- | A variant of 'foldrI' that requires the 'Iter' to succeed at
 -- least a minimum number of items and stops parsing after executing
@@ -213,12 +227,16 @@ foldrMinMaxI :: (ChunkData t, Monad m) =>
              -> b               -- ^ Rightmost value
              -> Iter t m a      -- ^ Iteratee generating items to fold
              -> Iter t m b
-foldrMinMaxI nmin nmax f z iter
-    | nmin > nmax = throwParseI "foldrMinMaxI: min > max"
-    | nmin > 0    = f <$> iter <*> foldrMinMaxI (nmin - 1) (nmax - 1) f z iter
-    | nmax == 0   = return z
-    | nmax < 0    = throwParseI "foldrMinMaxI: negative max"
-    | otherwise   = iter \/ return z $ f >$> foldrMinMaxI 0 (nmax - 1) f z iter
+foldrMinMaxI nmin0 nmax0 f z iter
+    | nmin0 > nmax0 = throwParseI "foldrMinMaxI: min > max"
+    | nmax0 < 0     = throwParseI "foldrMinMaxI: negative max"
+    | otherwise = loop id nmin0 nmax0
+    where
+      loop acc nmin nmax
+          | nmax == 0 = return $ acc z
+          | nmin > 0  = iter >>= \a -> loop (acc . f a) (nmin - 1) (nmax - 1)
+          | otherwise = iter \/ return (acc z) $ \a ->
+                        loop (acc . f a) 0 (nmax - 1)
 
 -- | Strict left fold over an 'Iter' (until it throws an 'IterNoParse'
 -- exception).  @foldlI f z iter@ is sort of equivalent to:
@@ -293,7 +311,7 @@ eord = toEnum . ord
 skipWhileI :: (ChunkData t, LL.ListLike t e, Monad m) =>
               (e -> Bool) -> Iter t m ()
 skipWhileI test = loop
-    where loop = iterF $ \(Chunk t eof) ->
+    where loop = Iter $ \(Chunk t eof) ->
                  case LL.dropWhile test t of
                    t1 | LL.null t1 && not eof -> IterF loop
                    t1 -> Done () $ Chunk t1 eof
@@ -303,66 +321,6 @@ skipWhileI test = loop
 skipWhile1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
                (e -> Bool) -> Iter t m ()
 skipWhile1I test = ensureI test >> skipWhileI test <?> "skipWhile1I"
-
--- | A variant of 'whileI' in which the predicate function can keep
--- state.  The predicate function returns @'Right' state@ while it
--- should accept elements, and @'Left' state@ when it hits the first
--- character that should not be included in the returned string.
-whileStateI :: (LL.ListLike t e, Monad m, ChunkData t) =>
-               (a -> e -> Either a a)
-            -- ^ Predicate function
-            -> a 
-            -- ^ Initial state
-            -> Iter t m (t, a)
-            -- ^ (accepted input, modified state)
-whileStateI f z0 = dochunk id z0
-    where
-      dochunk acc z = do
-        (Chunk t eof) <- chunkI
-        let (end, (z', len)) = LL.foldr ff ((,) True) t (z, 0)
-            (a, b)           = if end then (t, LL.empty) else LL.splitAt len t
-            t'               = acc . mappend a
-        if LL.null b && not eof
-          then dochunk t' z'
-          else ungetI b >> return (t' LL.empty, z')
-      ff e dorest = \(z, n) -> z `seq` n `seq`
-                  case f z e of
-                    Left z'  -> (False, (z', n))
-                    Right z' -> dorest (z', n + 1)
-
-{-
-data InputPred e = IPred { ipredF :: e -> Bool }
-                 | IPredMin { ipredMin :: Int
-                            , ipredF :: e -> Bool }
-                 | IPredMinMax { ipredMin :: Int
-                               , ipredMax :: Int
-                               , ipredF :: e -> Bool }
-
-whilePredsI :: (LL.ListLike t e, Monad m, ChunkData t) =>
-               [InputPred e] -> Iter t m t
-whilePredsI preds = do
-  (t, preds') <- whileStateI dopred preds
-  if null preds' then return t else expectedI "whilePredsI predicates"
-      where
-        dec n = if n > 0 then n - 1 else 0
-
-        step (IPredMin n f : ps)      = IPredMin (dec n) f : ps
-        step (IPredMinMax n x f : ps) = IPredMinMax (dec n) (dec x) f : ps
-        step ps                       = ps
-
-        minok (IPredMin n _) | n > 0      = False
-        minok (IPredMinMax n _ _) | n > 0 = False
-        minok _                           = True
-
-        maxok (IPredMinMax _ n _) | n <= 0 = False
-        maxok _                            = True
-
-        dopred [] e                                  = Left []
-        dopred p@(p1:ps) e | maxok p1 && ipredF p1 e = Right $ step p
-                           | minok p1                = dopred ps e
-                           | otherwise               = Left p
--}
-
 
 -- | Return all input elements up to the first one that does not match
 -- the specified predicate.
@@ -380,7 +338,7 @@ whileI test = more id
 -- the predicate.
 while1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
-while1I test = ensureI test >> whileI test <?> "while1I"
+while1I test = ensureI test >> whileI test
 
 -- | A variant of 'whileI' with a maximum number matches.
 whileMaxI :: (ChunkData t, LL.ListLike t e, Monad m) =>
@@ -494,8 +452,8 @@ sepBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
          Iter t m a             -- ^ Item to parse
       -> Iter t m b             -- ^ Separator between items
       -> Iter t m f             -- ^ Returns 'LL.ListLike' list of items
-sepBy item sep =
-    item `orEmpty` (LL.cons >$> foldrI LL.cons LL.empty (sep *> item))
+sepBy item sep = item `orEmpty` \a ->
+                 innerFoldrI (LL.cons a) LL.cons LL.empty (sep *> item)
 
 -- | Like 'sepBy', but expects a separator after the final item.  In
 -- other words, parses a sequence of the form
@@ -513,8 +471,7 @@ endBy item sep = foldrI LL.cons LL.empty (item <* sep)
 -- optional.
 sepEndBy :: (ChunkData t, LL.ListLike f a, Monad m) =>
             Iter t m a -> Iter t m b -> Iter t m f
-sepEndBy item sep =
-    item `orEmpty` LL.cons >$> sep `orEmpty` (\_ -> sepEndBy item sep)
+sepEndBy item sep = sepBy item sep <* optionalI sep
 
 
 -- | Run an 'Iter' one or more times (until it fails) and return a
@@ -531,7 +488,8 @@ skipMany1 = foldl1I (\_ _ -> ()) ()
 -- return at least one item.
 sepBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
           Iter t m a -> Iter t m b -> Iter t m f
-sepBy1 item sep = item >>= LL.cons >$> foldrI LL.cons LL.empty (sep *> item)
+sepBy1 item sep = item >>= \a ->
+                  innerFoldrI (LL.cons a) LL.cons LL.empty (sep *> item)
 
 -- | A variant of 'endBy' that throws a parse error if it cannot
 -- return at least one item.
@@ -543,23 +501,30 @@ endBy1 item sep = foldr1I LL.cons LL.empty (item <* sep)
 -- return at least one item.
 sepEndBy1 :: (ChunkData t, LL.ListLike f a, Monad m) =>
              Iter t m a -> Iter t m b -> Iter t m f
-sepEndBy1 item sep =
-    item >>= LL.cons >$> sep `orEmpty` (\_ -> sepEndBy item sep)
+sepEndBy1 item sep = sepBy1 item sep <* optionalI sep
 
                  
 -- | Read the next input element if it satisfies some predicate.
 -- Otherwise throw an error.
 satisfy :: (ChunkData t, LL.ListLike t e, Enum e, Monad m) =>
            (e -> Bool) -> Iter t m e
-satisfy test = do
-  e <- headI
-  if test e
-    then return e
-    else expectedI (show $ chr $ fromEnum e) "satify predicate"
+satisfy test =
+    Iter $ \c@(Chunk t eof) ->
+        if LL.null t
+           then (if eof then eofFail else IterF (satisfy test))
+           else case LL.head t of
+                  h | test h -> 
+                        Done h (Chunk (LL.tail t) eof)
+                    | otherwise ->
+                        Fail (IterExpected [(show $ chr $ fromEnum h
+                                           , "satisfy predicate")])
+                        Nothing (Just c)
+    where eofFail  = Fail (mkIterEOF "satisfy: EOF") Nothing Nothing
 
 -- | Read input that exactly matches a character.
 char :: (ChunkData t, LL.ListLike t e, Eq e, Enum e, Monad m) =>
         Char -> Iter t m e
+{-# INLINE char #-}
 char target = satisfy (eord target ==) <?> show target
 
 -- | Read input that exactly matches some target.
@@ -576,6 +541,7 @@ match ft = doMatch ft
 -- | Read input that exactly matches a string.
 string :: (ChunkData t, LL.ListLike t e, LL.StringLike t, Eq e, Monad m) =>
           String -> Iter t m t
+{-# INLINE string #-}
 string = match . LL.fromString
 
 -- | Read input that matches a string up to case.

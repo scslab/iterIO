@@ -6,7 +6,7 @@ module Data.IterIO.Inum
     -- * Concatenation and fusing operators
     , (|$), (.|$), cat, lcat, (|.), (.|)
     -- * Exception functions
-    , inumCatch, inumHandler, inumFinally, inumOnException
+    , inumCatch, inumFinally, inumOnException
     , resumeI, verboseResumeI
     -- * Simple enumerator construction function
     -- $mkInumIntro
@@ -348,16 +348,6 @@ inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
 inumCatch enum handler iter = catchI (enum iter) check
     where check e r@(Fail _ (Just _) _) = handler e r
           check _ r                     = reRunIter r
-
--- | 'inumCatch' with the argument order switched.
-inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
-               (e -> IterR tIn m (IterR tOut m a)
-                  -> Iter tIn m (IterR tOut m a))
-            -- ^ Exception handler
-            -> Inum tIn tOut m a
-            -- ^ 'Inum' that might throw an exception
-            -> Inum tIn tOut m a
-inumHandler = flip inumCatch
 
 -- | Execute some cleanup action when an 'Inum' finishes.
 inumFinally :: (ChunkData tIn, Monad m) =>
