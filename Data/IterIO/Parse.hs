@@ -107,7 +107,7 @@ infix 2 \/
 --
 (>$>) :: (Functor f) => (t -> a -> b) -> f a -> t -> f b
 {-# INLINE (>$>) #-}
-(>$>) f a t = f t <$> a
+(>$>) f a = \t -> f t <$> a
 infixr 3 >$>
 
 -- | @fa $> b = b <$ fa@ -- replaces the output value of a functor
@@ -117,7 +117,7 @@ infixr 3 >$>
 -- > infixl 4 $>
 ($>) :: (Functor f) => f a -> b -> f b
 {-# INLINE ($>) #-}
-($>) = flip (<$)
+a $> b = b <$ a
 infixl 4 $>
 
 -- | Defined as @orEmpty = ('\/' return 'mempty')@, and useful when
@@ -186,7 +186,7 @@ expectedI saw target =
 -- use @'Alternative'@ because @`Alternative`@'s @\<|\>@ operator has
 -- left instead of right fixity.)
 someI :: (ChunkData t, Monad m, LL.ListLike a e) => Iter t m a -> Iter t m a
-someI iter = flip (<?>) "someI" $ do
+someI iter = (<?> "someI") $ do
   a <- iter
   if LL.null a then mzero else return a
 
@@ -368,8 +368,6 @@ whilePredsI preds = do
 -- the specified predicate.
 whileI :: (ChunkData t, LL.ListLike t e, Monad m)
           => (e -> Bool) -> Iter t m t
-{-# SPECIALIZE whileI :: (Monad m) =>
-  (Word8 -> Bool) -> Iter L.ByteString m L.ByteString #-}
 whileI test = more id
     where
       more acc = Iter $ \(Chunk t eof) ->
@@ -380,8 +378,6 @@ whileI test = more id
 
 -- | Like 'whileI', but fails if at least one element does not satisfy
 -- the predicate.
-{-# SPECIALIZE while1I :: (Monad m) =>
-  (Word8 -> Bool) -> Iter L.ByteString m L.ByteString #-}
 while1I :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m t
 while1I test = ensureI test >> whileI test <?> "while1I"
