@@ -676,7 +676,7 @@ tryFBI = onDoneInput check
           check _ _ = error "tryFBI"
 
 mapIterFail :: (ChunkData t, Monad m) =>
-                (IterFail -> IterFail) -> Iter t m a -> Iter t m a
+               (IterFail -> IterFail) -> Iter t m a -> Iter t m a
 mapIterFail f = onDone check
     where check (Fail e a c) = Fail (f e) a c
           check r            = r
@@ -821,7 +821,6 @@ ifParse :: (ChunkData t, Monad m) =>
         -- ^ @failure@ action
         -> Iter t m b
         -- ^ result
-{-# INLINE ifParse #-}
 ifParse iter yes no = tryFBI iter >>= check
     where check (Right a) = yes a
           check (Left (IterException e)) = throwI e

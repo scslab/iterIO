@@ -149,11 +149,24 @@ infixr 3 `orEmpty`
 -- > infix 0 <?>
 --
 (<?>) :: (ChunkData t, Monad m) => Iter t m a -> String -> Iter t m a
-(<?>) iter expected = do
-  saw <- Iter $ \c -> Done c c
-  let fixit e@(IterException _) = e
-      fixit _                   = IterExpected [(show saw, expected)]
-  mapIterFail fixit iter
+{-# INLINE (<?>) #-}
+(<?>) iter expected =
+    Iter $ \c -> case runIter iter c of
+      r@(Done _ _)   -> r
+      r@(Fail e _ _) -> case e of
+                          IterException _ -> r
+                          _ -> Fail (IterExpected [(show c, expected)])
+                                    Nothing Nothing
+      r              -> slowPath (show c) expected r
+    where
+      {-# NOINLINE slowPath #-}
+      slowPath saw expected = onDoneR $ \r ->
+        case r of
+          r@(Fail e _ _) -> case e of
+                              IterException _ -> r
+                              _ -> Fail (IterExpected [(saw, expected)])
+                                   Nothing Nothing
+          r -> r
 infix 0 <?>
   
 -- | Throw an 'Iter' exception that describes expected input not
@@ -251,16 +264,13 @@ optionalI iter = ifParse iter (const $ return ()) (return ())
 -- parse error.  Does not consume any input.
 ensureI :: (ChunkData t, LL.ListLike t e, Monad m) =>
            (e -> Bool) -> Iter t m ()
-ensureI test = do
-  me <- peekI safeHeadI
-  case me of
-    Just e | test e -> return ()
-    Just e          -> do t <- showt $ LL.singleton e
-                          expectedI t "ensureI predicate"
-    Nothing         -> expectedI "EOF" "ensureI predicate"
-    where
-      showt :: (Monad m, ChunkData t) => t -> Iter t m String
-      showt = return . chunkShow
+ensureI test =
+    Iter $ \c@(Chunk t eof) ->
+        if LL.null t
+           then (if eof then eofFail else IterF (ensureI test))
+           else (if test (LL.head t) then Done () c else testFail)
+    where testFail = Fail (IterParseErr "ensureI test failed") Nothing Nothing
+          eofFail  = Fail (mkIterEOF "ensureI EOF") Nothing Nothing
 
 -- | A variant of the standard library 'ord' function, but that
 -- translates a 'Char' into any 'Enum' type, not just 'Int'.

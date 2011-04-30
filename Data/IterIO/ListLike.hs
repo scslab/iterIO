@@ -113,15 +113,15 @@ safeHeadLI = iterF $ dohead
 headI :: (ChunkData t, LL.ListLike t e, Monad m) => Iter t m e
 {-# INLINABLE headI #-}
 headI = iterF $ \c@(Chunk t eof) ->
-        if null t then Fail err Nothing $ Just c
-                  else Done (LL.head t) $ Chunk (LL.tail t) eof
+        if LL.null t then Fail err Nothing $ Just c
+                     else Done (LL.head t) $ Chunk (LL.tail t) eof
     where err = mkIterEOF "headI"
 
 -- | Like 'safeHeadLI', but works for any 'LL.ListLike' data type.
 safeHeadI :: (ChunkData t, LL.ListLike t e, Monad m) => Iter t m (Maybe e)
 {-# INLINABLE safeHeadI #-}
 safeHeadI = iterF $ \c@(Chunk t eof) ->
-            if null t then Done Nothing c
+            if LL.null t then Done Nothing c
                          else Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
 
 -- | Like 'lineI', but returns 'Nothing' on EOF.
