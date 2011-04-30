@@ -32,7 +32,6 @@ module Data.IterIO.ListLike
 
 import Prelude hiding (null)
 import Control.Concurrent
-import Control.Exception (toException)
 import Control.Monad
 import Control.Monad.Trans
 import qualified Data.ByteString as S
@@ -98,8 +97,8 @@ headLI :: (Show a, Monad m) => Iter [a] m a
 {-# INLINABLE headLI #-}
 headLI = iterF dohead
     where dohead (Chunk (a:as) eof) = Done a $ Chunk as eof
-          dohead c = IterFail err c
-          err = toException $ mkIterEOF "headLI"
+          dohead c = Fail err Nothing $ Just c
+          err = mkIterEOF "headLI"
 
 -- | Return 'Just' the first element when the Iteratee data type
 -- is a list, or 'Nothing' on EOF.
@@ -111,21 +110,19 @@ safeHeadLI = iterF $ dohead
 
 
 -- | Like 'headLI', but works for any 'LL.ListLike' data type.
-headI :: (ChunkData t, LL.ListLike t e, Monad m) =>
-         Iter t m e
+headI :: (ChunkData t, LL.ListLike t e, Monad m) => Iter t m e
 {-# INLINABLE headI #-}
 headI = iterF $ \c@(Chunk t eof) ->
-        if null t then IterFail err c
+        if null t then Fail err Nothing $ Just c
                   else Done (LL.head t) $ Chunk (LL.tail t) eof
-    where err = toException $ mkIterEOF "headI"
+    where err = mkIterEOF "headI"
 
 -- | Like 'safeHeadLI', but works for any 'LL.ListLike' data type.
-safeHeadI :: (ChunkData t, LL.ListLike t e, Monad m) =>
-             Iter t m (Maybe e)
+safeHeadI :: (ChunkData t, LL.ListLike t e, Monad m) => Iter t m (Maybe e)
 {-# INLINABLE safeHeadI #-}
 safeHeadI = iterF $ \c@(Chunk t eof) ->
             if null t then Done Nothing c
-                      else Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
+                         else Done (Just $ LL.head t) $ Chunk (LL.tail t) eof
 
 -- | Like 'lineI', but returns 'Nothing' on EOF.
 safeLineI :: (ChunkData t, Monad m, LL.ListLike t e, Eq t, Enum e, Eq e) =>
@@ -177,10 +174,10 @@ data0MaxI maxlen | maxlen <= 0 = return mempty
 dataMaxI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
 dataMaxI maxlen | maxlen <= 0 = return mempty
                 | otherwise   = iterF $ \c@(Chunk s eof) ->
-                                if null s then IterFail eoferr c
+                                if LL.null s then Fail err Nothing $ Just c
                                 else case LL.splitAt maxlen s of
                                        (h, t) -> Done h $ Chunk t eof
-    where eoferr = toException $ mkIterEOF "dataMaxI"
+    where err = mkIterEOF "dataMaxI"
 
 -- | Return the next @len@ elements of a 'LL.ListLike' data stream,
 -- unless an EOF is encountered, in which case fewer may be returned.
@@ -318,8 +315,8 @@ enumHandle' = enumHandle
 enumHandle :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
               Handle
            -> Onum t m a
-enumHandle h iter = tryIe (liftIO $ hSetBinaryMode h True) >>= check
-    where check (Left e)  = Iter $ InumFail e (IterF iter)
+enumHandle h iter = tryFI (liftIO $ hSetBinaryMode h True) >>= check
+    where check (Left e)  = Iter $ Fail e (Just $ IterF iter) . Just
           check (Right _) = enumNonBinHandle h iter
 
 -- | Feeds an 'Iter' with data from a file handle, using any input

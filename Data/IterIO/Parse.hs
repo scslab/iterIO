@@ -26,7 +26,6 @@ module Data.IterIO.Parse (-- * Iteratee combinators
 
 import Prelude hiding (null)
 import Control.Applicative (Applicative(..), (<**>), liftA2)
-import Control.Exception (SomeException(..))
 import Control.Monad
 import qualified Data.ByteString.Lazy as L
 import Data.Char
@@ -152,8 +151,9 @@ infixr 3 `orEmpty`
 (<?>) :: (ChunkData t, Monad m) => Iter t m a -> String -> Iter t m a
 (<?>) iter expected = do
   saw <- Iter $ \c -> Done c c
-  flip mapExceptionI iter $ \(IterNoParse _) ->
-      IterExpected (take 50 (show saw) ++ "...") [expected]
+  let fixit e@(IterException _) = e
+      fixit _                   = IterExpected [(show saw, expected)]
+  mapIterFail fixit iter
 infix 0 <?>
   
 -- | Throw an 'Iter' exception that describes expected input not
@@ -163,7 +163,7 @@ expectedI :: (ChunkData t) =>
           -> String             -- ^ Description of input that was wanted
           -> Iter t m a
 expectedI saw target =
-    Iter $ IterFail (SomeException $ IterNoParse $ IterExpected saw [target])
+    Iter $ \_ -> Fail (IterExpected [(saw, target)]) Nothing Nothing
 
 -- | Takes an 'Iter' returning a 'LL.ListLike' type, executes the
 -- 'Iter' once, and throws a parse error if the returned value is
@@ -175,7 +175,7 @@ expectedI saw target =
 someI :: (ChunkData t, Monad m, LL.ListLike a e) => Iter t m a -> Iter t m a
 someI iter = flip (<?>) "someI" $ do
   a <- iter
-  if LL.null a then throwI $ IterMiscParseErr "someI" else return a
+  if LL.null a then mzero else return a
 
 -- | Repeatedly invoke an 'Iter' and right-fold a function over the
 -- results.
@@ -201,10 +201,10 @@ foldrMinMaxI :: (ChunkData t, Monad m) =>
              -> Iter t m a      -- ^ Iteratee generating items to fold
              -> Iter t m b
 foldrMinMaxI nmin nmax f z iter
-    | nmin > nmax = throwI $ IterMiscParseErr "foldrMinMaxI: min > max"
+    | nmin > nmax = throwParseI "foldrMinMaxI: min > max"
     | nmin > 0    = f <$> iter <*> foldrMinMaxI (nmin - 1) (nmax - 1) f z iter
     | nmax == 0   = return z
-    | nmax < 0    = throwI $ IterMiscParseErr "foldrMinMaxI: negative max"
+    | nmax < 0    = throwParseI "foldrMinMaxI: negative max"
     | otherwise   = iter \/ return z $ f >$> foldrMinMaxI 0 (nmax - 1) f z iter
 
 -- | Strict left fold over an 'Iter' (until it throws an 'IterNoParse'
@@ -427,8 +427,8 @@ readI :: (ChunkData t, Monad m, LL.StringLike s, Read a) =>
 readI s' = let s = LL.toString s'
            in case [a | (a,"") <- reads s] of
                 [a] -> return a
-                []  -> throwI $ IterMiscParseErr $ "readI can't parse: " ++ s
-                _   -> throwI $ IterMiscParseErr $ "readI ambiguous: " ++ s
+                []  -> throwParseI $ "readI can't parse: " ++ s
+                _   -> throwParseI $ "readI ambiguous: " ++ s
 
 -- | Ensures the input is at the end-of-file marker, or else throws an
 -- exception.

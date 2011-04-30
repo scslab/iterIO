@@ -125,7 +125,7 @@ hexInt :: (Monad m) => Iter L m Int
 hexInt = foldM1I digit 0 hex
     where
       maxok = maxBound `shiftR` 4
-      digit n d | n > maxok = throwI (IterMiscParseErr "hex integer too large")
+      digit n d | n > maxok = throwParseI "hex integer too large"
                 | otherwise = return $ (n `shiftL` 4) .|. d
 
 -- | 1*\<any CHAR except CTLs or separators\>
@@ -227,8 +227,8 @@ timeI = do
   minutes <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Minutes"
   char ':'
   seconds <- whileMinMaxI 2 2 (isDigit . w2c) >>= readI <?> "Seconds"
-  when (hours >= 24 || minutes >= 60 || seconds > 62) $
-       throwI $ IterMiscParseErr "timeI: Invalid hours/minutes/seconds"
+  when (hours >= 24 || minutes >= 60 || seconds > 62) $ -- 2 leap seconds
+       throwParseI "timeI: Invalid hours/minutes/seconds"
   return $ TimeOfDay hours minutes (fromIntegral (seconds :: Int))
 
 rfc822_time :: (Monad m) => Iter L m UTCTime
@@ -734,8 +734,7 @@ foldForm req = case reqContentType req of
                  Nothing -> foldQuery req
                  Just (mt, _) | mt == urlencoded -> foldUrlencoded req
                  Just (mt, _) | mt == multipart  -> foldMultipart req
-                 _ -> \_ _ -> throwI $ IterMiscParseErr $
-                      "foldForm: invalid Content-Type"
+                 _ -> \_ _ -> throwParseI "foldForm: invalid Content-Type"
 
 
 --
@@ -802,7 +801,7 @@ urlencodedFormI = sepBy controlI (char '&')
 
 inumBind :: (ChunkData t, Monad m) =>
             Iter t m a -> (a -> Iter t m a) -> Iter t m a
-inumBind m k = tryIr m >>= either reRunIter k
+inumBind m k = tryRI m >>= either reRunIter k
 infixl 1 `inumBind`
 
 foldControls :: (Monad m) => (a -> FormField -> Iter L m a) -> a -> Iter L m a
@@ -890,7 +889,7 @@ inumMultipart req iter = flip mkInumM (iter <* nullI) $ do
     where
       bstr = case reqBoundary req of
                Just b  -> return $ S8.pack "\r\n--" `S8.append` b
-               Nothing -> throwI $ IterMiscParseErr "inumMultipart: no parts"
+               Nothing -> throwParseI "inumMultipart: no parts"
 
 foldMultipart :: (Monad m) =>
                  HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a

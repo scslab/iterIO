@@ -28,7 +28,8 @@ module Data.IterIO.Inum
     ) where
 
 import Prelude hiding (null)
-import Control.Exception (Exception(..), SomeException(..))
+import Control.Exception (Exception(..))
+import Control.Monad
 import Control.Monad.Trans
 import Data.Maybe
 import Data.Monoid
@@ -204,12 +205,13 @@ cat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
        Inum tIn tOut m a      -- ^
     -> Inum tIn tOut m a
     -> Inum tIn tOut m a
-cat a b iter = tryIr (runInum a iter) >>= either reRunIter (b . reRunIter)
--- Note this was carefully constructed to preserve InumFail errors.
--- Something like:  cat a b iter = a iter >>= b . reRunIter
--- would not preserve InumFail errors; since the input and output
--- types of >>= do not have to be the same, >>= must convert InumFail
--- errors into IterFail ones).
+cat a b iter = tryRI (runInum a iter) >>= either reRunIter (b . reRunIter)
+-- Note this was carefully constructed to preserve the return value in
+-- errors.  Something like:  cat a b iter = a iter >>= b . reRunIter
+-- would turn a @('Fail' e ('Just' r) c)@ result from @a@ into
+-- @('Fail' e 'Nothing' c)@; since the input and output types of >>=
+-- do not have to be the same, >>= must convert error results to
+-- 'Nothing'.
 infixr 3 `cat`
 
 -- | Lazy cat.  Like 'cat', except that it does not run the second
@@ -219,7 +221,7 @@ lcat :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m a      -- ^
      -> Inum tIn tOut m a
      -> Inum tIn tOut m a
-lcat a b iter = tryIr (runInum a iter) >>= either reRunIter check
+lcat a b iter = tryRI (runInum a iter) >>= either reRunIter check
     where check r = if isIterActive r then b $ reRunIter r else return r
 infixr 3 `lcat`
 
@@ -239,13 +241,14 @@ infixr 3 `lcat`
 joinR :: (ChunkData tIn, ChunkData tMid, Monad m) =>
          IterR tIn m (IterR tMid m a)
       -> IterR tIn m a
-joinR (Done i c)       = runIterR (runR i) c
-joinR (IterFail e c)   = IterFail e c
-joinR (InumFail e i c) = flip onDoneR (runR i) $ \r ->
-                          case r of
-                            Done a _ -> InumFail e a c
-                            _        -> setResid r c
-joinR _                = error "joinR: not done"
+joinR (Done i c)          = runIterR (runR i) c
+joinR (Fail e Nothing c)  = Fail e Nothing c
+joinR (Fail e (Just i) c) = flip onDoneR (runR i) $ \r ->
+                            case r of
+                              Done a _    -> Fail e (Just a) c
+                              Fail e' a _ -> Fail e' a c
+                              _ -> error "joinR"
+joinR _                   = error "joinR: not done"
 
 -- | Fuse two 'Inum's when the output type of the first 'Inum' is the
 -- same as the input type of the second.  More specifically, if
@@ -343,8 +346,8 @@ inumCatch :: (Exception e, ChunkData tIn, Monad m) =>
            -- ^ Exception handler
            -> Inum tIn tOut m a
 inumCatch enum handler iter = catchI (enum iter) check
-    where check e r@(InumFail _ _ _) = handler e r
-          check _ r                  = reRunIter r
+    where check e r@(Fail _ (Just _) _) = handler e r
+          check _ r                     = reRunIter r
 
 -- | 'inumCatch' with the argument order switched.
 inumHandler :: (Exception e, ChunkData tIn, Monad m) =>
@@ -373,18 +376,18 @@ inumOnException inum cleanup iter = inum iter `onExceptionI` cleanup
 -- series.  See 'inumCatch' for an example.
 resumeI :: (ChunkData tIn, Monad m) =>
            IterR tIn m (IterR tOut m a) -> Iter tIn m (IterR tOut m a)
-resumeI (InumFail _ a _) = return a
-resumeI _                = error "resumeI: not InumFail"
+resumeI (Fail _ (Just a) _) = return a
+resumeI _                   = error "resumeI: not an Inum failure"
 
 -- | Like 'resumeI', but if the 'Iter' is resumable, also prints an
 -- error message to standard error before resuming.
 verboseResumeI :: (ChunkData tIn, MonadIO m) =>
                   IterR tIn m (IterR tOut m a) -> Iter tIn m (IterR tOut m a)
-verboseResumeI (InumFail e a _) = do
+verboseResumeI (Fail e (Just a) _) = do
   liftIO $ do prog <- liftIO getProgName
               hPutStrLn stderr $ prog ++ ": " ++ show e
   return a
-verboseResumeI _                = error "verboseResumeI: not InumFail"
+verboseResumeI _ = error "verboseResumeI: not an Inum failure"
 
 --
 -- Control handlers
@@ -585,9 +588,7 @@ mkInumC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         -> Inum tIn tOut m a
 mkInumC adj ch codec iter0 = doIter iter0
     where
-      doIter iter = tryIe codec >>= either (inputErr iter) (doInput iter)
-      inputErr iter e | isIterEOF e = return $ IterF iter
-                      | otherwise   = Iter $ InumFail e (IterF iter)
+      doIter iter = tryEOFI codec >>= maybe (return $ IterF iter) (doInput iter)
       doInput iter input = do
         r <- runIterMC ch iter (Chunk input False)
         case r of
@@ -635,8 +636,8 @@ inumBracket :: (ChunkData tIn, Monad m) =>
             -> (b -> Inum tIn tOut m a)
             -- ^ Inum to bracket
             -> Inum tIn tOut m a
-inumBracket start end inum iter = tryIe start >>= check
-    where check (Left e)  = Iter $ InumFail e (IterF iter)
+inumBracket start end inum iter = tryFI start >>= check
+    where check (Left e)  = Iter $ Fail e (Just $ IterF iter) . Just
           check (Right b) = inum b iter `finallyI` end b
 
 --
@@ -686,7 +687,7 @@ enumPure = inumPure
 inumRepeat :: (ChunkData tIn, Monad m) =>
               Inum tIn tOut m a -> Inum tIn tOut m a
 inumRepeat inum iter0 = do
-  er <- tryIr $ runInum inum iter0
+  er <- tryRI $ runInum inum iter0
   stop <- atEOFI
   case (stop, er) of
     (False, Right (IterF iter)) -> inumRepeat inum iter
@@ -885,9 +886,6 @@ defaultInumState = InumState {
 -- a@.
 type InumM tIn tOut m a = Iter tIn (IterStateT (InumState tIn tOut m a) m)
 
-data InumDone = InumDone deriving (Show, Typeable)
-instance Exception InumDone
-
 -- | Set the control handler an 'Inum' should use from within an
 -- 'InumM' computation.  (The default is 'noCtl'.)
 setCtlHandler :: (ChunkData tIn, Monad m) =>
@@ -960,24 +958,15 @@ runInumM :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          -- ^ State to run on
          -> Iter tIn m (IterR tOut m a)
 runInumM inumm s0 = do
-  (result1, s1) <- runIterStateT inumm s0 >>= convertFail
-  (result2, s2) <- runIterStateT (insCleanup s1) s1 { insAutoDone = False
-                                                    , insCleaning = True }
-                   >>= convertFail
-  let iter = insIter s2
-  case (result1, result2) of
-    (IterFail e _, _) -> Iter $ InumFail e iter
-    (_, IterFail e _) -> Iter $ InumFail e iter
-    _                 -> return iter
+  (err1, s1) <- getErr =<< runIterStateT inumm s0
+  (err2, s2) <- getErr =<< runIterStateT (insCleanup s1)
+                                 s1 { insAutoDone = False, insCleaning = True }
+  let r = insIter s2
+  Iter $ maybe (Done r) (\e -> Fail e (Just r) . Just) $ mplus err2 err1
     where
-      convertFail (InumFail e _ c, s) = convertFail (IterFail e c, s)
-      convertFail (iter@(IterFail e _), s) =
-          if isInumDone e || (insAutoEOF s && isIterEOF e)
-          then return (IterF $ Iter $ const $ error "runInumM", s)
-          else return (iter, s)
-      convertFail is = return is
-      isInumDone e = maybe False (\InumDone -> True) $ fromException e
-
+      getErr (Fail (IterEOFErr _) _ _, s) | insAutoEOF s = return (Nothing, s)
+      getErr (Fail e _ _, s)                             = return (Just e, s)
+      getErr (_, s)                                      = return (Nothing, s)
 
 -- | A variant of 'mkInumM' that sets /AutoEOF/ and /AutoDone/ to
 -- 'True' by default.  (Equivalent to calling @'setAutoEOF' 'True' >>
@@ -1051,16 +1040,17 @@ ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
 ipipe inum = do
   s <- iget
-  r <- liftIterM (inum $ reRunIter $ insIter s) `catchI` reThrow
+  r <- tryRI (liftIterM (inum $ reRunIter $ insIter s)) >>= getIter
        >>= liftIterM . runIterRMC (insCtl s)
   iput s { insIter = r }
   let done = not $ isIterActive r
   if done && insAutoDone s then idone else return done
     where
-      reThrow (SomeException _) r@(InumFail _ i _) = do
+      getIter (Right i) = return i
+      getIter (Left r@(Fail _ (Just i) _)) = do
                imodify $ \s -> s { insIter = i }
                reRunIter r
-      reThrow _ r = reRunIter r
+      getIter (Left r) = reRunIter r
 
 -- | Apply an 'Onum' (or 'Inum' of an arbitrary, unused input type) to
 -- the 'Iter' from within the 'InumM' monad.  As with 'ifeed', returns
@@ -1099,4 +1089,4 @@ ipopresid = do
 -- target 'Iter'.  Can be used to end an 'irepeat' loop.  (Use
 -- @'throwI' ...@ for an unsuccessful exit.)
 idone :: (ChunkData tIn, Monad m) => InumM tIn tOut m a b
-idone = throwI InumDone
+idone = setAutoEOF True >> throwEOFI "idone"
