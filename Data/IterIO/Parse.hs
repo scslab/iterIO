@@ -181,8 +181,8 @@ someI iter = flip (<?>) "someI" $ do
 -- results.
 foldrI :: (ChunkData t, Monad m) =>
           (a -> b -> b) -> b -> Iter t m a -> Iter t m b
-foldrI f z iter = loop
-    where loop = iter \/ return z $ f >$> loop
+foldrI f z iter = loop id
+    where loop acc = iter \/ return (acc z) $ \a -> loop (acc . f a)
 
 -- | A variant of 'foldrI' that requires the 'Iter' to succeed at
 -- least once.
