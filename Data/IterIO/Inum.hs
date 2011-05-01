@@ -11,7 +11,6 @@ module Data.IterIO.Inum
     -- * Simple enumerator construction function
     -- $mkInumIntro
     , ResidHandler, CtlHandler
-    , whileNullI
     , mkInumC, mkInum, mkInumP
     , inumBracket
     -- * Utilities
@@ -535,18 +534,6 @@ runInum inum = onDone check . inum
     where
       check (Done (IterM m) c) = IterM $ m >>= \r -> return $ check $ Done r c
       check r = r
-
--- | Keep running an 'Iter' until either its output is not 'null' or
--- we have reached EOF.  Return the the 'Iter'\'s value on the last
--- (i.e., usually non-'null') iteration.
-whileNullI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
-              Iter tIn m tOut -> Iter tIn m tOut
-whileNullI iter = loop
-    where loop = do buf <- iter
-                    if null buf
-                      then do eof <- atEOFI
-                              if eof then return buf else loop
-                      else return buf
 
 -- | Create a stateless 'Inum' from a \"codec\" 'Iter' that transcodes
 -- the input type to the output type.  The codec is invoked repeately

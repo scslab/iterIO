@@ -23,7 +23,7 @@ module Data.IterIO.Iter
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
     , nullI, data0I, dataI, pureI, chunkI
-    , peekI, atEOFI, ungetI
+    , whileNullI, peekI, atEOFI, ungetI
     , safeCtlI, ctlI
     -- * Internal functions
     , onDone, fmapI
@@ -174,15 +174,22 @@ data CtlRes a = CtlUnsupp
 data CtlArg t m a = forall carg cres. (CtlCmd carg cres) =>
     CtlArg !carg (CtlRes cres -> Iter t m a) (Chunk t)
 
+-- | Contains information about a failed 'Iter'.  Failures of type
+-- 'IterException' must be caught by 'catchI' (or 'tryI', etc.).
+-- However, any other type of failure is considered a parse error, and
+-- will be caught by 'multiParse', 'ifParse', and 'mplus'.
 data IterFail = IterException !SomeException
-              -- ^ An actual error occured that is not a parse error, eof, etc.
+              -- ^ An actual error occured that is not a parse error,
+              -- EOF, etc.
               | IterExpected [(String, String)]
-              -- ^ List of @(input_seen, input_expected)@ pairs
+              -- ^ List of @(input_seen, input_expected)@ pairs.
               | IterEOFErr IOError
-              -- ^ List of @(input_seen, input_expected)@ pairs
+              -- ^ List of @(input_seen, input_expected)@ pairs.
               | IterParseErr String
-              -- ^ A miscellaneous parse error occured
+              -- ^ A miscellaneous parse error occured.
               | IterMzero
+              -- ^ What you get from 'mzero'.  Useful if you don't
+              -- want to specify any information about the failure.
                 deriving (Typeable)
 
 instance Show IterFail where
@@ -322,11 +329,13 @@ instance (Monad m) => Monad (Iter t m) where
     return a = Iter $ Done a
 
     {-# INLINE (>>=) #-}
-    -- Let's hope we can at least optimize the common case of Done,
-    -- since check calls itself and (>>=) recursively, IterF and IterM
-    -- likely cannot be inlined.
+    -- Because check calls itself and (>>=) recursively, IterF and
+    -- IterM likely cannot be inlined.  However, inlining Done and
+    -- Fail (which can occur quite often for parsing failures) in the
+    -- first part of this function seems to give about a 1-2% speedup.
     m >>= k = Iter $ \c0 -> case runIter m c0 of
-                              (Done a c) -> runIter (k a) c
+                              (Done a c)   -> runIter (k a) c
+                              (Fail e _ c) -> Fail e Nothing c
                               r          -> check r
         where check (IterM mm)             = IterM $ mm >>= return . check
               check (IterF i)              = IterF $ i >>= k
@@ -444,12 +453,15 @@ instance Exception IterCUnsupp
 --
 -- | Throw an exception from an Iteratee.  The exception will be
 -- propagated properly through nested Iteratees, which will allow it
--- to be categorized properly and avoid situations in which, for
--- instance, functions holding 'MVar's are prematurely terminated.
--- (Most Iteratee code does not assume the Monad parameter @m@ is in
--- the 'MonadIO' class, and so cannot use 'catch' or @'onException'@
--- to clean up after exceptions.)  Use 'throwI' in preference to
--- 'throw' whenever possible.
+-- to be categorized properly and avoid situations in which resources
+-- such as file handles are not released.  (Most Iteratee code does
+-- not assume the Monad parameter @m@ is in the 'MonadIO' class, and
+-- hence cannot use 'catch' or @'onException'@ to clean up after
+-- exceptions.)  Use 'throwI' in preference to 'throw' whenever
+-- possible.
+--
+-- Do not use @throwI@ to throw parse errors or EOF errors.  Use
+-- 'throwEOFI' and 'throwParseI' instead.
 throwI :: (Exception e) => e -> Iter t m a
 throwI e = Iter $ Fail (IterException $ toException e) Nothing . Just
 
@@ -464,7 +476,10 @@ throwEOFI :: String -> Iter t m a
 throwEOFI s = Iter $ Fail (mkIterEOF s) Nothing . Just
 
 -- | Throw a miscellaneous parse error (after which input is assumed
--- to be unsynchronized and thus is discarded).
+-- to be unsynchronized and thus is discarded).  Parse errors may be
+-- caught as exception type 'IterFail', but the can also be caught
+-- more efficiently by the functions 'multiParse', 'ifParse', and
+-- 'mplus'.
 throwParseI :: String -> Iter t m a
 {-# INLINE throwParseI #-}
 throwParseI s = Iter $ \_ -> Fail (IterParseErr s) Nothing Nothing
@@ -838,6 +853,18 @@ pureI = do peekI nullI; Iter $ \(Chunk t _) -> Done t chunkEOF
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 {-# INLINE chunkI #-}
 chunkI = iterF $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
+
+-- | Keep running an 'Iter' until either its output is not 'null' or
+-- we have reached EOF.  Return the the 'Iter'\'s value on the last
+-- (i.e., usually non-'null') iteration.
+whileNullI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+              Iter tIn m tOut -> Iter tIn m tOut
+whileNullI iter = loop
+    where loop = do buf <- iter
+                    if null buf
+                      then do eof <- atEOFI
+                              if eof then return buf else loop
+                      else return buf
 
 -- | Runs an 'Iter' without consuming any input.  (See 'tryBI' if you
 -- want to avoid consuming input just when the 'Iter' fails.)

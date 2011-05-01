@@ -298,10 +298,12 @@ the 'mkInumM' function creates an 'Inum' out of a computation in a
 dedicated 'InumM' monad.  See the "Data.IterIO.Inum" documentation for
 more informaiton on 'mkInumM'.  In @inumToLines@, we do not need to
 keep state.  We are happy just to let 'lineI' throw an exception on
-EOF, which `mkInum` will catch and handle gracefully.  (Throwing an
-exception of type 'IterEOF'--either implicitly by executing another
-'Iter' or explicitly with 'throwEOFI'--is the standard way to exit an
-'Inum' created by 'mkInum'.)
+EOF, which `mkInum` will catch and handle gracefully.
+
+Throwing an exception of type 'IterEOF'--either implicitly by
+executing another 'Iter' or explicitly with 'throwEOFI'--is one of the
+standard ways to exit an 'Inum' created by 'mkInum'.  The other way is
+to return empty input.
 
 We similarly define an 'Inum' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),
@@ -314,7 +316,7 @@ and a simple 'Inum' to count list elements (since @lineCountI ::
     inumGrep :: (Monad m) => String -> 'Inum' [S.ByteString] [S.ByteString] m a
     inumGrep re = `mkInum` $ do
       line <- 'headI'
-      return $ if line =~ packedRe then [line] else []
+      if line =~ packedRe then return [line] else inumGrep re
         where
           packedRe = S8.pack re
 @
@@ -328,6 +330,19 @@ and a simple 'Inum' to count list elements (since @lineCountI ::
                   Just _  -> count (n+1)
                   Nothing -> return n
 @
+
+Notice that when a line doesn't match, @inumGrep@ calls itself
+recursively.  This is necessary because returning an empty list of
+lines signals to 'mkInum' that there is no more input.  Thus, the
+following code would cause our grep implementation to exit at the
+first non-matching line:
+
+@
+      return $ if line =~ packedRe then [line] else []    -- Incorrect
+@
+
+(If you don't like this 'mempty'-means-EOF behavior, you can also wrap
+the argument to 'mkInum' in the function 'whileNullI'.)
 
 Now we are almost ready to assemble all the pieces.  But recall that
 the '|$' operator applies one 'Onum' to one 'Iter', yet now we have
