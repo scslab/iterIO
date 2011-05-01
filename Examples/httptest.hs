@@ -60,19 +60,24 @@ mimeMap = unsafePerformIO $ do
                                if exist then return h else findMimeTypes t
       findMimeTypes []    = return "mime.types" -- cause error
 
+routeFS :: (MonadIO m) => FilePath -> HttpRoute m
+routeFS = routeFileSys mimeMap (dirRedir "index.html")
+
 cabal_dir :: String
 cabal_dir = (unsafePerformIO $ getAppUserDataDirectory "cabal") ++ "/share/doc"
 
 serve_cabal :: (MonadIO m) => HttpRoute m
-serve_cabal = routeFileSys mimeMap (dirRedir "index.html") cabal_dir
+serve_cabal = routeFS cabal_dir
 
 route :: (MonadIO m) => HttpRoute m
-route = mconcat [
-         routeTop $ routeConst $ resp301 "/cabal"
-        , routeName "cabal" $ serve_cabal
-        , routePath cabal_dir $ serve_cabal
-        , routePath "/usr/share/doc/ghc/html"
-                $ routeFileSys mimeMap (const mempty) "/usr/share/doc/ghc/html"
+route = mconcat
+        [ routeTop $ routeConst $ resp301 "/cabal"
+        , routeMap' [ ("cabal", routeConst $ resp301 cabal_dir)
+                    , ("static", routeFS "static") -- directory ./static
+                    ]
+        , routePath cabal_dir $ routeFS cabal_dir
+        , routePath "/usr/share/doc/ghc/html" $
+                    routeFS "/usr/share/doc/ghc/html"
         ]
 
 accept_loop :: HttpServer -> IO ()
@@ -86,7 +91,8 @@ accept_loop srv = loop
       server s = do
         (iter, enum) <- maybe (iterStream s) (\ctx -> iterSSL ctx s True)
                         (hsSslCtx srv)
-        enum |$ inumHttpServer (ioHttpServer handler) .| iter
+        let loger = maybe inumNop inumhLog $ hsLog srv
+        enum |. loger |$ inumHttpServer (ioHttpServer handler) .| loger .| iter
       handler = runHttpRoute route
 
 main :: IO ()
