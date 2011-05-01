@@ -23,8 +23,8 @@ import Data.IterIO
 import Data.IterIO.Http
 import Data.IterIO.HttpRoute
 import Data.IterIO.SSL
-import           System.Directory (getAppUserDataDirectory)
-import           System.IO.Unsafe (unsafePerformIO)
+import System.Directory (getAppUserDataDirectory)
+import System.IO.Unsafe (unsafePerformIO)
 
 type L = L.ByteString
 
@@ -42,23 +42,6 @@ myListen pn = do
   Net.listen sock Net.maxListenQueue
   return sock
 
-httpAccept :: HttpServer -> IO (Iter L IO (), Onum L IO a)
-httpAccept hs = do
-  (s, addr) <- Net.accept $ hsListenSock hs
-  hPutStrLn stderr (show addr)
-  (iter, enum) <- maybe (mkInsecure s) (mkSecure s) (hsSslCtx hs)
-  return $ maybe (iter, enum |. inumNop)
-                (\h -> (inumhLog h .| iter, enum |. inumhLog h))
-                (hsLog hs)
-  where
-    mkInsecure s = do
-      h <- Net.socketToHandle s ReadWriteMode
-      hSetBuffering h NoBuffering
-      return (handleI h, enumHandle h `inumFinally` liftIO (hClose h))
-    mkSecure s ctx = iterSSL ctx s True `catch` \e@(SomeException _) -> do
-                       hPutStrLn stderr ("iterSSL: " ++ show e)
-                       return (nullI, inumNull)
-                  
 mkServer :: Net.PortNumber -> Maybe SSL.SSLContext -> IO HttpServer
 mkServer port mctx = do
   sock <- myListen port
@@ -83,21 +66,28 @@ cabal_dir = (unsafePerformIO $ getAppUserDataDirectory "cabal") ++ "/share/doc"
 serve_cabal :: (MonadIO m) => HttpRoute m
 serve_cabal = routeFileSys mimeMap (dirRedir "index.html") cabal_dir
 
+route :: (MonadIO m) => HttpRoute m
+route = mconcat [
+         routeTop $ routeConst $ resp301 "/cabal"
+        , routeName "cabal" $ serve_cabal
+        , routePath cabal_dir $ serve_cabal
+        , routePath "/usr/share/doc/ghc/html"
+                $ routeFileSys mimeMap (const mempty) "/usr/share/doc/ghc/html"
+        ]
+
 accept_loop :: HttpServer -> IO ()
 accept_loop srv = loop
     where
       loop = do
-        (iter, enum) <- httpAccept srv
-        _ <- forkIO $ enum |$ inumHttpServer (ioHttpServer handler) .| iter
+        (s, addr) <- Net.accept $ hsListenSock srv
+        hPutStrLn stderr (show addr)
+        _ <- forkIO $ server s
         loop
+      server s = do
+        (iter, enum) <- maybe (iterStream s) (\ctx -> iterSSL ctx s True)
+                        (hsSslCtx srv)
+        enum |$ inumHttpServer (ioHttpServer handler) .| iter
       handler = runHttpRoute route
-      route = mconcat [ routeTop $ routeConst $ resp301 "/cabal"
-                      , routeName "cabal" $ serve_cabal
-                      , routePath cabal_dir $ serve_cabal
-                      , routePath "/usr/share/doc/ghc/html"
-                        $ routeFileSys mimeMap (const mempty)
-                              "/usr/share/doc/ghc/html"
-                      ]
 
 main :: IO ()
 main = Net.withSocketsDo $ SSL.withOpenSSL $ do

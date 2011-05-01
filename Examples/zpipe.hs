@@ -14,8 +14,8 @@ main = do
   case av of
     -- The decision to put inumG[un]zip to the left or to the right
     -- of |$ is arbitrary, so we do one of each.
-    []     -> enumHandle stdin |$ inumGzip .| handleI stdout
-    ["-d"] -> enumHandle stdin |. inumRepeat inumGunzip |$ handleI stdout
+    []     -> enumStdin |$ inumGzip .| stdoutI
+    ["-d"] -> enumStdin |. inumRepeat inumGunzip |$ stdoutI
     _      -> do prog <- getProgName
                  hPutStrLn stderr $ "usage: " ++ prog ++ " [-d]"
 

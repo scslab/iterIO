@@ -11,6 +11,7 @@ Category:       System, Data
 Synopsis:       Iteratee-based IO with pipe operators
 Extra-source-files:
         GNUmakefile, README, Examples/fgrep.hs, Examples/zpipe.hs,
+	Examples/httptest.hs,
         Examples/reliable/Arc4.hs, Examples/reliable/NetSim.hs,
         Examples/reliable/Protocol.hs, Examples/reliable/TM.hs,
         Examples/reliable/Target.hs, Examples/reliable/reference.hs,
