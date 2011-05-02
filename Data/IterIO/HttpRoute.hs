@@ -373,8 +373,8 @@ routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
           , S8.pack $ "Content-Length: " ++ (show $ fileSize st)
           , S8.pack "Content-Type: " `S8.append` typemap (fileExt req) ]
       fileExt req =
-          case reqPathLst req of
-            [] -> []
-            l  -> case takeExtension (S8.unpack $ last l) of [] -> []; _:t -> t
+          drop 1 $ takeExtension $ case reqPathLst req of
+                                     [] -> dir
+                                     l  -> S8.unpack $ last l
 
 
