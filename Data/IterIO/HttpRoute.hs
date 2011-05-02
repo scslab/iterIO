@@ -210,12 +210,12 @@ mimeTypesI :: (Monad m) =>
               String
            -> Iter S8.ByteString m (String -> S8.ByteString)
 mimeTypesI deftype = do
-  mmap <- Map.fromList <$> foldrI (++) [] ((mimeLine <|> nil) <* eol)
+  mmap <- Map.fromList <$> concatI ((mimeLine <|> nil) <* eol)
   return $ \suffix -> maybe (S8.pack deftype) id $ Map.lookup suffix mmap
     where
       mimeLine = do
         typ <- word
-        foldrI (\a b -> (S8.unpack a, typ):b) [] (space >> word)
+        many $ do space; ext <- word; return (S8.unpack ext, typ)
       word = while1I $ \c -> c > eord ' ' && c <= eord '~'
       space = skipWhile1I $ \c -> c == eord ' ' || c == eord '\t'
       comment = char '#' >> skipWhileI (/= eord '\n')
