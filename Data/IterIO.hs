@@ -288,7 +288,7 @@ of arbitrary input type by feeding EOF as input.)
 
 Iteratee-enumerators are generally constructed using either 'mkInum'
 or `mkInumM`, and by convention most 'Inum's have names starting
-\"@inum@...\", except that 'Onum' names start \"@enum...@\".  'mkInum'
+\"@inum@...\", except that 'Onum' names start \"@enum@...\".  'mkInum'
 takes an argument of type @'Iter' tIn m tOut@ that consumes input of
 type @tIn@ to produce output of type @tOut@.  (For @inumToLines@,
 @tIn@ is @S.ByteString@ and @tOut@ is @[S.ByteString]@).  This is fine
@@ -300,10 +300,10 @@ more informaiton on 'mkInumM'.  In @inumToLines@, we do not need to
 keep state.  We are happy just to let 'lineI' throw an exception on
 EOF, which `mkInum` will catch and handle gracefully.
 
-Throwing an exception of type 'IterEOF'--either implicitly by
-executing another 'Iter' or explicitly with 'throwEOFI'--is one of the
-standard ways to exit an 'Inum' created by 'mkInum'.  The other way is
-to return empty input.
+Throwing an EOF exception--either implicitly by executing another
+'Iter', or explicitly with 'throwEOFI'--is one of the standard ways to
+exit an 'Inum' created by 'mkInum'.  The other way is to return empty
+input.
 
 We similarly define an 'Inum' to filter out lines not matching a
 regular expression (using the "Text.Regex.Posix.ByteString" library),
@@ -398,7 +398,7 @@ is less serious than an 'Iter' failure.  For example, in the above
 example, if 'enumFile' fails because one of the files does not exist,
 we might want to continue processing lines from the next file.
 Conversely, if @lengthI@ fails or one of the @inumGrep@ stages fails
-(possibly because the regular expression is illegal), there is not
+(most likely because the regular expression is illegal), there is not
 much point in continuing the program.  This is why the first example
 fused @inumGrep@ to @lengthI@, though this won't matter until we
 actually handle errors (see below).
