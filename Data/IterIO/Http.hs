@@ -1092,7 +1092,7 @@ resp404 req = mkHtmlResp stat404 html
                  , L8.pack " was not found on this server.</P>\n\
                            \</BODY></HTML>\n"]
 
--- | Generate a 404 (method not allowed) response.
+-- | Generate a 405 (method not allowed) response.
 resp405 :: (Monad m) => HttpReq -> HttpResp m
 resp405 req = mkHtmlResp stat405 html
     where html = L8.concat

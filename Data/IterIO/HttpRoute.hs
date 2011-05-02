@@ -1,7 +1,7 @@
 
 module Data.IterIO.HttpRoute
     (HttpRoute(..)
-    , runHttpRoute
+    , runHttpRoute, addHeader
     , routeConst, routeFn, routeReq
     , routeMethod, routeHost, routeTop
     , HttpMap, routeMap, routeMap', routeName, routePath, routeVar
@@ -64,8 +64,8 @@ import           Data.IterIO.Parse
 -- be served out of the file system under the @\"\/var\/www\/htdocs\"@
 -- directory.  (This example assumes @mimeMap@ has been constructed as
 -- discussed for 'mimeTypesI'.)
-data HttpRoute m =
-    HttpRoute !(HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
+newtype HttpRoute m =
+    HttpRoute (HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
 
 runHttpRoute :: (Monad m) =>
                 HttpRoute m -> HttpReq -> Iter L.ByteString m (HttpResp m)
@@ -86,6 +86,18 @@ popPath isParm req =
                  }
       _   -> error "Data.IterIO.Http.popPath: empty path"
 
+-- | Prepend a header field to the response produced by an 'HttpRoute'
+-- if that 'HttpRoute' is successful.  For example, to let clients
+-- cache static data for an hour, you might use:
+--
+-- @
+--   addHeader ('S8.pack' \"Cache-control: max-age=3600\") $
+--       'routeFileSys' mime ('dirRedir' \"index.html\") \"\/var\/www\/htdocs\"
+-- @
+addHeader :: (Monad m) => S8.ByteString -> HttpRoute m -> HttpRoute m
+addHeader h (HttpRoute r) = HttpRoute $ \req -> liftM (liftM addit) (r req)
+    where addit resp = resp { respHeaders = h : respHeaders resp }
+
 -- | Route all requests to a constant response action that does not
 -- depend on the request.  This route always succeeds, so anything
 -- 'mappend'ed will never be used.
@@ -97,11 +109,33 @@ routeConst resp = HttpRoute $ const $ Just $ return resp
 routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
 routeFn fn = HttpRoute $ Just . fn
 
--- | Construct a route by inspecting the request.
+-- | Select a route based on some arbitrary function of the request.
+-- For most purposes, the existing predicates ('routeName',
+-- 'routePath', etc.) should be fine, but occationally you might want
+-- to define a custom predicate.  For example, to reject methods other
+-- then \"GET\" or \"POST\" at the top of your route, you could say:
+--
+-- @
+--      myRoute = 'mconcat' [ rejectBadMethod
+--                        , otherRoute1
+--                        , ...
+--                        ]
+--      ...
+--
+--rejectBadMethod :: 'HttpRoute' m
+--rejectBadMethod =
+--      routeReq $ \req ->
+--          case 'reqMethod' req of
+--            s | s == 'S8.pack' \"GET\" || s == 'S8.pack' \"PUT\" ->
+--                  'mempty'                   {- reject route, falling through
+--                                                      to rest of myRoute -}
+--            _ -> 'routeConst' $ 'resp405' req  {- reject request -}
+-- @
 routeReq :: (HttpReq -> HttpRoute m) -> HttpRoute m
 routeReq fn = HttpRoute $ \req ->
                 let (HttpRoute route) = fn req
                 in route req
+
 
 -- | Route the root directory (/).
 routeTop :: HttpRoute m -> HttpRoute m
