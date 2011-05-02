@@ -523,6 +523,7 @@ host_hdr req = do
   (host, mport) <- hostI
   return req { reqHost = host, reqPort = mport }
 
+-- Cookie header (RFC 6265)
 cookie_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
 cookie_hdr req = ifParse cookiesI setCookies ignore
   where
@@ -582,7 +583,7 @@ any_hdr req = do
 -- | Parse an HTTP header, returning an 'HttpReq' data structure.
 httpReqI :: Monad m => Iter L.ByteString m HttpReq
 httpReqI = do
-  -- Section 4.1 of RFC2616:  "In the interest of robustness, servers
+  -- Section 4.1 of RFC 2616:  "In the interest of robustness, servers
   -- SHOULD ignore any empty line(s) received where a Request-Line is
   -- expected. In other words, if the server is reading the protocol
   -- stream at the beginning of a message and receives a CRLF first,
@@ -814,12 +815,6 @@ foldControls f z =
 foldUrlencoded :: (Monad m) =>
                   HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldUrlencoded _req f z = foldControls f z
-{-
-    case reqContentLength req of
-      Just len -> inumTakeExact len .| foldControls f z
-      Nothing  -> throwI $ IterMiscParseErr $
-                  "foldUrlencoded: Missing Content-legth"
--}
 
 foldQuery :: (Monad m) =>
              HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
