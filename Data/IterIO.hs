@@ -5,7 +5,7 @@ This is the main module to import for the IterIO package.  It
 re-exports several other modules and mostly consists of
 documentation--first a high-level overview of the iteratee model, then
 a more detailed tutorial, finally a discussion of the differences from
-other iteratee packages, and acknowledgments.
+other iteratee packages and acknowledgments.
 
 See the "Data.IterIO.Iter", "Data.IterIO.Inum", and
 "Data.IterIO.ListLike" modules for more detailed documentation of data
@@ -25,14 +25,16 @@ exported by default:
  * "Data.IterIO.SSL" provides support for SSL.
 
  * "Data.IterIO.Http" provides support for parsing and formatting
-   HTTP, including form uploads.  This may be useful in conjunction
+   HTTP, including handling form and file uploads (which can be
+   processed in constant space).  This may be useful in conjunction
    with "Data.IterIO.HttpRoute", which provides simple request routing
    support for web servers.
 
  * "Data.IterIO.Atto" provides support for running attoparsec parsers
-   on iteratee input.
+   on iteratee input (see
+   <http://hackage.haskell.org/package/attoparsec/>).
 
- * "Data.IterIO.Extra" provides debugging features, as well as a
+ * "Data.IterIO.Extra" provides debugging functions, as well as a
    loopback iteratee that can be used to test a protocol
    implementation against itself.
 
@@ -49,6 +51,12 @@ module Data.IterIO
 
     -- * Tutorial
     -- $Tutorial
+
+    -- * Differences from other iteratee packages
+    -- $Differences
+
+    -- * Acknowledgments
+    -- $Acknowledgments
     ) where
 
 import Data.IterIO.Iter hiding (null, run -- names that might collide
@@ -559,5 +567,66 @@ These last two @handler@ functions also do away with the need for an
 explicit type signature, because the function @'isDoesNotExistError'@
 has argument type 'IOError', constraining the type of @e@ to the type
 of exceptions we want to catch.
+
+-}
+
+{- $Differences
+
+The Iteratee approach was originally advocated by Oleg Kiselyov (see
+talk slides at <http://okmij.org/ftp/Streams.html#iteratee>).  The
+main implementation by Kiselyov and John Lato is simply called
+/iteratee/ (<http://hackage.haskell.org/package/iteratee>).  This
+package is a re-implementation of the Iteratee concepts with a new
+interface designed to simplify many of the abstractions and make them
+easier to use.  Another attempt to simplify the iteratee concepts was
+the /enumerator/ package
+(<http://hackage.haskell.org/package/enumerator>).  This section will
+attempt to discuss the differences between these packages and iterIO.
+
+/Base abstractions./ The iterIO package represents iteratees as a
+function from a chunk of input data to a pure iteratee result of type
+'IterR'.  An 'IterR' can yield a result and residual input, or it can
+ask for more input, or it can request to have an action executed in
+the underlying monad.  This structure has several consequences.  First
+it guarantees that an iteratee has access to all pending input, which
+makes it possible to do things like flush the input stream when
+seeking in a file.  Second, the differentiation between requesting
+more input and requesting monadic actions allows LL(*) grammars in
+many cases to be parsed without keeping unbounded buffering for
+rollback (see below).
+
+By contrast, the iteratee package
+
+uniformity of abstraction:
+
+piping
+
+control requests
+
+parsing
+
+separation of iteratee/enumerator failures
+
+Uniform error-handling mechanism
+
+integration with mtl
+
+ease of construction of enumerators
+
+-}
+
+{- $Acknowledgments
+
+Daniel Giffin contributed numerous suggestions and improvements to
+both the code and documentation.  Deian Stefan and David Terei helped
+with testing and improving the package, as well as understanding
+various relevant aspects of Haskell and ghc.
+
+The author is particularly grateful to John Lato for helping him
+understand much of the important design rationale behind the original
+iteratee package.
+
+This work was funded by the DARPA Clean-Slate Design of Resilient,
+Adaptive, Secure Hosts (CRASH) program, BAA-10-70.
 
 -}
