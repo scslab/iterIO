@@ -1,16 +1,63 @@
 
-{- | This is the main module to import for the IterIO package.  It
-   re-exports several other modules and mostly consists of
-   documentation--first this high-level overview of the iteratee
-   model, then (at <#g:1>) a more detailed tutorial.  See the
-   "Data.IterIO.Iter", "Data.IterIO.Inum", and "Data.IterIO.ListLike"
-   modules for more detailed documentation of data structures and
-   functions.  In addition, "Data.IterIO.Trans" (also re-exported by
-   this module) supplies functions that help you invoke monad
-   transformers from the mtl library from within the 'Iter' monad.
-   You may also wish to import "Data.IterIO.Parse", which includes
-   parsec-like parsing combinators and is not exported by this main
-   module.
+{- |
+
+This is the main module to import for the IterIO package.  It
+re-exports several other modules and mostly consists of
+documentation--first a high-level overview of the iteratee model, then
+a more detailed tutorial, finally a discussion of the differences from
+other iteratee packages, and acknowledgments.
+
+See the "Data.IterIO.Iter", "Data.IterIO.Inum", and
+"Data.IterIO.ListLike" modules for more detailed documentation of data
+structures and functions.  In addition, "Data.IterIO.Trans" (also
+re-exported by this module) supplies functions that help you invoke
+monad transformers from the mtl library from within the 'Iter' monad.
+
+Several other potentially useful modules in the package are not
+exported by default:
+
+ * "Data.IterIO.Parse" includes parsec-like parsing combinators for
+   iteratee input.
+
+ * "Data.IterIO.Zlib" provides zlib and gzip format compression and
+   decompression.
+
+ * "Data.IterIO.SSL" provides support for SSL.
+
+ * "Data.IterIO.Http" provides support for parsing and formatting
+   HTTP, including form uploads.  This may be useful in conjunction
+   with "Data.IterIO.HttpRoute", which provides simple request routing
+   support for web servers.
+
+ * "Data.IterIO.Atto" provides support for running attoparsec parsers
+   on iteratee input.
+
+ * "Data.IterIO.Extra" provides debugging features, as well as a
+   loopback iteratee that can be used to test a protocol
+   implementation against itself.
+
+-}
+
+module Data.IterIO
+    (module Data.IterIO.Iter
+    , module Data.IterIO.Trans
+    , module Data.IterIO.Inum
+    , module Data.IterIO.ListLike
+
+    -- * Overview
+    -- $Overview
+
+    -- * Tutorial
+    -- $Tutorial
+    ) where
+
+import Data.IterIO.Iter hiding (null, run -- names that might collide
+                               )
+import Data.IterIO.Trans
+import Data.IterIO.Inum
+import Data.IterIO.ListLike
+
+{- $Overview
 
    At a high level, an iteratee is a data sink that is fed chunks of
    data.  It may return a useful result, or its utility may lie in
@@ -62,23 +109,7 @@
    the 'cat' function.  @enum1 ``cat`` enum2@ produces an enumerator
    whose effect is to feed first @enum1@'s data then @enum2@'s data
    to an 'Iter'.
-
 -}
-module Data.IterIO
-    (module Data.IterIO.Iter
-    , module Data.IterIO.Trans
-    , module Data.IterIO.Inum
-    , module Data.IterIO.ListLike
-    -- * Tutorial
-    -- $Tutorial
-    ) where
-
--- import Prelude hiding (catch)
-import Data.IterIO.Iter hiding (null, run -- names that might collide
-                               )
-import Data.IterIO.Trans
-import Data.IterIO.Inum
-import Data.IterIO.ListLike
 
 {- $Tutorial
 
