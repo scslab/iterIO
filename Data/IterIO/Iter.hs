@@ -19,7 +19,6 @@ module Data.IterIO.Iter
     , catchI, tryI, tryFI, tryRI, tryEOFI
     , finallyI, onExceptionI
     , tryBI, tryFBI
-    , mapIterFail
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
     , nullI, data0I, dataI, pureI, chunkI
@@ -184,7 +183,9 @@ data IterFail = IterException !SomeException
               | IterExpected [(String, String)]
               -- ^ List of @(input_seen, input_expected)@ pairs.
               | IterEOFErr IOError
-              -- ^ List of @(input_seen, input_expected)@ pairs.
+              -- ^ An EOF error occurred, either in some IO action
+              -- wrapped by 'liftIO', or in some 'Iter' that called
+              -- 'throwEOFI'.
               | IterParseErr String
               -- ^ A miscellaneous parse error occured.
               | IterMzero
@@ -215,12 +216,7 @@ instance Exception IterFail where
 -- ('IterF'), it may wish to execute monadic actions in the
 -- transformed monad ('IterM'), it may have a control request for an
 -- enclosing enumerator ('IterC'), it may have produced a result
--- ('Done'), or it may have failed.  Failure is indicated by
--- 'IterFail' or 'InumFail', depending on whether the failure occured
--- in an iteratee or enumerator.  In the latter case, when an 'Inum'
--- fails, the 'Iter' it is feeding usually will not have failed.
--- Thus, the 'InumFail' type includes the state of the 'Iter' that the
--- 'Inum' was feeding.
+-- ('Done'), or it may have failed ('Fail').
 data IterR t m a = IterF !(Iter t m a)
                  -- ^ The iteratee requires more input.
                  | IterM !(m (IterR t m a))
@@ -230,19 +226,21 @@ data IterR t m a = IterF !(Iter t m a)
                  | Done a (Chunk t)
                  -- ^ Sufficient input was received; the 'Iter' is
                  -- returning a result of type @a@.  In adition, the
-                 -- 'Iter' has a 'Chunk' containing any residual input
-                 -- that was not consumed in producing the result.
+                 -- 'IterR' has a 'Chunk' containing any residual
+                 -- input that was not consumed in producing the
+                 -- result.
                  | Fail !IterFail !(Maybe a) !(Maybe (Chunk t))
                  -- ^ The 'Iter' failed.  If it was an enumerator, the
-                 -- target 'Iter' being fed may not have failed, in
-                 -- which case it is returned in the @Maybe a@.  If it
-                 -- makes sense to preserve the state of the input
-                 -- stream, the third parameter includes the residual
-                 -- 'Chunk'.
+                 -- target 'Iter' that the enumerator was feeding
+                 -- likely has not failed, in which case its current
+                 -- state is returned in the @Maybe a@.  If it makes
+                 -- sense to preserve the state of the input stream
+                 -- (which it does for most errors except parse
+                 -- errors), then the third parameter includes the
+                 -- residual 'Chunk' at the time of the failure.
 
 -- | True if an 'IterR' is requesting something from an
--- enumerator--i.e., the 'IterR' is not 'Done' and is not in one of
--- the error states.
+-- enumerator--i.e., the 'IterR' is not 'Done' or 'Fail'.
 isIterActive :: IterR t m a -> Bool
 {-# INLINE isIterActive #-}
 isIterActive (IterF _)     = True
@@ -294,10 +292,11 @@ instance (Monad m) => Functor (Iter t m) where
     fmap = fmapI
 
 -- | @fmapI@ is like 'liftM', but differs in one important respect:
--- it preserves 'InumFail' states (and in fact maps the non-failed
--- iter state).  By contrast, 'liftM', which is equivalent to
--- @'liftM' f i = i '>>=' 'return' . f@, transforms 'InumFail' states
--- to 'IterFail' ones because of its use of '>>='.
+-- it preserves the failed result of an enumerator (and in fact
+-- applies the function to the non-failed target 'Iter' state).  By
+-- contrast, 'liftM', which is equivalent to @'liftM' f i = i '>>='
+-- 'return' . f@, transforms the @'Maybe' a@ component of all 'Fail'
+-- states to 'Nothing' because of its use of '>>='.
 fmapI :: (Monad m) => (a -> b) -> Iter t m a -> Iter t m b
 {-# INLINE fmapI #-}
 fmapI = onDone . fmapR
@@ -434,7 +433,7 @@ runI i = Iter $ runIterR (runR $ runIter i chunkEOF)
 -- Exceptions
 --
 
--- | Make an 'IterEOF' from a String.
+-- | Make an 'IterEOFErr' from a String.
 mkIterEOF :: String -> IterFail
 mkIterEOF loc = IterEOFErr $ mkIOError eofErrorType loc Nothing Nothing
 
@@ -454,30 +453,31 @@ instance Exception IterCUnsupp
 -- | Throw an exception from an Iteratee.  The exception will be
 -- propagated properly through nested Iteratees, which will allow it
 -- to be categorized properly and avoid situations in which resources
--- such as file handles are not released.  (Most Iteratee code does
+-- such as file handles are not released.  (Most iteratee code does
 -- not assume the Monad parameter @m@ is in the 'MonadIO' class, and
 -- hence cannot use 'catch' or @'onException'@ to clean up after
 -- exceptions.)  Use 'throwI' in preference to 'throw' whenever
 -- possible.
 --
 -- Do not use @throwI@ to throw parse errors or EOF errors.  Use
--- 'throwEOFI' and 'throwParseI' instead.
+-- 'throwEOFI' and 'throwParseI' instead.  For performance reasons,
+-- the 'IterFail' type segregates EOF and parse errors from other
+-- types of failures.
 throwI :: (Exception e) => e -> Iter t m a
 throwI e = Iter $ Fail (IterException $ toException e) Nothing . Just
 
 -- | Throw an exception of type 'IterEOF'.  This will be interpreted
 -- by 'mkInum' as an end of file chunk when thrown by the codec.  It
--- will also be interpreted by 'ifParse' and 'multiParse' as an
--- exception of type 'IterNoParse'.  If not caught within the 'Iter'
--- monad, the exception will be rethrown by 'run' (and hence '|$') as
--- an 'IOError' of type EOF.
+-- will also be interpreted by 'ifParse' and 'multiParse' as parsing
+-- failure.  If not caught within the 'Iter' monad, the exception will
+-- be rethrown by 'run' (and hence '|$') as an 'IOError' of type EOF.
 throwEOFI :: String -> Iter t m a
 {-# INLINE throwEOFI #-}
 throwEOFI s = Iter $ Fail (mkIterEOF s) Nothing . Just
 
 -- | Throw a miscellaneous parse error (after which input is assumed
 -- to be unsynchronized and thus is discarded).  Parse errors may be
--- caught as exception type 'IterFail', but the can also be caught
+-- caught as exception type 'IterFail', but they can also be caught
 -- more efficiently by the functions 'multiParse', 'ifParse', and
 -- 'mplus'.
 throwParseI :: String -> Iter t m a
@@ -535,9 +535,8 @@ genCatchI iter0 handler conv = onDone check iter0
 -- will not have failed.  To avoid discarding this extra information,
 -- you should not re-throw exceptions with 'throwI'.  Rather, you
 -- should re-throw an exception by re-executing the failed 'IterR'
--- with 'reRunIter'.  For example, you could define an @onExceptionI@
--- function analogous to the standard library @'onException'@ as
--- follows:
+-- with 'reRunIter'.  For example, a possible definition of
+-- 'onExceptionI' is:
 --
 -- @
 --  onExceptionI iter cleanup =
@@ -549,7 +548,8 @@ genCatchI iter0 handler conv = onDone check iter0
 -- operation, and exceptions raised by 'throwI'.  It is not possible
 -- to catch /asynchronous/ exceptions, such as lazily evaluated
 -- divide-by-zero errors, the 'throw' function, or exceptions raised
--- by other threads using @'throwTo'@.
+-- by other threads using @'throwTo'@ if those exceptions might arrive
+-- anywhere outside of a 'liftIO' call.
 --
 -- @\`catchI\`@ has the default infix precedence (@infixl 9
 -- \`catchI\`@), which binds more tightly than any concatenation or
@@ -565,8 +565,8 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
 catchI iter handler = genCatchI iter handler id
 
 -- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
--- the 'Iter' throws an exception @e@, returns @'Left' (e, r)@ where
--- @r@ is the state of the failing 'Iter'.
+-- the 'Iter' fails and throws an exception @e@ (of type @e@), returns
+-- @'Left' (e, r)@ where @r@ is the state of the failing 'Iter'.
 tryI :: (ChunkData t, Monad m, Exception e) =>
         Iter t m a -> Iter t m (Either (e, IterR t m a) a)
 {-# INLINE tryI #-}
@@ -659,11 +659,13 @@ tryFBI = onDoneInput check
           check (Fail e _ _) c = Done (Left e) c
           check _ _ = error "tryFBI"
 
+{-
 mapIterFail :: (ChunkData t, Monad m) =>
                (IterFail -> IterFail) -> Iter t m a -> Iter t m a
 mapIterFail f = onDone check
     where check (Fail e a c) = Fail (f e) a c
           check r            = r
+-}
 
 -- | Run an Iteratee, and if it throws a parse error by calling
 -- 'expectedI', then combine the exptected tokens with those of a
@@ -682,7 +684,7 @@ combineExpected _ r@(Fail (IterExpected _) _ _) = r
 combineExpected e _ = Fail e Nothing Nothing
 
 -- | Try two Iteratees and return the result of executing the second
--- if the first one throws an 'IterNoParse' exception.  Note that
+-- if the first one throws a parse, EOF, or 'mzero' error.  Note that
 -- "Data.IterIO.Parse" defines @'<|>'@ as an infix synonym for this
 -- function.
 --
@@ -694,16 +696,16 @@ combineExpected e _ = Fail e Nothing Nothing
 --  * @'ifParse' a f b@ works by first executing @a@, saving a copy of
 --    all input consumed by @a@.  If @a@ throws a parse error, the
 --    saved input is used to backtrack and execute @b@ on the same
---    input that @a@ just rejected.  If @a@ suceeds, @b@ is never run;
---    @a@'s result is fed to @f@, and the resulting action is executed
---    without backtracking (so any error thrown within @f@ will not be
---    caught by this 'ifParse' expression).
+--    input that @a@ just rejected.  If @a@ succeeds, @b@ is never
+--    run; @a@'s result is fed to @f@, and the resulting action is
+--    executed without backtracking (so any error thrown within @f@
+--    will not be caught by this 'ifParse' expression).
 --
 --  * Instead of saving input, @multiParse a b@ executes both @a@ and
 --    @b@ concurrently as input chunks arrive.  If @a@ throws a parse
 --    error, then the result of executing @b@ is returned.  If @a@
---    either succeeds or throws an exception not of class
---    'IterNoParse', then the result of running @a@ is returned.
+--    either succeeds or throws an exception that is not a parse
+--    error/EOF/'mzero', then the result of running @a@ is returned.
 --
 --  * With @multiParse a b@, if @b@ returns a value, executes a
 --    monadic action via 'lift', or issues a control request via
@@ -742,7 +744,7 @@ combineExpected e _ = Fail e Nothing Nothing
 -- in @total >>= next@).  Since @total@ has to look arbitrarily far
 -- into the input to determine that @parseAndSumIntegerList@ fails, in
 -- practice @total@ will have to save all input until it knows that
--- @parseAndSumIntegerList@ suceeds.
+-- @parseAndSumIntegerList@ succeeds.
 --
 -- A better approach might be:
 --
@@ -787,12 +789,13 @@ multiParse a b = Iter $ \c -> check (runIter a c) (runIter b c)
 -- | @ifParse iter success failure@ runs @iter@, but saves a copy of
 -- all input consumed using 'tryFBI'.  (This means @iter@ must not
 -- consume unbounded amounts of input!  See 'multiParse' for such
--- cases.)  If @iter@ suceeds, its result is passed to the function
--- @success@.  If @iter@ throws an exception of type 'IterNoParse',
--- then @failure@ is executed with the input re-wound (so that
--- @failure@ is fed the same input that @iter@ was).  If @iter@ throws
--- any other type of exception, @ifParse@ passes the exception back
--- and does not execute @failure@.
+-- cases.)  If @iter@ succeeds, its result is passed to the function
+-- @success@.  If @iter@ throws a parse error (with 'throwParseI'),
+-- throws an EOF error (with 'throwEOFI'), or executes 'mzero', then
+-- @failure@ is executed with the input re-wound (so that @failure@ is
+-- fed the same input that @iter@ was).  If @iter@ throws any other
+-- type of exception, @ifParse@ passes the exception back and does not
+-- execute @failure@.
 --
 -- See "Data.IterIO.Parse" for a discussion of this function and the
 -- related infix operator @\\/@ (which is a synonym for 'ifNoParse').
@@ -855,7 +858,7 @@ chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 chunkI = iterF $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
 
 -- | Keep running an 'Iter' until either its output is not 'null' or
--- we have reached EOF.  Return the the 'Iter'\'s value on the last
+-- we have reached EOF.  Return the the `Iter`'s value on the last
 -- (i.e., usually non-'null') iteration.
 whileNullI :: (ChunkData tIn, ChunkData tOut, Monad m) =>
               Iter tIn m tOut -> Iter tIn m tOut
@@ -866,8 +869,9 @@ whileNullI iter = loop
                               if eof then return buf else loop
                       else return buf
 
--- | Runs an 'Iter' without consuming any input.  (See 'tryBI' if you
--- want to avoid consuming input just when the 'Iter' fails.)
+-- | Runs an 'Iter' then rewinds the input state, so that the effect
+-- is to parse lookahead data.  (See 'tryBI' if you want to rewind the
+-- input only when the 'Iter' fails.)
 peekI :: (ChunkData t, Monad m) => Iter t m a -> Iter t m a
 peekI = onDoneInput setResid
 
@@ -948,8 +952,8 @@ onDoneR :: (Monad m) =>
 onDoneR f = check
     where check r = stepR r check $ f r
 
--- | Run an 'Iter' until it enters the 'Done', 'IterFail', or
--- 'InumFail' state, then use a function to transform the 'IterR'.
+-- | Run an 'Iter' until it enters the 'Done' or 'Fail' state, then
+-- use a function to transform the 'IterR'.
 {-# INLINE onDone #-}
 onDone :: (Monad m) =>
           (IterR t m a -> IterR t m b) -> Iter t m a -> Iter t m b

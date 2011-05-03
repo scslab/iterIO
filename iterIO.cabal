@@ -30,11 +30,11 @@ Description:
         The Iteratee approach was originally advocated by Oleg
         Kiselyov (see talk slides at
         <http://okmij.org/ftp/Streams.html#iteratee>).  This package
-        is a from-scratch re-implementation of the Iteratee concepts
-        with a new interface designed to simplify many of the
-        abstractions and make them easier to use.  See "Data.IterIO"
-        for a discussion of the differences between iterIO and
-        previous iteratee implementations.
+        is a re-implementation of the Iteratee concepts with a new
+        interface designed to simplify many of the abstractions and
+        make them easier to use.  See "Data.IterIO" for a discussion
+        of the differences between iterIO and the two previous
+        iteratee implementations (iteratee and enumerator).
 
         .
 
@@ -50,10 +50,8 @@ Source-repository head
 Library
   Build-depends: array >= 0.3.0.1 && < 2,
                  base >= 4.3 && < 6,
-                 -- binary >= 0.5 && < 2,
                  bytestring >= 0.9 && < 2,
                  containers >= 0.3 && < 2,
-                 directory >= 1.0 && < 2,
                  filepath >= 1.2 && < 2,
                  HsOpenSSL >= 0.8 && < 2,
                  ListLike >= 1.0 && < 4,
@@ -66,8 +64,7 @@ Library
                  time >= 1.1.4 && < 2,
                  unix >= 2.4 && < 3
 
-  ghc-options: -Wall -Werror -O2 -funbox-strict-fields
-               -threaded -fno-warn-unused-imports -rtsopts
+  ghc-options: -Wall
   Exposed-modules:
     Data.IterIO,
     Data.IterIO.Atto,

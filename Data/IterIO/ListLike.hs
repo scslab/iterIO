@@ -32,6 +32,7 @@ module Data.IterIO.ListLike
 
 import Prelude hiding (null)
 import Control.Concurrent
+import Control.Exception (onException)
 import Control.Monad
 import Control.Monad.Trans
 import qualified Data.ByteString as S
@@ -181,6 +182,11 @@ dataMaxI maxlen | maxlen <= 0 = return mempty
 
 -- | Return the next @len@ elements of a 'LL.ListLike' data stream,
 -- unless an EOF is encountered, in which case fewer may be returned.
+-- Note the difference from 'data0MaxI':  @'takeI' n@ will keep
+-- reading input until it has accumulated @n@ elements or seen an EOF,
+-- then return the data; @'data0MaxI' n@ will keep reading only until
+-- it has received any non-empty amount of data, even if the amount
+-- received is less than @n@ elements and there is no EOF.
 takeI :: (ChunkData t, LL.ListLike t e, Monad m) => Int -> Iter t m t
 takeI len | len <= 0  = return mempty
           | otherwise = do
@@ -202,8 +208,8 @@ takeI len | len <= 0  = return mempty
 -- this case it is better to have the thread handling reads call
 -- 'hSetBinaryMode'.)
 --
--- Also note that Haskell be default buffers data written to
--- 'Handle's.  For may network protocols this is a problem.  Don't
+-- Also note that Haskell by default buffers data written to
+-- 'Handle's.  For many network protocols this is a problem.  Don't
 -- forget to call @'hSetBuffering' h 'NoBuffering'@ before passing a
 -- handle to 'handleI'.
 handleI :: (MonadIO m, ChunkData t, LL.ListLikeIO t e) =>
@@ -463,9 +469,13 @@ pairFinalizer iter inum cleanup = do
 -- | \"Iterizes\" a file 'Handle' by turning into an 'Onum' (for
 -- reading) and an 'Iter' (for writing).  Uses 'pairFinalizer' to
 -- 'hClose' the 'Handle' when both the 'Iter' and 'Onum' are finished.
+-- Puts the handle into binary mode, but does not change the
+-- buffering.
 iterHandle :: (LL.ListLikeIO t e, ChunkData t, MonadIO m) =>
               Handle -> IO (Iter t m (), Onum t m a)
-iterHandle h = pairFinalizer (handleI h) (enumHandle h) (hClose h)
+iterHandle h = do
+  hSetBinaryMode h True `onException` hClose h
+  pairFinalizer (handleI h) (enumNonBinHandle h) (hClose h)
 
 -- | \"Iterizes\" a stream 'Socket' by turning into an 'Onum' (for
 -- reading) and an 'Iter' (for writing).  Uses 'pairFinalizer' to

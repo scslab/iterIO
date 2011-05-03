@@ -242,6 +242,15 @@ joinR :: (ChunkData tIn, ChunkData tMid, Monad m) =>
       -> IterR tIn m a
 joinR (Done i c)          = runIterR (runR i) c
 joinR (Fail e Nothing c)  = Fail e Nothing c
+--
+-- Note that 'runR' in the following function is serving two purposes,
+-- one of them subtle.  The obvious purpose is to preserve the state
+-- of the non-failed target 'Iter' when an 'Inum' has failed.
+-- However, a subtler, more important purpose is to guarantee that all
+-- (non-failed) 'Iter's eventually receive EOF even when 'Inum's fail.
+-- This is critical for things like EOF transmission and file
+-- descriptor closing, and is why functions such as 'pairFinalizer'
+-- make sense.
 joinR (Fail e (Just i) c) = flip onDoneR (runR i) $ \r ->
                             case r of
                               Done a _    -> Fail e (Just a) c

@@ -48,7 +48,7 @@ import Data.List
 import Data.Time
 import Data.Typeable
 import Data.Word
-import System.Locale
+import System.Locale (defaultTimeLocale)
 import System.IO
 import Text.Printf
 

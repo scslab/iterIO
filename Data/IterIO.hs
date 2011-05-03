@@ -575,29 +575,106 @@ of exceptions we want to catch.
 The Iteratee approach was originally advocated by Oleg Kiselyov (see
 talk slides at <http://okmij.org/ftp/Streams.html#iteratee>).  The
 main implementation by Kiselyov and John Lato is simply called
-/iteratee/ (<http://hackage.haskell.org/package/iteratee>).  This
-package is a re-implementation of the Iteratee concepts with a new
-interface designed to simplify many of the abstractions and make them
-easier to use.  Another attempt to simplify the iteratee concepts was
-the /enumerator/ package
-(<http://hackage.haskell.org/package/enumerator>).  This section will
-attempt to discuss the differences between these packages and iterIO.
+/iteratee/ (<http://hackage.haskell.org/package/iteratee>).  Another
+attempt to simplify the iteratee concepts was the /enumerator/ package
+(<http://hackage.haskell.org/package/enumerator>).  IterIO is a
+re-implementation of these concepts from scratch.  This section
+discusses the differences between previous packages and iterIO.
 
-/Base abstractions./ The iterIO package represents iteratees as a
-function from a chunk of input data to a pure iteratee result of type
-'IterR'.  An 'IterR' can yield a result and residual input, or it can
-ask for more input, or it can request to have an action executed in
-the underlying monad.  This structure has several consequences.  First
-it guarantees that an iteratee has access to all pending input, which
-makes it possible to do things like flush the input stream when
-seeking in a file.  Second, the differentiation between requesting
-more input and requesting monadic actions allows LL(*) grammars in
-many cases to be parsed without keeping unbounded buffering for
-rollback (see below).
+* /Base abstraction:/
 
-By contrast, the iteratee package
+The iterIO package represents an iteratee as a pure function from a
+chunk of input data to a pure iteratee result of type 'IterR':
 
-uniformity of abstraction:
+@
+  newtype 'Iter' t m a = 'Iter' { runIter :: 'Chunk' t -> 'IterR' t m a }
+@
+
+An 'IterR' can yield a result and residual input, or it can ask for
+more input, or it can request to have an action executed in the
+underlying monad, or it can signal failure.  This structure guarantees
+that an iteratee has access to all pending input, which makes it
+possible to do things like flush the input stream when seeking in a
+file, or measure the length of buffered input when determining the
+current position in a file.  Moreover, one can distinguish at runtime
+between pure iteratees and those that require monadic actions; this
+ability in many cases allows one to parse LL(*) grammars without
+needing unbounded buffering for rollback (see below).
+
+In contrast, the iteratee package uses continuation passing style
+(CPS), in which an iteratee is a function taking two continuation
+functions--one to call when done, and a second to call when either
+requesting more input or failing:
+
+> -- From the iteratee package:
+> newtype Iteratee s m a = Iteratee{ runIter :: forall r.
+>           (a -> Stream s -> m r) ->
+>           ((Stream s -> Iteratee s m a) -> Maybe SomeException -> m r) ->
+>           m r}
+
+CPS has the advantage of exposing the bind operator of the underlying
+mondad, making 'lift' cheap and simple.  Moreover, splitting into two
+continuations saves the first (i.e., \"onDone\") continuation from the
+overhead of checking whether an error condition or request for more
+input has occurred.  See
+<http://haskell.org/haskellwiki/Performance/Monads#Use__Continuation_Passing_Style>
+for a good discussion of the advantages of CPS.
+
+However, iteratee lacks several features of iterIO; offering these
+features would reduce the benefits of CPS and complicate code.  For
+instance, there is no way to execute a pure iteratee without monadic
+actions (a highly useful feature for LL(*) parsing).  Moreover,
+iteratee's exception mechanism discards the current location in the
+input stream, making it unsuitable for failed parse alternatives.
+IterIO provides a general control mechanism to make arbitrary requests
+from enumerators (such as seek, tell, getpeername, get SSL
+information, etc.); iteratee instead overloads the exception mechanism
+for control messages, which prevents control operations from returning
+values.  Thus, while iteratee can implement seek, it cannot, for
+instance, implement tell.
+
+The enumerator package's approach is closer to iterIO's, but makes
+every iteratee into a monadic computation:
+
+> -- From the enumerator package:
+> newtype Iteratee a m b = Iteratee { runIteratee :: m (Step a m b) }
+
+Here @Step@ is similar to iterIO's 'IterR' type, but the @m@ wrapper
+disallows iterIO's LL(*) parsing tricks.  It also causes gratuitous
+invocation of @m@'s bind function, which can be expensive when using
+stacks of monad transformers.  Furthermore, enumerator discards the
+input state on all errors, making it impossible to resume from a parse
+error.
+
+* Uniformity of abstraction
+
+The iterIO package's abstractions were carefully crafted to be minimal
+yet highly expressive and familiar to Unix command-shell users.  Thus,
+we have 'Iter's, which are data sinks that consume input and produce a
+result, and data sources, or 'Inum's, that can be plumbed together
+through two operations, fusing and concatenation.
+
+Basing everything on uniform abstractions makes the library easier to
+learn and use.  For instance, because all 'Inum's are 'Iter's, there
+is only one set of 'Iter' building blocks to learn.  'Inum'
+implementations invoke the same 'Iter's that are used to consume data
+in data sinks, and 'Inum's use the same, uniform error handling
+mechanism as 'Iter's.  Furthermore, because 'Onum's are also 'Inum's,
+one set of fusing and concatenation operators works with both.
+
+By contrast, both the iteratee and enumerator packages use enumerator
+types that are not iteratees.  Hence enumerators are harder to
+construct and cannot use the same error handing mechanisms.  The
+packages must introduce a third, hybrid \"Enumeratee\" type for inner
+pipeline stages, and fusing Enumerators to Enumeratees is a different
+function from fusing Enumeratees together.  (An earlier version of the
+iterIO library also effectively had separate 'Inum' and 'Onum' types;
+redefining 'Onum's as 'Inum's significantly streamlined the code and
+simplified error handling.)
+
+* A uniform error mechanism
+
+
 
 piping
 
@@ -607,7 +684,6 @@ parsing
 
 separation of iteratee/enumerator failures
 
-Uniform error-handling mechanism
 
 integration with mtl
 
@@ -622,9 +698,9 @@ both the code and documentation.  Deian Stefan and David Terei helped
 with testing and improving the package, as well as understanding
 various relevant aspects of Haskell and ghc.
 
-The author is particularly grateful to John Lato for helping him
-understand much of the important design rationale behind the original
-iteratee package.
+The author is also grateful to John Lato for helping him understand
+much of the important design rationale behind the original iteratee
+package.
 
 This work was funded by the DARPA Clean-Slate Design of Resilient,
 Adaptive, Secure Hosts (CRASH) program, BAA-10-70.
