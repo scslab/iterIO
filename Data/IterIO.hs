@@ -646,48 +646,80 @@ stacks of monad transformers.  Furthermore, enumerator discards the
 input state on all errors, making it impossible to resume from a parse
 error.
 
-* Uniformity of abstraction
+* /Uniformity of abstraction/
 
 The iterIO package's abstractions were carefully crafted to be minimal
 yet highly expressive and familiar to Unix command-shell users.  Thus,
 we have 'Iter's, which are data sinks that consume input and produce a
-result, and data sources, or 'Inum's, that can be plumbed together
-through two operations, fusing and concatenation.
+result.  Then we have 'Inum's, which are also 'Iter's.  These two data
+types and can combined through pipes (i.e., fusing) and concatenation,
+both of which should be intuitive to Unix command-line users.
 
-Basing everything on uniform abstractions makes the library easier to
-learn and use.  For instance, because all 'Inum's are 'Iter's, there
-is only one set of 'Iter' building blocks to learn.  'Inum'
+Basing everything around these few concepts makes the library easier
+to learn and use.  For instance, because all 'Inum's are 'Iter's,
+there is only one set of 'Iter' building blocks to learn.  'Inum'
 implementations invoke the same 'Iter's that are used to consume data
-in data sinks, and 'Inum's use the same, uniform error handling
-mechanism as 'Iter's.  Furthermore, because 'Onum's are also 'Inum's,
-one set of fusing and concatenation operators works with both.
+in data sinks.  Moreover, 'Inum's use the same error handling
+mechanism as 'Iter's.  Finally, because 'Onum's are also 'Inum's, one
+set of fusing and concatenation operators works with both.
 
 By contrast, both the iteratee and enumerator packages use enumerator
-types that are not iteratees.  Hence enumerators are harder to
-construct and cannot use the same error handing mechanisms.  The
-packages must introduce a third, hybrid \"Enumeratee\" type for inner
-pipeline stages, and fusing Enumerators to Enumeratees is a different
-function from fusing Enumeratees together.  (An earlier version of the
-iterIO library also effectively had separate 'Inum' and 'Onum' types;
-redefining 'Onum's as 'Inum's significantly streamlined the code and
-simplified error handling.)
+types that are not iteratees.  Hence constructing enumerators is
+harder and requires a different error handing mechanism.  The packages
+must introduce a third, hybrid \"Enumeratee\" type for inner pipeline
+stages, and fusing Enumerators to Enumeratees is a different function
+from fusing Enumeratees together.
 
-* A uniform error mechanism
+* /Uniform error-handling and simplified monad transformers/
 
+The iterIO library provides a traditional throw and catch exception
+mechanism supporting the standard library exception hierarchy from
+"Control.Exception".  However, all of the support routines are
+carefully crafted to ensure that this single exception mechanism is
+the only one you ever need, so that you don't end up having to
+integrate different components with different error strategies, a
+situation summarized amusingly in the following blog post:
+<http://www.randomhacks.net/articles/2007/03/10/haskell-8-ways-to-report-errors>.
 
+A key to uniform error handling is ensuring that errors can be
+propagated cleanly across different monads and transformers.  Thus,
+for instance, the iterIO 'liftIO' function translates all uncaught IO
+errors into 'Iter' errors.
 
-piping
+More importantly, iterIO is designed to support all the standard mtl
+monad transformers while keeping 'Iter' as the outermost monadic type.
+For instance, if deep in the middle of some @'Iter' t 'IO'@
+computation you really need a state transformer monad, you can invoke
+one with 'runStateTI', which is the iterIO equivalent of 'runStateT'.
+As seen by comparing their effective types, 'runStateTI' manages to
+keep the 'Iter' monad on the outside, and thus can cleanly propagate
+failures out of the 'StateT' subcomputation:
 
-control requests
+> runStateT  :: StateT s m a -> s -> m (a, s)
+>
+> runStateTI :: Iter t (StateT s m) a -> s -> Iter t m (a, s)
 
-parsing
+Similarly, there is a function @'liftIterM' :: (MonadTrans t) => Iter
+s m a -> Iter s (t m) a@ that can be used to execute a computation in
+which a level of monad transformer is stripped off the inner monadic
+type.
 
-separation of iteratee/enumerator failures
+An equally important feature is the ability to distinguish 'Iter'
+failures from 'Inum' failures, given that the former are often more
+serious than the latter.  As shown by the @grep@ example in the
+tutorial above, when one in a series of concatenated 'Inum's fail, you
+sometimes want to keep going without losing the state of the 'Iter'.
+The enumeratee package does not appear to support this distinction.
+The iteratee package might, but it is not clear how to implement
+@grep@ from above.
 
+By contrast, iterIO's 'Inum' failure should be intuitive.  If you wrap
+a pipeline of 'Inum's in an 'inumCatch' statement, then you will catch
+exactly the errors thrown by those 'Inum's, not those thrown by
+pipeline stages to either side of the 'inumCatch' call.
 
-integration with mtl
+* /Parser combinators for LL(*) grammars/
 
-ease of construction of enumerators
 
 -}
 
