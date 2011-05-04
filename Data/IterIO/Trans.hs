@@ -22,10 +22,10 @@
 --
 -- You can't invoke @iter1@ from within @iter2@ because the 'Iter'
 -- type is wrapped around a different 'Monad' in each case.  However,
--- the function 'liftIterM' exactly solves this problem:
+-- the function 'liftI' exactly solves this problem:
 --
 -- @
---           s <- liftIterM iter1
+--           s <- liftI iter1
 -- @
 --
 -- Conversely, you may be in a 'Monad' like @'Iter' String IO@ and
@@ -50,11 +50,11 @@
 --iter2 :: Iter String ('StateT' MyState IO) ()
 --iter2 = do
 --  s <- 'get'
---  ok <- 'liftIterM' $ 'runReaderTI' iter1 s
+--  ok <- 'liftI' $ 'runReaderTI' iter1 s
 --  if ok then return () else fail \"iter1 failed\"
 -- @
 module Data.IterIO.Trans (-- * Adapters for Iters of mtl transformers
-                          liftIterM, liftIterIO
+                          liftI, liftIterIO
                          , runContTI, runErrorTI, runListTI, runReaderTI
                          , runRWSI, runRWSLI, runStateTI, runStateTLI
                          , runWriterTI, runWriterTLI
@@ -147,18 +147,18 @@ imodify f = lift $ IterStateT $ \s -> return ((), f s)
 -- adapters are built.  @adaptIter@ requires two functions as
 -- arguments.  One adapts the result to a new type (if required).  The
 -- second adapts monadic computations from one monad to the other.
--- For example, 'liftIterM' could be implemented as:
+-- For example, 'liftI' could be implemented as:
 --
 -- @
---  liftIterM :: ('MonadTrans' t, Monad m, Monad (t m), 'ChunkData' s) =>
---               'Iter' s m a -> 'Iter' s (t m) a
---  liftIterM = adaptIter 'id' (\\m -> 'lift' ('lift' m) >>= liftIterM)
+--  liftI :: ('MonadTrans' t, Monad m, Monad (t m), 'ChunkData' s) =>
+--           'Iter' s m a -> 'Iter' s (t m) a
+--  liftI = adaptIter 'id' (\\m -> 'lift' ('lift' m) >>= liftI)
 -- @
 --
 -- Here @'lift' ('lift' m)@ executes a computation @m@ of type @m
 -- ('Iter' s m a)@ from within the @'Iter' s (t m)@ monad.  The
 -- result, of type @'Iter' s m a@, can then be fed back into
--- @liftIterM@ recursively.
+-- @liftI@ recursively.
 --
 -- Note that in general a computation adapters must invoke the outer
 -- adapter function recursively.  @adaptIter@ is designed this way
@@ -207,9 +207,9 @@ adaptIterM f = adapt
 
 -- | Run an @'Iter' s m@ computation from witin the @'Iter' s (t m)@
 -- monad, where @t@ is a 'MonadTrans'.
-liftIterM :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
-             Iter s m a -> Iter s (t m) a
-liftIterM = adaptIterM lift
+liftI :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
+         Iter s m a -> Iter s (t m) a
+liftI = adaptIterM lift
 
 -- | Run an @'Iter' t IO@ computation from within an @'Iter' t m@
 -- monad where @m@ is in class 'MonadIO'.

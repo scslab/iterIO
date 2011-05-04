@@ -1182,16 +1182,16 @@ inumHttpServer server = mkInumM loop
       doreq = do
         req <- httpReqI
         let handler = srvHandler server req
-        resp <- liftIterM $ inumHttpBody req .|
+        resp <- liftI $ inumHttpBody req .|
                 (catchI handler errHandler <* nullI)
-        now <- liftIterM $ srvDate server
+        now <- liftI $ srvDate server
         tryI (irun $ enumHttpResp resp now) >>=
              either (fatal . fst) (const loop)
       errHandler e@(SomeException _) _ = do
         srvLogger server $ "Response error: " ++ show e
         return $ resp500 $ show e
       fatal e@(SomeException _) = do
-        liftIterM $ srvLogger server $ "Reply error: " ++ show e
+        liftI $ srvLogger server $ "Reply error: " ++ show e
         return ()
 
 

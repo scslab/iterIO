@@ -133,6 +133,15 @@ infixr 2 |$
 --
 -- > infixr 2 .|$
 --
+-- Note the important distinction between @(.|$)@ and @('.|')@.
+-- @(.|$)@ runs an 'Onum' and does not touch the current input, while
+-- ('.|') pipes the current input through an 'Inum'.  For instance, to
+-- send the contents of a file to standard output (regardless of the
+-- current input), you must say @'enumFile' \".signature\" .|$
+-- 'stdoutI'@.  But to take the current input, compress it, and send
+-- the result to standard output, you must use '.|', as in @'inumGzip'
+-- '.|' 'stdoutI'@.
+--
 -- As suggested by the types, @enum .|$ iter@ is sort of equivalent to
 -- @'lift' (enum |$ iter)@, except that the latter will call 'throw'
 -- on failures, causing language-level exceptions that cannot be
@@ -249,8 +258,8 @@ joinR (Fail e Nothing c)  = Fail e Nothing c
 -- However, a subtler, more important purpose is to guarantee that all
 -- (non-failed) 'Iter's eventually receive EOF even when 'Inum's fail.
 -- This is critical for things like EOF transmission and file
--- descriptor closing, and is why functions such as 'pairFinalizer'
--- make sense.
+-- descriptor closing, and is how functions such as 'pairFinalizer'
+-- can make sense.
 joinR (Fail e (Just i) c) = flip onDoneR (runR i) $ \r ->
                             case r of
                               Done a _    -> Fail e (Just a) c
@@ -258,29 +267,40 @@ joinR (Fail e (Just i) c) = flip onDoneR (runR i) $ \r ->
                               _ -> error "joinR"
 joinR _                   = error "joinR: not done"
 
--- | Fuse two 'Inum's when the output type of the first 'Inum' is the
--- same as the input type of the second.  More specifically, if
--- @inum1@ transcodes type @tIn@ to @tOut@ and @inum2@ transcodes
--- @tOut@ to @tOut2@, then @inum1 |. inum2@ produces a new 'Inum' that
--- transcodes from @tIn@ to @tOut2@.
+-- | Left-associative pipe operator.  Fuses two 'Inum's when the
+-- output type of the first 'Inum' is the same as the input type of
+-- the second.  More specifically, if @inum1@ transcodes type @tIn@ to
+-- @tOut@ and @inum2@ transcodes @tOut@ to @tOut2@, then @inum1
+-- |. inum2@ produces a new 'Inum' that transcodes from @tIn@ to
+-- @tOut2@.
 --
--- Typically @i@ and @iR@ are types @'Iter' tOut2 m a@ and @'IterR'
+-- Typically types @i@ and @iR@ are @'Iter' tOut2 m a@ and @'IterR'
 -- tOut2 m a@, respectively, in which case the second argument and
 -- result of @|.@ are also 'Inum's.
 --
--- Has fixity:
+-- This function is equivalent to:
 --
--- > infixl 4 |.
+-- @
+--  outer |. inner = \\iter -> outer '.|' inner iter
+--  infixl 4 |.
+-- @
+--
+-- But if you like point-free notation, think of it as @outer |. inner
+-- = (outer '.|') . inner@, or better yet @(|.) = (.)  . ('.|')@.
 (|.) :: (ChunkData tIn, ChunkData tOut, Monad m) =>
         Inum tIn tOut m iR      -- ^
      -> (i -> Iter tOut m iR)
      -> (i -> Iter tIn m iR)
-(|.) outer inner iter = onDone joinR $ outer $ inner iter
+(|.) outer inner = \iter -> onDone joinR $ outer $ inner iter
 infixl 4 |.
 
--- | Fuse an 'Inum' that transcodes @tIn@ to @tOut@ with an 'Iter'
--- taking type @tOut@ to produce an 'Iter' taking type @tIn@.  Has
--- fixity:
+-- | Right-associative pipe operator.  Fuses an 'Inum' that transcodes
+-- @tIn@ to @tOut@ with an 'Iter' taking input type @tOut@ to produce
+-- an 'Iter' taking input type @tIn@.  If the 'Iter' is still active
+-- when the 'Inum' terminates (either normally or through an
+-- exception), then @.|@ sends it an EOF.
+--
+--  Has fixity:
 --
 -- > infixr 4 .|
 (.|) :: (ChunkData tIn, ChunkData tOut, Monad m) =>
@@ -699,7 +719,7 @@ target 'Iter', 'InumM' wraps its inner monadic type with an
 of type @'Inum' tIn tOut m a@, the 'InumM' action is of a type like
 @'Iter' tIn ('IterStateT' (InumState ...) m) ()@.  That means that to
 execute actions of type @'Iter' tIn m a@ that are not polymorphic in
-@m@, you have to transform them with the 'liftIterM' function.
+@m@, you have to transform them with the 'liftI' function.
 
 Output can be fed to the target 'Iter' by means of the 'ifeed'
 function.  As an example, here is another version of the @inumConcat@
@@ -868,8 +888,7 @@ defaultInumState = InumState {
 -- Another important thing to note about the 'InumM' monad, as
 -- described in the documentation for 'mkInumM', is that you must call
 -- @'lift'@ twice to execute actions in monad @m@, and you must use
--- the 'liftIterM' function to execute actions in monad @'Iter' t m
--- a@.
+-- the 'liftI' function to execute actions in monad @'Iter' t m a@.
 type InumM tIn tOut m a = Iter tIn (IterStateT (InumState tIn tOut m a) m)
 
 -- | Set the control handler an 'Inum' should use from within an
@@ -978,7 +997,7 @@ mkInumAutoM inumm iter0 =
 --    in @'lift' $ 'lift' action_in_m@) rather than just once.
 --
 --  - If you need to execute actions in the @'Iter' t m@ monad, you
---    will have to lift them with the 'liftIterM' function.
+--    will have to lift them with the 'liftI' function.
 --
 -- The 'InumM' computation you construct can feed output of type
 -- @tOut@ to the target 'Iter' (which is implicitly contained in the
@@ -1026,8 +1045,8 @@ ipipe :: (ChunkData tIn, ChunkData tOut, Monad m) =>
          Inum tIn tOut m a -> InumM tIn tOut m a Bool
 ipipe inum = do
   s <- iget
-  r <- tryRI (liftIterM (inum $ reRunIter $ insIter s)) >>= getIter
-       >>= liftIterM . runIterRMC (insCtl s)
+  r <- tryRI (liftI (inum $ reRunIter $ insIter s)) >>= getIter
+       >>= liftI . runIterRMC (insCtl s)
   iput s { insIter = r }
   let done = not $ isIterActive r
   if done && insAutoDone s then idone else return done

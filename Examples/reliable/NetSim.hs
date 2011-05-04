@@ -46,7 +46,7 @@ reorderer prob = mkInumAutoM $ headLI >>= oldOrNew
   where
     oldOrNew old = do
       new <- headLI
-      b <- liftIterM $ rndBoolI prob
+      b <- liftI $ rndBoolI prob
       if b then ifeed [old] >> oldOrNew new
            else ifeed [new] >> oldOrNew old
 
