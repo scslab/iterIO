@@ -669,12 +669,12 @@ lookahead failure).
 * /Uniformity of abstraction/
 
 IterIO's abstractions were carefully crafted to be minimal yet highly
-expressive and familiar to Unix command-shell users.  Thus, we have
-'Iter's, which are data sinks that consume input and produce a result.
-Then we have 'Inum's, which are also 'Iter's.  These two data types
-and can combined through pipes (i.e., fusing) and concatenation, both
-of which have direct analogues in the Unix @|@ (pipe) operator and
-@cat@ command.
+expressive and familiar to Unix shell users.  Thus, we have 'Iter's,
+which are data sinks that consume input and produce a result.  Then we
+have 'Inum's, which are also 'Iter's.  These two data types and can
+combined through pipes (i.e., fusing) and concatenation, both of which
+have direct analogues in the Unix @|@ (pipe) operator and @cat@
+command.
 
 Basing everything around these few concepts makes the library easier
 to learn and use.  For instance, because all 'Inum's are 'Iter's,
@@ -723,16 +723,16 @@ both the @iter@ has received an EOF and the @enum@ has returned.  Now
 the 'inumHttpServer' uses 'mkInumM' to construct an 'Inum', and has
 code that looks something like this:
 
->       req <- httpReqI                           -- parse HTTP request
->       resp <- liftI $ inumHttpBody .| handler   -- invoke handler
->       irun $ enumHttpResp resp Nothing          -- send response to client
+>       req <- httpReqI                              -- parse HTTP request
+>       resp <- liftI $ inumHttpBody .| handler req  -- invoke handler
+>       irun $ enumHttpResp resp Nothing             -- send response to client
 
 The @handler@ gets run on the body of the message, and might decide to
-process an HTTP POST request by saving an uploaded form to a file, for
+process an HTTP POST request by saving an uploaded file to disk, for
 instance with code like this:
 
 >     let saveFile _ field
->           | ffName field == "file" = do
+>           | ffName field == S8.pack "file" = do
 >                            h <- liftIO $ openBinaryFile "upload" WriteMode
 >                            handleI h `finallyI` liftIO (hClose h)
 >           | otherwise = return ()
@@ -747,7 +747,7 @@ EOF before reading the number of bytes specified in the Content-Length
 header).  Because 'inumHttpBody' is fused to @handler@, the failure
 will cause @handler@ to receive an EOF, which will cause @foldForm@ to
 fail, which will cause 'handleI' to receive an EOF and return, which
-will ensure 'hClose' runs and the file 'Handle' is not leaked.
+will ensure 'hClose' runs and the file handle @h@ is not leaked.
 
 Once the EOFs have been processed, the exception will propagate
 upwards making 'inumHttpServer' fail, which in turn will send an EOF
@@ -776,7 +776,7 @@ errors into 'Iter' errors.
 More importantly, iterIO is designed to support the standard mtl monad
 transformers while keeping 'Iter' as the outermost monadic type.  For
 instance, if deep in the middle of some @'Iter' t 'IO'@ computation
-you really need a state transformer monad, you can invoke one with
+you need a state transformer monad, you can invoke one with
 'runStateTI', which is the iterIO equivalent of 'runStateT'.  As seen
 by comparing their effective types, 'runStateTI' manages to keep the
 'Iter' monad on the outside, and thus can cleanly propagate failures
@@ -813,14 +813,14 @@ such as the HTTP server above can be guaranteed not to leak resources.
 IterIO's "Data.IterIO.Parse" module supports parsing of iteratee input
 using combinators similar to those found in parsec.  However, parsec
 supports only LL(1) grammers, and can lead to confusing failures--for
-instance the parser @string \"foo\" <|> string \"for\"@ failing on
-input @\"for\"@.  IterIO, by contrast, supports full LL(*) parsing,
+instance the parser @string \"foo\" \<|\> string \"for\"@ would fail
+on input @\"for\"@.  IterIO, by contrast, supports full LL(*) parsing,
 meaning a parser can look arbitrarily far ahead before failing.
 
-LL(*) parsers are generally frowned upon because they of their
-potential to consume arbitrarily large amounts of memory to remember
-input for backtracking.  However, iterIO offers two mechanisms that
-mitigate the problem.
+LL(*) parsers are generally disfavored because of their potential to
+consume arbitrarily large amounts of memory to remember input for
+backtracking.  However, iterIO offers two mechanisms that mitigate the
+problem.
 
 First, because 'Iter's are constructed in such a way as to
 differentiate requests for more input from execution of monadic
@@ -838,12 +838,52 @@ input format and parse either XML or JSON data:
 which attempts to run two parsers concurrently on input as it arrives.
 Because 'string' and 'char' are both pure parser combinators with no
 monadic side effects, it is possible to run them both concurrently
-without fear that the second rule--if it fails--will somehow have
-nonetheless have produced side effects.  In fact, at least one of the
-'string' or the 'char' action will fail almost immediately, very
-likely on the first chunk of data.  After one of the two has signaled
-a parse error, there is no longer any need to store input for
-backtracking.
+without fear that the second rule--if it fails--will nonetheless have
+produced side effects.  In fact, at least one of the 'string' or the
+'char' action will fail almost immediately, very likely on the first
+chunk of data.  After one of the two has signaled a parse error, there
+is no longer any need to store input for backtracking.
+
+A second way to avoid large amounts of storage for backtracking is to
+use iterIO's '\/' operator, which is an infix synonym for 'ifNoParse'.
+The formulation @iter '\/' no $ yes@ splits a parser into three
+components.  @iter@ is executed with backtracking enabled.  If it
+suceeds, then the saved data is discarded, @iter@'s result is fed to
+the function @yes@, and any further failures will not cause input to
+be rewound.  If, on the other hand, @iter@ fails, then input is
+rewound and @no@ is executed.  The '\/' operator is very convenient
+for long folds whose individual elements do not consume a lot of
+input.  For example, to parse and sum a list of numbers (given a
+parser @number@ that skips spaces then parses one number), you might
+do something like this:
+
+> parseAndSumIntegerList :: Iter String IO Int
+> parseAndSumIntegerList = loop 0
+>     where loop n = number \/ return n $ \n' -> loop (n + n')
+
+Regardless of the length of the list of numbers being parsed,
+@sumNumbers@ only ever needs to backtrack over the input consumed by a
+single iteration of @number@, which is likely a small amount of extra
+memory to keep around.
+
+If you do want an LL(1) parser combinator library, iterIO supports
+seamless integration with the attoparsec package.  The function 'atto'
+in "Data.IterIO.Atto" turns an attoparsec @Parser@ into an 'Iter'
+monad, treating an attoparsec failure as an 'Iter' exception that can
+be handled in the usual way with 'ifParse' or 'multiParse', or just
+caught with 'catchI'.  (Attoparsec has the additional advantage of
+solving the annoying @string \"foo\" \<|\> string \"for\"@ issue by
+special-casing @string@ to have more lookahead.)
+
+Preliminary testing suggests that attoparsec can be about three times
+faster than "Data.IterIO.Parse" on parse-intensive workloads.  The
+limitation is that attoparsec parsers must be pure.  A good compromise
+may be to use IterIO for coarse-grained parsing, and attoparsec for
+more complex data structures.  For example, you might want to use
+iterIO's parsing of HTTP multipart/form-data (so as to be able to pipe
+files to disk in constant space), but for fields with JSON data, use
+'atto' to pipe the contents to the excellent attoparsec-based aeson
+package.
 
 -}
 
