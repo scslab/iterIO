@@ -713,13 +713,47 @@ The enumeratee package does not appear to support this distinction.
 The iteratee package might, but it is not clear how to implement
 @grep@ from above.
 
-By contrast, iterIO's 'Inum' failure should be intuitive.  If you wrap
-a pipeline of 'Inum's in an 'inumCatch' statement, then you will catch
-exactly the errors thrown by those 'Inum's, not those thrown by
-pipeline stages to either side of the 'inumCatch' call.
+By contrast, iterIO's 'Inum' mechanism was designed to be intuitive.
+If you wrap a pipeline of 'Inum's in an 'inumCatch' statement, then
+you will catch exactly the errors thrown by those 'Inum's, not those
+thrown by pipeline stages outside the scope of the 'inumCatch' call.
 
 * /Parser combinators for LL(*) grammars/
 
+IterIO's "Data.IterIO.Parse" module supports parsing of iteratee input
+using combinators similar to those found in parsec.  However, parsec
+supports only LL(1) grammers, and can lead to confusing failures--for
+instance the parser @string \"foo\" <|> string \"for\"@ failing on
+input @\"for\"@.  IterIO, by contrast, supports full LL(*) parsing,
+meaning a parser can look arbitrarily far ahead before failing.
+
+LL(*) parsers are generally frowned upon because they of their
+potential to consume arbitrarily large amounts of memory to remember
+input for backtracking.  However, iterIO offers two mechanisms that
+mitigate the problem.
+
+First, because 'Iter's are constructed in such a way as to
+differentiate requests for more input from execution of monadic
+actions, it is possible to run multiple parsers in parallel.  Consider
+a hypothetical parser such as the following, designed to recognize the
+input format and parse either XML or JSON data:
+
+@
+  parser :: 'Iter' 'L.ByteString' m Value
+  parser = ('string' \"\<!DOCTYPE\" >> parseXml)
+           \<|\> ('char' \'{\' >> parseJson)
+@
+
+@\<|\>@ is an infix synonym for the iterIO function 'multiParse',
+which attempts to run two parsers concurrently on input as it arrives.
+Because 'string' and 'char' are both pure parser combinators with no
+monadic side effects, it is possible to run them both concurrently
+without fear that the second rule--if it fails--will somehow have
+nonetheless have produced side effects.  In fact, at least one of the
+'string' or the 'char' action will fail almost immediately, very
+likely on the first chunk of data.  After one of the two has signaled
+a parse error, there is no longer any need to store input for
+backtracking.
 
 -}
 
