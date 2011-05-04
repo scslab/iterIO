@@ -679,10 +679,10 @@ of which have direct analogues in the Unix @|@ (pipe) operator and
 Basing everything around these few concepts makes the library easier
 to learn and use.  For instance, because all 'Inum's are 'Iter's,
 there is only one set of 'Iter' building blocks to learn.  'Inum'
-implementations invoke the same 'Iter's that are used to consume data
-in data sinks.  Moreover, 'Inum's use the same error handling
-mechanism as 'Iter's.  Finally, because 'Onum's are also 'Inum's, one
-set of fusing and concatenation operators works with both.
+implementations invoke the same 'Iter's that are used to build other
+'Iter's.  Moreover, 'Inum's and 'Iter's use the same error handling
+mechanism.  Finally, because 'Onum's are also 'Inum's, one set of
+fusing and concatenation operators works for both.
 
 By contrast, both the iteratee and enumerator packages use enumerator
 types that are not iteratees.  Hence constructing enumerators is
@@ -718,10 +718,44 @@ this:
 >            enum |$ inumHttpServer (ioHttpServer handler) .| iter
 >     loop
 
-This code depends on the fact that the socket @sock@ will be closed
-when both the @iter@ returned by 'iterStream' receives an EOF and the
-@enum@ finishes running.  Now the 'inumHttpServer' function will 
+This code depends on the fact that 'iterStream' closes @sock@ after
+both the @iter@ has received an EOF and the @enum@ has returned.  Now
+the 'inumHttpServer' uses 'mkInumM' to construct an 'Inum', and has
+code that looks something like this:
 
+>       req <- httpReqI                           -- parse HTTP request
+>       resp <- liftI $ inumHttpBody .| handler   -- invoke handler
+>       irun $ enumHttpResp resp Nothing          -- send response to client
+
+The @handler@ gets run on the body of the message, and might decide to
+process an HTTP POST request by saving an uploaded form to a file, for
+instance with code like this:
+
+>     let saveFile _ field
+>           | ffName field == "file" = do
+>                            h <- liftIO $ openBinaryFile "upload" WriteMode
+>                            handleI h `finallyI` liftIO (hClose h)
+>           | otherwise = return ()
+>     in foldForm req saveFile ()
+
+@foldForm@ internally is invoking an 'Inum' that parses HTTP
+multipart/form-data to pipe each field of the form to the @saveFile@
+function.
+
+Now suppose 'inumHttpBody' fails (most likely because it receives an
+EOF before reading the number of bytes specified in the Content-Length
+header).  Because 'inumHttpBody' is fused to @handler@, the failure
+will cause @handler@ to receive an EOF, which will cause @foldForm@ to
+fail, which will cause 'handleI' to receive an EOF and return, which
+will ensure 'hClose' runs and the file 'Handle' is not leaked.
+
+Once the EOFs have been processed, the exception will propagate
+upwards making 'inumHttpServer' fail, which in turn will send an EOF
+to @iter@.  Then the exception will cause @enum@ to fail, after which
+@sock@ will be closed.  In summary, despite the complex structure of
+the web server, because all the components are fused together with
+pipe operators, corner cases like this just work with no need to worry
+about leaked file descriptors.
 
 * /Uniform error-handling and simplified monad transformers/
 
@@ -771,7 +805,8 @@ If you wrap a pipeline of 'Inum's in an 'inumCatch' statement, then
 you will catch exactly the errors thrown by those 'Inum's, not those
 thrown by pipeline stages outside the scope of the 'inumCatch' call.
 
-One important consequence of unified error handling is EOF
+It is because of this unified error handling mechanism that examples
+such as the HTTP server above can be guaranteed not to leak resources.
 
 * /Parser combinators for LL(*) grammars/
 
