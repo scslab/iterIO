@@ -989,10 +989,14 @@ mkHtmlResp stat html = resp
                         , respBody = inumPure html
                         }
 
+-- | Make an 'HttpResp' of an arbitrary content-type based on a pure
+-- lazy 'L.ByteString'.  Since the result is pure, this function first
+-- measures its length so as to set a Content-Length header instead of
+-- using HTTP chunk encoding.
 mkContentLenResp :: (Monad m)
                  => HttpStatus
-                 -> String
-                 -> L.ByteString
+                 -> String       -- ^ Value for Content-Type: header
+                 -> L.ByteString -- ^ Contents of response body
                  -> HttpResp m
 mkContentLenResp stat ctype body =
   HttpResp { respStatus = stat
@@ -1003,10 +1007,16 @@ mkContentLenResp stat ctype body =
   contentType = S8.pack $ "Content-Type: " ++ ctype
   contentLength = S8.pack $ "Content-Length: " ++ show (L8.length body)
 
+-- | Make an 'HttpResp' of an arbitrary content-type based on an
+-- 'Onum' that will dynamically generate the message body.  Since the
+-- message body is generated dynamically, the reply will use an HTTP
+-- chunk encoding.
 mkOnumResp :: (Monad m)
            => HttpStatus
            -> String
+           -- ^ Value for Content-Type header:
            -> Onum L.ByteString m (IterR L.ByteString m ())
+           -- ^ 'Onum' that will generate reply body dynamically.
            -> HttpResp m
 mkOnumResp stat ctype body =
   HttpResp { respStatus = stat
@@ -1032,7 +1042,7 @@ htmlEscape str = L8.unfoldr next (str, "")
                        htmlEscapeChar h
       next ("", "")  = Nothing
 
--- | Generate a 301 (redirect) response
+-- | Generate a 301 (redirect) response.
 resp301 :: (Monad m) => String -> HttpResp m
 resp301 target =
     respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat301 html
@@ -1047,7 +1057,7 @@ resp301 target =
                  , htmlEscape target
                  , L8.pack "\">here</A>.</P>\n"]
 
--- | Generate a 303 (see other) response
+-- | Generate a 303 (see other) response.
 resp303 :: (Monad m) => String -> HttpResp m
 resp303 target =
     respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat303 html
@@ -1170,8 +1180,10 @@ ioHttpServer handler = HttpServerConf {
                        , srvHandler = handler
                        }
 
--- | An 'Inum' that behaves like an HTTP server.
-inumHttpServer :: (MonadIO m) =>
+-- | An 'Inum' that behaves like an HTTP server.  The file
+-- @Examples/httptest.hs@ that comes with the iterIO distribution
+-- gives an example of how to use this function.
+inumHttpServer :: (Monad m) =>
                   HttpServerConf m  -- ^ Server configuration
                -> Inum L.ByteString L.ByteString m ()
 inumHttpServer server = mkInumM loop
