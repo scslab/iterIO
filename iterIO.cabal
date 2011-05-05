@@ -1,4 +1,5 @@
 Name:           iterIO
+Homepage:       http://www.scs.stanford.edu/~dm/iterIO
 Version:        0.1
 Cabal-version:  >= 1.6
 build-type:     Simple
@@ -21,27 +22,41 @@ Description:
 
         Iteratee-based IO is an alternative to lazy IO that offers
         better error handling, referential transparency, and
-        convenient composition of protocol layers or parsers.  New
-        users should see the tutorial in the "Data.IterIO" module
-        documentation.
+        convenient composition of protocol layers or parsers.  This
+        package provides iteratees based around /pipe/ operators for
+        hooking together application components and directing data
+        flow.  New users should see the tutorial in the "Data.IterIO"
+        module documentation.  Highlights of the library include:
 
         .
 
-        The Iteratee approach was originally advocated by Oleg
-        Kiselyov (see talk slides at
-        <http://okmij.org/ftp/Streams.html#iteratee>).  This package
-        is a re-implementation of the Iteratee concepts with a new
-        interface designed to simplify many of the abstractions and
-        make them easier to use.  See "Data.IterIO" for a discussion
-        of the differences between iterIO and the two previous
-        iteratee implementations (iteratee and enumerator).
+        * Heavy emphasis on ease of use, ease of learning, and
+          uniformity of mechanism.
 
         .
 
-        The latest development version of the iterIO sources is
-        available via git by executing:
-        .       
-        > git clone http://www.scs.stanford.edu/~dm/repos/iterIO.git
+        * Copious documentation.
+
+        .
+
+        * Consistent EOF and error handling to avoid resource leaks
+          and other issues in corner cases.
+
+        .
+
+        * A set of iteratee parsing combinators providing LL(*)
+          parsing while generally not consuming large amounts of
+          memory for backtracking.
+
+        .
+
+        * Seamless integration with attoparsec for LL(1) parsing.
+
+        .
+
+        See "Data.IterIO" for a discussion of the differences between
+	iterIO and the two previous iteratee implementations (iteratee
+	and enumerator).
 
 Source-repository head
   Type:     git
