@@ -109,7 +109,7 @@ import Data.IterIO.ListLike
    'Inum's together (provided the output type of the first is the
    input type of the second), yielding a new 'Inum' that transcodes
    from the input type of the first to the output type of the second.
-   Similarly, the '.|' (\"fuse rightwart\") operator fuses an 'Inum'
+   Similarly, the '.|' (\"fuse rightward\") operator fuses an 'Inum'
    to an 'Iter', yielding a new 'Iter' with a potentially different
    input type.
 
@@ -335,7 +335,7 @@ for simple stateless translation functions, but sometimes one would
 like to keep state and use more complex logic in an 'Inum'.  For that,
 the 'mkInumM' function creates an 'Inum' out of a computation in a
 dedicated 'InumM' monad.  See the "Data.IterIO.Inum" documentation for
-more informaiton on 'mkInumM'.  In @inumToLines@, we do not need to
+more information on 'mkInumM'.  In @inumToLines@, we do not need to
 keep state.  We are happy just to let 'lineI' throw an exception on
 EOF, which `mkInum` will catch and handle gracefully.
 
@@ -621,7 +621,7 @@ requesting more input or failing:
 >           m r}
 
 CPS has the advantage of exposing the bind operator of the underlying
-mondad, making 'lift' cheap and simple.  Moreover, splitting into two
+monad, making 'lift' cheap and simple.  Moreover, splitting into two
 continuations saves the first and most common one (i.e., \"onDone\")
 from the overhead of checking whether an error condition or request
 for more input has occurred.  See
@@ -691,7 +691,7 @@ must introduce a third, hybrid \"Enumeratee\" type for inner pipeline
 stages, and fusing Enumerators to Enumeratees is a different function
 from fusing Enumeratees together.
 
-Funneling everything through a small number of abastractions also
+Funneling everything through a small number of abstractions also
 ensures that the right thing happens in corner cases.  In particular,
 all enumerator application happens through the pipe operator.  Though
 there are two pipe operators, a left associative one and a right
@@ -803,7 +803,7 @@ failures from 'Inum' failures, given that the former are often more
 serious than the latter.  As shown by the @grep@ example in the
 tutorial above, when one in a series of concatenated 'Inum's fails,
 you often want to keep going without losing the state of the 'Iter'.
-The enumeratee package does not appear to support this distinction.
+The enumerator package does not appear to support this distinction.
 The iteratee package might, but it is not clear how to implement the
 iteratee equivalent of the @grep@ example above.
 
@@ -858,7 +858,7 @@ A second way to avoid large amounts of storage for backtracking is to
 use iterIO's '\/' operator, which is an infix synonym for 'ifNoParse'.
 The formulation @iter '\/' no $ yes@ splits a parser into three
 components.  @iter@ is executed with backtracking enabled.  If it
-suceeds, then the saved data is discarded, @iter@'s result is fed to
+succeeds, then the saved data is discarded, @iter@'s result is fed to
 the function @yes@, and any further failures will not cause input to
 be rewound.  If, on the other hand, @iter@ fails, then input is
 rewound and @no@ is executed.  The '\/' operator is very convenient
@@ -910,3 +910,24 @@ work was funded by the DARPA Clean-Slate Design of Resilient,
 Adaptive, Secure Hosts (CRASH) program, BAA-10-70.
 
 -}
+
+--  LocalWords:  IterIO iteratee monad mtl Iter combinators zlib gzip SSL Inum
+--  LocalWords:  attoparsec parsers loopback monadic Iteratees ChunkData tIn kk
+--  LocalWords:  MonadIO iteratees tOut transcoding Inum's mkInum mkInumM Onum
+--  LocalWords:  transcode inumPure transcodes enum iterIO Haskell mempty lineI
+--  LocalWords:  headFile FilePath enumFile Iter's stdoutI handleI catFile EOF
+--  LocalWords:  ByteString enumfile MonadTrans liftIOexampleI liftIO putStrLn
+--  LocalWords:  takeI wc lineCountI safeLineI ByteStrings inumToLines Onum's
+--  LocalWords:  InumM throwEOFI inumGrep headI packedRe lengthI safeHeadI usr
+--  LocalWords:  whileNullI grepCount catchI inumCatch throwI throwIO enumStdin
+--  LocalWords:  linesOutI foldr enumLines IOError IterR hPutStrLn stderr mline
+--  LocalWords:  resumeI isDoesNotExistError reRunIter verboseResumeI Oleg Lato
+--  LocalWords:  Kiselyov iterIO's newtype runIter forall onDone onCont GHC's
+--  LocalWords:  SomeException inliner iteratee's getpeername runIteratee iter
+--  LocalWords:  lookahead Enumeratee Enumeratees inumHttpServer forkIO req GHC
+--  LocalWords:  iterStream ioHttpServer httpReqI liftI inumHttpBody irun EOFs
+--  LocalWords:  enumHttpResp saveFile ffName openBinaryFile WriteMode finallyI
+--  LocalWords:  hClose foldForm multipart monads runStateTI runStateT StateT
+--  LocalWords:  subcomputation enumeratee JSON DOCTYPE parseXml parseJson atto
+--  LocalWords:  multiParse ifNoParse parseAndSumIntegerList sumNumbers ifParse
+--  LocalWords:  combinator aeson Giffin Deian Terei DARPA
