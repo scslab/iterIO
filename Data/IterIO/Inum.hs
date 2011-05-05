@@ -65,24 +65,33 @@ import Data.IterIO.Trans
 -- able to hand it to another @Inum@.  @Inum@'s return type (@Iter tIn
 -- m (IterR tOut m a)@ as opposed to @Iter tIn m a@) allows the
 -- monadic bind operator '>>=' to accomplish this popping in
--- conjunction with the 'reRunIter' function.
+-- conjunction with the 'tryRI' and 'reRunIter' functions.
 --
--- An @Inum@ must never feed an EOF chunk to its iteratee.  Instead,
--- upon receiving EOF, the @Inum@ should simply return the state of
--- the inner 'Iter' (this is how \"popping\" the iteratee back out
--- works--If the @Inum@ passed the EOF through to the 'Iter', the
--- 'Iter' would stop requesting more input and could not be handed off
--- to a new @Inum@).  An @Inum@ should also return when the iteratee
--- returns a result or fails, or when the @Inum@ itself fails.  An
--- @Inum@ may also unilaterally return the state of the iteratee at
--- any earlier point, for instance if it has reached some logical
--- message boundary (e.g., many protocols finish processing headers
--- upon reading a blank line).
+-- All @Inum@s must obey the following two rules.
 --
--- @Inum@s are generally constructed with the one of the 'mkInum' or
--- 'mkInumM' functions, which hide most of the error handling details.
--- Most @Inum@s are polymorphic in the last type, @a@, in order to
--- work with iteratees returning any type.
+-- 1. /An/ @Inum@ /may never feed a chunk with the EOF flag set to/
+--    /it's target/ 'Iter'. Instead, upon receiving EOF, the @Inum@
+--    should simply return the state of the inner 'Iter' (this is how
+--    \"popping\" the iteratee back out works--If the @Inum@ passed
+--    the EOF through to the 'Iter', the 'Iter' would stop requesting
+--    more input and could not be handed off to a new @Inum@).
+--
+-- 2. /An/ @Inum@ /must always return the state of its target/ 'Iter'.
+--    This is true even when the @Inum@ fails, and is why the 'Fail'
+--    state contains a @'Maybe' a@ field.
+--
+-- In addition to returning when it receives an EOF or fails, an
+-- @Inum@ should return when the target 'Iter' returns a result or
+-- fails.  An @Inum@ may also unilaterally return the state of the
+-- iteratee at any earlier point, for instance if it has reached some
+-- logical message boundary (e.g., many protocols finish processing
+-- headers upon reading a blank line).
+--
+-- @Inum@s are generally constructed with one of the 'mkInum' or
+-- 'mkInumM' functions, which hide most of the error handling details
+-- and ensure the above rules are obeyed.  Most @Inum@s are
+-- polymorphic in the last type, @a@, in order to work with iteratees
+-- returning any type.
 type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (IterR tOut m a)
 
 -- | An @Onum t m a@ is just an 'Inum' in which the input is
@@ -92,12 +101,12 @@ type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (IterR tOut m a)
 -- 'Iter's by either executing actions in monad @m@, or from its own
 -- internal pure state (as for 'enumPure').
 --
--- Under no circumstances should an @Onum@ ever feed a chunk with the
--- EOF bit set to its 'Iter' argument.  When the @Onum@ runs out of
--- data, it must simply return the current state of the 'Iter'.  This
--- way more data from another source can still be fed to the iteratee,
--- as happens when enumerators are concatenated with the 'cat'
--- function.
+-- As with 'Inum's, an @Onum@ should under no circumstances ever feed
+-- a chunk with the EOF bit set to its 'Iter' argument.  When the
+-- @Onum@ runs out of data, it must simply return the current state of
+-- the 'Iter'.  This way more data from another source can still be
+-- fed to the iteratee, as happens when enumerators are concatenated
+-- with the 'cat' function.
 --
 -- @Onum@s should generally be constructed using the 'mkInum' or
 -- 'mkInumM' function, just like 'Inum's, the only difference being
@@ -359,7 +368,7 @@ infixr 4 .|
 --
 -- @
 --  resumeTest :: IO ()
---  resumeTest = doFile \"file1\" ``cat`` doFile \"file2\" |$ 'handleI' stdout
+--  resumeTest = doFile \"file1\" ``cat`` doFile \"file2\" |$ 'stdoutI'
 --      where
 --        doFile path = inumCatch (`enumFile'` path) $ \\err r ->
 --                        if 'isDoesNotExistError' err
@@ -673,8 +682,16 @@ inumBracket start end inum iter = tryFI start >>= check
 inumNop :: (ChunkData t, Monad m) => Inum t t m a
 inumNop = mkInumP pullupResid dataI
 
--- | @inumNull@ feeds empty data to the underlying 'Iter'.  It acts as
--- a no-op when concatenated to other 'Inum's with 'cat' or 'lcat'.
+-- | @inumNull@ feeds empty data to the underlying 'Iter'.  It pretty
+-- much acts as a no-op when concatenated to other 'Inum's with 'cat'
+-- or 'lcat'.
+--
+-- There may be cases where @inumNull@ is required to avoid deadlock.
+-- In an expression such as @enum '|$' iter@, if @enum@ immediately
+-- blocks waiting for some event, and @iter@ immediately starts out
+-- triggering that event before reading any input, then to break the
+-- deadlock you can re-write the code as @cat inumNull enum '|$'
+-- iter@.
 inumNull :: (ChunkData tOut, Monad m) => Inum tIn tOut m a
 inumNull = inumPure mempty
 
@@ -689,7 +706,7 @@ enumPure = inumPure
 -- | Repeat an 'Inum' until the input receives an EOF condition, the
 -- 'Iter' no longer requires input, or the 'Iter' is in an unhandled
 -- 'IterC' state (which presumably will continue to be unhandled by
--- the same inum, so no point in executing it again).
+-- the same 'Inum', so no point in executing it again).
 inumRepeat :: (ChunkData tIn, Monad m) =>
               Inum tIn tOut m a -> Inum tIn tOut m a
 inumRepeat inum iter0 = do

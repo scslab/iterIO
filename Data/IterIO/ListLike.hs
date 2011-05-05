@@ -453,7 +453,8 @@ inumStoL = mkInumP rh loop
 -- | Add a finalizer to run when an 'Iter' has received an EOF and an
 -- 'Inum' has finished.  This works regardless of the order in which
 -- the two events happen.
-pairFinalizer :: (ChunkData t, ChunkData t1, MonadIO m, MonadIO m1) =>
+pairFinalizer :: (ChunkData t, ChunkData t1, ChunkData t2
+                 , MonadIO m, MonadIO m1) =>
                  Iter t m a
               -> Inum t1 t2 m1 b
               -> IO ()
@@ -464,7 +465,8 @@ pairFinalizer iter inum cleanup = do
   mc <- newMVar False
   let end = modifyMVar mc $ \cleanit ->
             when cleanit cleanup >> return (True, ())
-  return (iter `finallyI` liftIO end, inum `inumFinally` liftIO end)
+  return (iter `finallyI` liftIO end
+         , (inumNull `cat` inum) `inumFinally` liftIO end)
 
 -- | \"Iterizes\" a file 'Handle' by turning into an 'Onum' (for
 -- reading) and an 'Iter' (for writing).  Uses 'pairFinalizer' to
