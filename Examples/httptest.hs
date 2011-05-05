@@ -66,14 +66,16 @@ routeFS = routeFileSys mimeMap (dirRedir "index.html")
 cabal_dir :: String
 cabal_dir = (unsafePerformIO $ getAppUserDataDirectory "cabal") ++ "/share/doc"
 
-serve_cabal :: (MonadIO m) => HttpRoute m
-serve_cabal = routeFS cabal_dir
-
 route :: (MonadIO m) => HttpRoute m
 route = mconcat
         [ routeTop $ routeConst $ resp301 "/cabal"
         , routeMap' [ ("cabal", routeConst $ resp301 cabal_dir)
                     , ("static", routeFS "static") -- directory ./static
+                    , ("favicon.ico"
+                      -- serve /favicon.ico from file ./static/favicon.ico,
+                      -- but tell browser to cache it for 1 day
+                      , addHeader "Cache-Control: max-age=86400" $
+                                  routeFS "static/favicon.ico")
                     ]
         , routePath cabal_dir $ routeFS cabal_dir
         , routePath "/usr/share/doc/ghc/html" $

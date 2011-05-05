@@ -40,6 +40,7 @@ enumFileCatchError file = enumFile file `inumCatch` enumCatchIO
                   -> IterR () m (IterR t m a)
                   -> Iter () m (IterR t m a)
       enumCatchIO _ = verboseResumeI
+      -- or to avoid the need for a type signature, you could say:
       -- enumCatchIO e = flip const (e :: IOError) verboseResumeI
 
 main :: IO ()
