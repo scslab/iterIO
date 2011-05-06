@@ -22,7 +22,7 @@ module Data.IterIO.Iter
     , ifParse, ifNoParse, multiParse
     -- * Some basic Iters
     , nullI, data0I, dataI, pureI, chunkI
-    , whileNullI, peekI, atEOFI, ungetI
+    , someI, whileNullI, peekI, atEOFI, ungetI
     , safeCtlI, ctlI
     -- * Internal functions
     , onDone, fmapI
@@ -856,6 +856,21 @@ pureI = do peekI nullI; Iter $ \(Chunk t _) -> Done t chunkEOF
 chunkI :: (Monad m, ChunkData t) => Iter t m (Chunk t)
 {-# INLINE chunkI #-}
 chunkI = iterF $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
+
+-- | Run an 'Iter' returning data of class 'ChunkData' and throw an
+-- EOF exception if the data is 'null'.  (Note that this is different
+-- from the @'some'@ method of the @'Alternative'@ class in
+-- "Control.Applicative", which executes a computation one /or more/
+-- times.  The iterIO library does not use @'Alternative'@, in part
+-- because @`Alternative`@'s @\<|\>@ operator has left rather than
+-- right fixity, which would make parsing less efficient.  See
+-- "Data.IterIO.Parse" for information about iterIO's @\<|\>@
+-- operator.)
+someI :: (ChunkData tOut, Monad m) =>
+         Iter tIn m tOut -> Iter tIn m tOut
+someI = (>>= check)
+    where check tOut | null tOut = throwEOFI "someI"
+                     | otherwise = return tOut
 
 -- | Keep running an 'Iter' until either its output is not 'null' or
 -- we have reached EOF.  Return the the `Iter`'s value on the last

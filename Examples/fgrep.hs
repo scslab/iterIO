@@ -19,7 +19,7 @@ filterLines :: (Monad m) =>
 filterLines s = mkInum loop
     where
       loop = do line <- lineI
-                if match line then return [line] else loop
+                if match line then return [line] else return []
       ls = L8.pack s
       match l | L.null l  = False
               | otherwise = L.isPrefixOf ls l || match (L.tail l)

@@ -5,7 +5,7 @@
 
 module Data.IterIO.Parse (-- * Iteratee combinators
                           (<|>), (\/), orEmpty, (<?>), expectedI
-                         , someI, foldrI, foldr1I, foldrMinMaxI
+                         , foldrI, foldr1I, foldrMinMaxI
                          , foldlI, foldl1I, foldMI, foldM1I
                          , skipI, optionalI, ensureI
                          , eord
@@ -187,18 +187,6 @@ expectedI :: (ChunkData t) =>
           -> Iter t m a
 expectedI saw target =
     Iter $ \_ -> Fail (IterExpected [(saw, target)]) Nothing Nothing
-
--- | Takes an 'Iter' returning a 'LL.ListLike' type, executes the
--- 'Iter' once, and throws a parse error if the returned value is
--- 'LL.null'.  (Note that this is quite different from the @'some'@
--- method of the @'Alternative'@ class in "Control.Applicative", which
--- executes a computation one /or more/ times.  This library does not
--- use @'Alternative'@ because @`Alternative`@'s @\<|\>@ operator has
--- left instead of right fixity.)
-someI :: (ChunkData t, Monad m, LL.ListLike a e) => Iter t m a -> Iter t m a
-someI iter = (<?> "someI") $ do
-  a <- iter
-  if LL.null a then mzero else return a
 
 -- | Repeatedly invoke an 'Iter' and right-fold a function over the
 -- results.

@@ -355,7 +355,7 @@ and a simple 'Inum' to count list elements (since @lineCountI ::
     inumGrep :: (Monad m) => String -> 'Inum' [S.ByteString] [S.ByteString] m a
     inumGrep re = `mkInum` $ do
       line <- 'headI'
-      if line =~ packedRe then return [line] else inumGrep re
+      if line =~ packedRe then return [line] else return []
         where
           packedRe = S8.pack re
 @
@@ -369,19 +369,6 @@ and a simple 'Inum' to count list elements (since @lineCountI ::
                   Just _  -> count (n+1)
                   Nothing -> return n
 @
-
-Notice that when a line doesn't match, @inumGrep@ calls itself
-recursively.  This is necessary because returning an empty list of
-lines signals to 'mkInum' that there is no more input.  Thus, the
-following code would cause our grep implementation to exit at the
-first non-matching line:
-
-@
-      return $ if line =~ packedRe then [line] else []    -- Incorrect
-@
-
-(If you don't like this 'mempty'-means-EOF behavior, you can also wrap
-the argument to 'mkInum' in the function 'whileNullI'.)
 
 Now we are almost ready to assemble all the pieces.  But recall that
 the '|$' operator applies one 'Onum' to one 'Iter', yet now we have

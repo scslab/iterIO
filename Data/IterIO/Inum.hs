@@ -580,11 +580,21 @@ runInum inum = onDone check . inum
 
 -- | Create a stateless 'Inum' from a \"codec\" 'Iter' that transcodes
 -- the input type to the output type.  The codec is invoked repeately
--- until one of the following occurs:  The codec returns 'null' data,
--- the codec throws an exception, or the underlying target 'Iter' is
--- no longer active.  If the codec throws an exception of type
--- 'IterEOF', this is considered normal termination and the error is
--- not further propagated.
+-- until one of the following occurs:
+--
+--   1. The input is at an EOF marker AND the codec returns 'null'
+--      data.  ('Onum's are always fed EOF, but other 'Inum's might
+--      have reason to return 'mempty' data.)
+--
+--   2. The codec throws an exception.  If the exception is an EOF
+--      exception--thrown either by 'throwEOFI', or by some IO action
+--      inside 'liftIO'--this is considered normal termination, and is
+--      the normal way for a codec to cause the 'Inum' to return.  If
+--      the exception is of any other type, then the 'Inum' will
+--      further propagate the exception as an 'Inum' failure.
+--
+--   3. The underlying target 'Iter' either returns a result or throws
+--      an exception.
 --
 -- @mkInumC@ requires two other arguments before the codec.  First, a
 -- 'ResidHandler' allows residual data to be adjusted between the
@@ -611,8 +621,9 @@ mkInumC adj ch codec iter0 = doIter iter0
       doIter iter = tryEOFI codec >>= maybe (return $ IterF iter) (doInput iter)
       doInput iter input = do
         r <- runIterMC ch iter (Chunk input False)
+        eof <- Iter $ \c@(Chunk t eof) -> Done (eof && null t) c
         case r of
-          (IterF i) | not (null input) -> doIter i
+          (IterF i) | not (eof && null input) -> doIter i
           _ | isIterActive r -> return r
           _ -> withResidHandler adj (getResid r) $ return . setResid r
 

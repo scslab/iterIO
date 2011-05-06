@@ -11,7 +11,7 @@ Maintainer:     http://www.scs.stanford.edu/~dm/addr/
 Category:       System, Data, Enumerator
 Synopsis:       Iteratee-based IO with pipe operators
 Extra-source-files:
-        GNUmakefile, README,
+        GNUmakefile, README, NEWS,
         Examples/fgrep.hs, Examples/zpipe.hs, Examples/httptest.hs
 
 Description:

@@ -1,0 +1,8 @@
+
+mkInumC (and mkInum, mkInumP) no longer consider a null codec result
+to terminate the 'Inum' unless the input is at an EOF condition.  This
+allows inums to propagate mempty Chunks inwards, which could
+conceivably be useful for situations in which inumNull lets an Iter
+call liftIO to unblock an enclosing Onum.
+
+* Release 0.1
