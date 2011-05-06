@@ -91,7 +91,12 @@ import Data.IterIO.Trans
 -- 'mkInumM' functions, which hide most of the error handling details
 -- and ensure the above rules are obeyed.  Most @Inum@s are
 -- polymorphic in the last type, @a@, in order to work with iteratees
--- returning any type.
+-- returning any type.  There isn't much reason for an @Inum@ to care
+-- about the type @a@.  Had this module used the Rank2Types Haskell
+-- extension, it would define @Inum@ as:
+--
+-- > type Inum tIn tOut m = forall a. Iter tOut m a
+-- >                               -> Iter tIn m (IterR tOut m a)
 type Inum tIn tOut m a = Iter tOut m a -> Iter tIn m (IterR tOut m a)
 
 -- | An @Onum t m a@ is just an 'Inum' in which the input is
