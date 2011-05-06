@@ -1,12 +1,9 @@
-{-# LANGUAGE DeriveDataTypeable #-}
 
 -- | This module contains an adapter function to run attoparsec
 -- 'Parser's from within the 'Iter' monad.
 module Data.IterIO.Atto where
 
-import Control.Exception
 import Data.Attoparsec as A
-import Data.Typeable
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString as S
 
