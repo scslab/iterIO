@@ -16,7 +16,7 @@ module Data.IterIO.Iter
     , IterCUnsupp(..)
     -- * Exception-related functions
     , throwI, throwEOFI, throwParseI
-    , catchI, tryI, tryFI, tryRI, tryEOFI
+    , catchI, catchPI, tryI, tryFI, tryRI, tryEOFI
     , finallyI, onExceptionI
     , tryBI, tryFBI
     , ifParse, ifNoParse, multiParse
@@ -564,6 +564,17 @@ catchI :: (Exception e, ChunkData t, Monad m) =>
 {-# INLINE catchI #-}
 catchI iter handler = genCatchI iter handler id
 
+-- | Like catchI, but catches only what are considered to be parse
+-- errors--that is, every constructor of 'IterFail' except
+-- 'IterException'.
+catchPI :: (ChunkData t, Monad m) =>
+           Iter t m a
+        -> (IterFail -> Iter t m a)
+        -> Iter t m a
+catchPI iter handler = tryRI iter >>= either failed return
+    where failed r@(Fail (IterException _) _ _) = reRunIter r
+          failed (Fail ifail _ _)               = handler ifail
+
 -- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
 -- the 'Iter' fails and throws an exception @e@ (of type @e@), returns
 -- @'Left' (e, r)@ where @r@ is the state of the failing 'Iter'.
@@ -762,8 +773,8 @@ combineExpected e _ = Fail e Nothing Nothing
 -- use:
 --
 -- @
---   total = parseAndSumIntegerList ``catchI`` handler
---       where handler \('IterNoParse' _) _ = return -1
+--   total = parseAndSumIntegerList ``catchPI`` handler
+--       where handler _ = return -1
 -- @
 --
 -- This last definition of @total@ may leave the input in some
