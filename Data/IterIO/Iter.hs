@@ -574,6 +574,7 @@ catchPI :: (ChunkData t, Monad m) =>
 catchPI iter handler = tryRI iter >>= either failed return
     where failed r@(Fail (IterException _) _ _) = reRunIter r
           failed (Fail ifail _ _)               = handler ifail
+          failed _                              = error "catchPI"
 
 -- | If an 'Iter' succeeds and returns @a@, returns @'Right' a@.  If
 -- the 'Iter' fails and throws an exception @e@ (of type @e@), returns
