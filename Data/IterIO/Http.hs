@@ -404,7 +404,7 @@ path2list path = runIdentity $ inumPure path |$ (slash [] <?> "absolute path")
 --
 
 -- | Data structure representing an HTTP request message.
-data HttpReq = HttpReq {
+data HttpReq s = HttpReq {
       reqMethod :: !S.ByteString
     -- ^ Method (e.g., GET, POST, ...).
     , reqPath :: !S.ByteString
@@ -446,9 +446,12 @@ data HttpReq = HttpReq {
     , reqTransferEncoding :: ![S.ByteString]
     -- ^ A list of the encodings in the Transfer-Encoding header.
     , reqIfModifiedSince :: !(Maybe UTCTime)
+    -- ^ Time from the If-Modified-Since header (if present)
+    , reqSession :: s
+    -- ^ Application-specific session information
     } deriving (Typeable, Show)
 
-defaultHttpReq :: HttpReq
+defaultHttpReq :: HttpReq ()
 defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqPath = S.empty
                          , reqPathLst = []
@@ -464,6 +467,7 @@ defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqContentLength = Nothing
                          , reqTransferEncoding = []
                          , reqIfModifiedSince = Nothing
+                         , reqSession = ()
                          }
 
 -- | Returns a normalized version of the full requested path
@@ -471,7 +475,7 @@ defaultHttpReq = HttpReq { reqMethod = S.empty
 -- has been eliminated, @\"..\"@ has been processed, there is exactly
 -- one @\'/\'@ between each directory component, and the query has
 -- been stripped off).
-reqNormalPath :: HttpReq -> S.ByteString
+reqNormalPath :: HttpReq s -> S.ByteString
 reqNormalPath rq =
     S.intercalate slash $ S.empty : reqPathCtx rq ++ reqPathLst rq
     where slash = S8.singleton '/'
@@ -487,7 +491,7 @@ hTTPvers = do
 -- | HTTP request line, defined by RFC2616 as:
 --
 -- > Request-Line   = Method SP Request-URI SP HTTP-Version CRLF
-request_line :: (Monad m) => Iter L m HttpReq
+request_line :: (Monad m) => Iter L m (HttpReq ())
 request_line = do
   method <- strictify <$> while1I (isUpper . w2c)
   spaces
@@ -506,7 +510,7 @@ request_line = do
                , reqVers = (major, minor)
                }
 
-request_headers :: (Monad m) => Map S (HttpReq -> Iter L m HttpReq)
+request_headers :: (Monad m) => Map S (HttpReq a -> Iter L m (HttpReq a))
 request_headers = Map.fromList $
                   map (\(a, b) -> (S8.map toLower $ S8.pack a, b)) $
     [
@@ -518,13 +522,13 @@ request_headers = Map.fromList $
     , ("If-Modified-Since", if_modified_since_hdr)
     ]
 
-host_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+host_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 host_hdr req = do
   (host, mport) <- hostI
   return req { reqHost = host, reqPort = mport }
 
 -- Cookie header (RFC 6265)
-cookie_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+cookie_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 cookie_hdr req = ifParse cookiesI setCookies ignore
   where
     cookiesI = sepBy1 parameter sep <* eofI
@@ -532,18 +536,18 @@ cookie_hdr req = ifParse cookiesI setCookies ignore
     setCookies cookies = return $ req { reqCookies = cookies }
     ignore = nullI >> return req
 
-content_type_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+content_type_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 content_type_hdr req = do
   typ <- token <++> char '/' <:> token
   parms <- many $ olws >> char ';' >> parameter
   return req { reqContentType = Just (typ, parms) }
 
-content_length_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+content_length_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 content_length_hdr req = do
   len <- olws >> (while1I (isDigit . w2c) >>= readI) <* olws
   return req { reqContentLength = Just len }
 
-transfer_encoding_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+transfer_encoding_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 transfer_encoding_hdr req = do
   tclist <- many tc
   return req { reqTransferEncoding = tclist }
@@ -554,7 +558,7 @@ transfer_encoding_hdr req = do
       skipMany $ olws >> char ';' >> parameter
       return coding
 
-if_modified_since_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+if_modified_since_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 if_modified_since_hdr req = do
   modtime <- dateI
   return req { reqIfModifiedSince = Just modtime }
@@ -568,7 +572,7 @@ hdr_field_val = do
   crlf
   return (field, val)
 
-any_hdr :: (Monad m) => HttpReq -> Iter L m HttpReq
+any_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 any_hdr req = do
   (field, val) <- hdr_field_val
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
@@ -581,7 +585,7 @@ any_hdr req = do
       return r
 
 -- | Parse an HTTP header, returning an 'HttpReq' data structure.
-httpReqI :: Monad m => Iter L.ByteString m HttpReq
+httpReqI :: Monad m => Iter L.ByteString m (HttpReq ())
 httpReqI = do
   -- Section 4.1 of RFC 2616:  "In the interest of robustness, servers
   -- SHOULD ignore any empty line(s) received where a Request-Line is
@@ -629,7 +633,7 @@ inumFromChunks = mkInumM $ getchunk
 -- beyond) and decodes the Transfer-Encoding.  It handles straight
 -- content of a size specified by the Content-Length header and
 -- chunk-encoded content.
-inumHttpBody :: (Monad m) => HttpReq -> Inum L.ByteString L.ByteString m a
+inumHttpBody :: (Monad m) => HttpReq s -> Inum L.ByteString L.ByteString m a
 inumHttpBody req =
     case reqTransferEncoding req of
       lst | null lst || lst == [S8.pack "identity"] ->
@@ -727,7 +731,7 @@ defaultFormField = FormField {
 -- called from within an 'inumHttpBody' enumerator (which is
 -- guaranteed by 'inumHttpServer').
 foldForm :: (Monad m) =>
-            HttpReq
+            HttpReq s
          -> (a -> FormField -> Iter L.ByteString m a)
          -> a
          -> Iter L.ByteString m a
@@ -813,11 +817,11 @@ foldControls f z =
     char '&' \/ return a $ \_ -> foldControls f a
 
 foldUrlencoded :: (Monad m) =>
-                  HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
+                  HttpReq s -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldUrlencoded _req f z = foldControls f z
 
 foldQuery :: (Monad m) =>
-             HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
+             HttpReq s -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldQuery req f z = inumPure (L.fromChunks [reqQuery req]) .| foldControls f z
 
 --
@@ -844,13 +848,13 @@ bcharTab = listArray (0,127) $ fmap isBChar ['\0'..'\177']
 multipart :: S
 multipart = S8.pack "multipart/form-data"
 
-reqBoundary :: HttpReq -> Maybe S
+reqBoundary :: HttpReq s -> Maybe S
 reqBoundary req = case reqContentType req of
                     Just (typ, parms) | typ == multipart ->
                                           lookup (S8.pack "boundary") parms
                     _ -> Nothing
 
-multipartI :: (Monad m) => HttpReq -> Iter L m (Maybe (FormField))
+multipartI :: (Monad m) => HttpReq s -> Iter L m (Maybe (FormField))
 multipartI req = case reqBoundary req of
                    Just b  -> findpart $ S8.pack "--" `S8.append` b
                    Nothing -> return Nothing
@@ -876,7 +880,7 @@ multipartI req = case reqBoundary req of
                  , ffHeaders = cdhdr:hdrs
                  }
 
-inumMultipart :: (Monad m) => HttpReq -> Inum L L m a
+inumMultipart :: (Monad m) => HttpReq s -> Inum L L m a
 inumMultipart req iter = flip mkInumM (iter <* nullI) $ do
   b <- bstr
   ipipe $ inumStopString b
@@ -887,7 +891,7 @@ inumMultipart req iter = flip mkInumM (iter <* nullI) $ do
                Nothing -> throwParseI "inumMultipart: no parts"
 
 foldMultipart :: (Monad m) =>
-                 HttpReq -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
+                 HttpReq s -> (a -> FormField -> Iter L m a) -> a -> Iter L m a
 foldMultipart req f z = multipartI req >>= doPart
     where
       doPart Nothing = return z
@@ -1073,7 +1077,7 @@ resp303 target =
                  , L8.pack "\">here</A>.</P>\n"]
 
 -- | Generate a 403 (forbidden) response.
-resp403 :: (Monad m) => HttpReq -> HttpResp m
+resp403 :: (Monad m) => HttpReq s -> HttpResp m
 resp403 req = mkHtmlResp stat403 html
     where html = L8.concat
                  [L8.pack
@@ -1088,7 +1092,7 @@ resp403 req = mkHtmlResp stat403 html
                            \</BODY></HTML>\n"]
 
 -- | Generate a 404 (not found) response.
-resp404 :: (Monad m) => HttpReq -> HttpResp m
+resp404 :: (Monad m) => HttpReq s -> HttpResp m
 resp404 req = mkHtmlResp stat404 html
     where html = L8.concat
                  [L8.pack
@@ -1103,7 +1107,7 @@ resp404 req = mkHtmlResp stat404 html
                            \</BODY></HTML>\n"]
 
 -- | Generate a 405 (method not allowed) response.
-resp405 :: (Monad m) => HttpReq -> HttpResp m
+resp405 :: (Monad m) => HttpReq s -> HttpResp m
 resp405 req = mkHtmlResp stat405 html
     where html = L8.concat
                  [L8.pack
@@ -1152,19 +1156,19 @@ enumHttpResp resp mdate = inumPure fmtresp `cat` (respBody resp |. maybeChunk)
 
 -- | Given the headers of an HTTP request, provides an iteratee that
 -- will process the request body (if any) and return a response.
-type HttpRequestHandler m = HttpReq -> Iter L.ByteString m (HttpResp m)
+type HttpRequestHandler m s = HttpReq s -> Iter L.ByteString m (HttpResp m)
 
 -- | Data structure describing the configuration of an HTTP server for
 -- 'inumHttpServer'.
 data HttpServerConf m = HttpServerConf {
       srvLogger :: !(String -> Iter L.ByteString m ())
     , srvDate :: !(Iter L.ByteString m (Maybe UTCTime))
-    , srvHandler :: !(HttpRequestHandler m)
+    , srvHandler :: !(HttpRequestHandler m ())
     }
 
 -- | Generate a null 'HttpServerConf' structure with no logging and no
 -- Date header.
-nullHttpServer :: (Monad m) => HttpRequestHandler m -> HttpServerConf m
+nullHttpServer :: (Monad m) => HttpRequestHandler m () -> HttpServerConf m
 nullHttpServer handler = HttpServerConf {
                            srvLogger = const $ return ()
                          , srvDate = return Nothing
@@ -1173,7 +1177,7 @@ nullHttpServer handler = HttpServerConf {
 
 -- | Generate an 'HttpServerConf' structure that uses IO calls to log to
 -- standard error and get the current time for the Date header.
-ioHttpServer :: (MonadIO m) => HttpRequestHandler m -> HttpServerConf m
+ioHttpServer :: (MonadIO m) => HttpRequestHandler m () -> HttpServerConf m
 ioHttpServer handler = HttpServerConf {
                          srvLogger = liftIO . hPutStrLn stderr
                        , srvDate = liftIO $ Just `liftM` getCurrentTime

@@ -60,16 +60,16 @@ mimeMap = unsafePerformIO $ do
                                if exist then return h else findMimeTypes t
       findMimeTypes []    = return "mime.types" -- cause error
 
-routeFS :: (MonadIO m) => FilePath -> HttpRoute m
+routeFS :: (MonadIO m) => FilePath -> HttpRoute m s
 routeFS = routeFileSys mimeMap (dirRedir "index.html")
 
 cabal_dir :: String
 cabal_dir = (unsafePerformIO $ getAppUserDataDirectory "cabal") ++ "/share/doc"
 
-route :: (MonadIO m) => HttpRoute m
+route :: (MonadIO m) => HttpRoute m ()
 route = mconcat
         [ routeTop $ routeConst $ resp301 "/cabal"
-        , routeMap' [ ("cabal", routeConst $ resp301 cabal_dir)
+        , routeMap [ ("cabal", routeConst $ resp301 cabal_dir)
                     , ("static", routeFS "static") -- directory ./static
                     , ("favicon.ico"
                       -- serve /favicon.ico from file ./static/favicon.ico,
