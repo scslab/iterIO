@@ -498,7 +498,7 @@ consCtl :: (CtlCmd carg cres, ChunkData tIn, Monad mIn) =>
         -> CtlHandler (Iter tIn mIn) t m a
         -> CtlHandler (Iter tIn mIn) t m a
 consCtl fn fallback ca@(CtlArg a0 n c) = maybe (fallback ca) runfn $ cast a0
-    where runfn a = fn a (n . fromJust . cast) c
+    where runfn a = fn a (n . CtlDone . fromJust . cast) c
                     `catchI` \e _ -> return $ runIter (n $ CtlFail e) c
 infixr 9 `consCtl`
 
