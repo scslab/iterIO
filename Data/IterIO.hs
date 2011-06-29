@@ -177,7 +177,7 @@ contents of a file to standard output:
 the lazy @'ByteString'@ format, which is more efficient than plain
 'String's.  ('enumFile' supports multiple types, but in this example
 there is not enough information for Haskell to choose one of them, so
-we must use 'enumfile'' or use @::@ to specify a type explicitly.)
+we must use 'enumFile'' or use @::@ to specify a type explicitly.)
 Once again, '|$' is used to execute the IO actions, but, this time,
 the return value is just @()@; the interesting action lies in the side
 effects of writing data to standard output while iterating over the
