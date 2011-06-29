@@ -472,7 +472,9 @@ pairFinalizer iter inum cleanup = do
 -- reading) and an 'Iter' (for writing).  Uses 'pairFinalizer' to
 -- 'hClose' the 'Handle' when both the 'Iter' and 'Onum' are finished.
 -- Puts the handle into binary mode, but does not change the
--- buffering.
+-- buffering.  As mentioned for 'handleI', Haskell's default buffering
+-- can cause problems for many network protocols.  Hence, you may wish
+-- to call @'hSetBuffering' h 'NoBuffering'@ before @iterHandle h@.
 iterHandle :: (LL.ListLikeIO t e, ChunkData t, MonadIO m) =>
               Handle -> IO (Iter t m (), Onum t m a)
 iterHandle h = do
