@@ -357,9 +357,9 @@ pathI = dopath <?> "path"
                 (ensureI (== eord '/')
                  *> percent_decode (rfc3986_test rfc3986_pcharslash))
                 <|> return (S8.pack "/")
-        query <- char '?' *> (strictify <$> percent_decode qpcharslash) <|> nil
+        query <- char '?' *> (strictify <$> whileI qpcharslash) <|> nil
         return (path, query)
-      qpcharslash c = rfc3986_test rfc3986_pcharslash c || c == eord '?'
+      qpcharslash c = rfc3986_test rfc3986_pcharslash c || c == eord '?' || c == eord '%'
  
 -- | Returns (scheme, host, path, query)
 absUri :: (Monad m) => Iter L m (S, S, Maybe Int, S, S)
