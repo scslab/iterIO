@@ -357,7 +357,7 @@ pathI = dopath <?> "path"
                 (ensureI (== eord '/')
                  *> percent_decode (rfc3986_test rfc3986_pcharslash))
                 <|> return (S8.pack "/")
-        query <- char '?' *> (strictify <$> whileI qpcharslash) <|> nil
+        query <- char '?' *> (strictify <$> percent_decode qpcharslash) <|> nil
         return (path, query)
       qpcharslash c = rfc3986_test rfc3986_pcharslash c || c == eord '?'
  
