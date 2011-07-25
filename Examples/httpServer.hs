@@ -79,7 +79,7 @@ warn msg = do
 -- Request handling
 --
 
-handleHttpReq :: HttpReq -> Iter L ConnM (HttpResp ConnM)
+handleHttpReq :: HttpReq s -> Iter L ConnM (HttpResp ConnM)
 handleHttpReq httpReq = do
   addr <- getPeerAddr
   resp <- return $ resp404 httpReq
@@ -96,7 +96,7 @@ runUntilFinished m = do
   _ <- forkIO $ m `finally` signalQSem sem
   waitQSem sem
 
-showReqLine :: (Monad m) => SockAddr -> HttpReq -> HttpResp m -> String
+showReqLine :: (Monad m) => SockAddr -> HttpReq s -> HttpResp m -> String
 showReqLine addr req resp =
   show addr
   ++ " " ++ S.unpack (reqMethod req)

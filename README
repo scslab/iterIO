@@ -4,8 +4,8 @@ To build this package, install the Haskell platform
 commands to install required packages:
 
 	cabal update
-	cabal install ListLike HSOpenSSL stringsearch
-	cabal install blaze-html regex-posix xhtml utf8-string
-	cabal install binary
+	cabal install ListLike HSOpenSSL stringsearch attoparsec
+	cabal install aeson blaze-html
+	cabal install binary regex-posix xhtml utf8-string
 
 Then run "make" or "gmake" to build the example programs.

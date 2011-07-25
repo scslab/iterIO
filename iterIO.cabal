@@ -1,4 +1,5 @@
 Name:           iterIO
+Homepage:       http://www.scs.stanford.edu/~dm/iterIO
 Version:        0.1
 Cabal-version:  >= 1.6
 build-type:     Simple
@@ -7,43 +8,51 @@ License-file:   LICENSE
 Author:         David Mazieres
 Stability:      experimental
 Maintainer:     http://www.scs.stanford.edu/~dm/addr/
-Category:       System, Data
+Category:       System, Data, Enumerator
 Synopsis:       Iteratee-based IO with pipe operators
 Extra-source-files:
-        GNUmakefile, README, Examples/fgrep.hs, Examples/zpipe.hs,
-        Examples/reliable/Arc4.hs, Examples/reliable/NetSim.hs,
-        Examples/reliable/Protocol.hs, Examples/reliable/TM.hs,
-        Examples/reliable/Target.hs, Examples/reliable/reference.hs,
-        Examples/reliable/tester.hs
+        GNUmakefile, README, NEWS,
+        Examples/fgrep.hs, Examples/zpipe.hs, Examples/httptest.hs
 
 Description:
 
         Iteratee-based IO is an alternative to lazy IO that offers
         better error handling, referential transparency, and
-        convenient composition of protocol layers or parsers.  New
-        users should see the tutorial in the "Data.IterIO" module
-        documentation.
+        convenient composition of protocol layers or parsers.  This
+        package provides iteratees based around /pipe/ operators for
+        hooking together application components and directing data
+        flow.  New users should see the tutorial in the "Data.IterIO"
+        module documentation.  Highlights of the library include:
 
         .
 
-        The Iteratee approach was originally advocated by Oleg
-        Kiselyov (see talk slides at
-        <http://okmij.org/ftp/Streams.html#iteratee>).  The main
-        implementation by Kiselyov and John Lato is simply called
-        /iteratee/ (<http://hackage.haskell.org/package/iteratee>).
-        This package is a re-implementation of the Iteratee concepts
-        with a new interface designed to simplify many of the
-        abstractions and make them easier to use.  The author of this
-        package is particularly grateful to John Lato for helping him
-        understand much of the important design rationale behind the
-        original iteratee package.
+        * Heavy emphasis on ease of use, ease of learning, and
+          uniformity of mechanism.
 
         .
 
-        The latest development version of the iterIO sources is
-        available via git by executing:
-        .       
-        > git clone http://www.scs.stanford.edu/~dm/repos/iterIO.git
+        * Copious documentation.
+
+        .
+
+        * Consistent EOF and error handling to avoid resource leaks
+          and other issues in corner cases.
+
+        .
+
+        * A set of iteratee parsing combinators providing LL(*)
+          parsing while generally not consuming large amounts of
+          memory for backtracking.
+
+        .
+
+        * Seamless integration with attoparsec for LL(1) parsing.
+
+        .
+
+        See "Data.IterIO" for a discussion of the differences between
+	iterIO and the two previous iteratee implementations (iteratee
+	and enumerator).
 
 Source-repository head
   Type:     git
@@ -52,25 +61,24 @@ Source-repository head
 Library
   Build-depends: array >= 0.3.0.1 && < 2,
                  base >= 4.3 && < 6,
-                 -- binary >= 0.5 && < 2,
                  bytestring >= 0.9 && < 2,
                  containers >= 0.3 && < 2,
-                 directory >= 1.0 && < 2,
                  filepath >= 1.2 && < 2,
                  HsOpenSSL >= 0.8 && < 2,
                  ListLike >= 1.0 && < 4,
-                 mtl >= 1.1.0.2 && < 2.1,
+                 mtl >= 1.1.0.2 && < 3,
                  network >= 2.3 && < 3,
                  old-locale >= 1.0.0.2 && < 2,
+                 attoparsec >= 0.8.5 && < 2,
                  process >= 1.0.1.3 && < 2,
                  stringsearch >= 0.3 && < 2,
                  time >= 1.1.4 && < 2,
                  unix >= 2.4 && < 3
 
-  ghc-options: -O2 -funbox-strict-fields
-               -threaded -fno-warn-unused-imports -rtsopts
+  ghc-options: -Wall
   Exposed-modules:
     Data.IterIO,
+    Data.IterIO.Atto,
     Data.IterIO.Iter,
     Data.IterIO.Extra,
     Data.IterIO.Http,

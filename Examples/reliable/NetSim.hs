@@ -35,17 +35,18 @@ rndIntI bound = do
 
 
 dropper :: Float -> NetSim a
-dropper dropProb = mkInum $ do
-  packet <- headI
-  dropit <- rndBoolI dropProb
-  return $ if dropit then [] else [packet]
+dropper dropProb = mkInum loop
+    where loop = do
+            packet <- headI
+            dropit <- rndBoolI dropProb
+            if dropit then loop else return [packet]
 
 reorderer :: Float -> NetSim a
 reorderer prob = mkInumAutoM $ headLI >>= oldOrNew
   where
     oldOrNew old = do
       new <- headLI
-      b <- liftIterM $ rndBoolI prob
+      b <- liftI $ rndBoolI prob
       if b then ifeed [old] >> oldOrNew new
            else ifeed [new] >> oldOrNew old
 

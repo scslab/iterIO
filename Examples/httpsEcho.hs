@@ -72,7 +72,7 @@ handleRequest out = do
 -- Services for uploaded files
 --
 
-echoFile :: (MonadIO m) => HttpReq -> Iter L m () -> Iter L m (Maybe ())
+echoFile :: (MonadIO m) => HttpReq s -> Iter L m () -> Iter L m (Maybe ())
 echoFile req out = withParm "input" req $ inumEchoResponse .| out
 
 inumEchoResponse :: (MonadIO m) => Inum L L m a
@@ -80,7 +80,7 @@ inumEchoResponse = mkInumAutoM $ do
   _ <- ifeed $ headersL echoHeaders
   ipipe inumToChunks
 
-gzipFile :: (MonadIO m) => HttpReq -> Iter L m () -> Iter L m (Maybe ())
+gzipFile :: (MonadIO m) => HttpReq s -> Iter L m () -> Iter L m (Maybe ())
 gzipFile req out = withParm "input" req $ inumGzipResponse .| out
 
 inumGzipResponse :: (MonadIO m) => Inum L L m a
@@ -95,15 +95,16 @@ inumGzipResponse = mkInumAutoM $ do
 
 type Parms = [(FormField, L, Int)]
 
-parmsI :: (Monad m) => HttpReq -> Iter L m Parms
+parmsI :: (Monad m) => HttpReq s -> Iter L m Parms
 parmsI req = foldForm req getPart []
  where
   getPart parts mp = do
-    front <- takeExactI 50
+    front <- takeI 50
     backLen <- countI
     return ((mp,front,backLen):parts)
 
-withParm :: (MonadIO m) => String -> HttpReq -> Iter L m a -> Iter L m (Maybe a)
+withParm :: (MonadIO m) =>
+            String -> HttpReq s -> Iter L m a -> Iter L m (Maybe a)
 withParm pName req iter = foldForm req handlePart Nothing
  where
   handlePart result part =
@@ -120,7 +121,7 @@ mapForm req f = foldForm req () (\_ part -> f part >> return ())
 -- Html rendering
 --
 
-request2Html :: HttpReq -> Parms -> Html
+request2Html :: HttpReq s -> Parms -> Html
 request2Html req parms = toHtml
   [ header2Html req
   , parms2Html parms
@@ -150,7 +151,7 @@ parms2Html parms =
         else noHtml
     ]
 
-header2Html :: HttpReq -> Html
+header2Html :: HttpReq s -> Html
 header2Html r = toHtml [ requestLine, headers, cookies ]
  where
   requestLine = paragraph <<

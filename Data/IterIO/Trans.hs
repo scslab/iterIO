@@ -6,20 +6,63 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-{-# LANGUAGE ScopedTypeVariables #-}
-
--- | Various helper functions and instances for using 'Iter's of
--- different Monads together in the same pipeline.
-module Data.IterIO.Trans (-- * Iter-specific state monad transformer
-                          IterStateT(..), runIterStateT
-                         , iget, igets, iput, imodify
-                          -- * Functions for building Iter monad adapters
-                         , adaptIter, adaptIterM
-                         -- * Adapters for Iters of mtl transformers
-                         , liftIterM, liftIterIO
+-- | This module contains various helper functions and instances for
+-- using 'Iter's of different 'Monad's together in the same pipeline.
+-- For example, as-is the following code is illegal:
+--
+-- @
+--iter1 :: 'Iter' String IO Bool
+--iter1 = ...
+-- 
+--iter2 :: 'Iter' String ('StateT' MyState IO) ()
+--iter2 = do ...
+--           s <- iter1 -- ILLEGAL: iter1 is in wrong monad
+--           ...
+-- @
+--
+-- You can't invoke @iter1@ from within @iter2@ because the 'Iter'
+-- type is wrapped around a different 'Monad' in each case.  However,
+-- the function 'liftI' exactly solves this problem:
+--
+-- @
+--           s <- liftI iter1
+-- @
+--
+-- Conversely, you may be in a 'Monad' like @'Iter' String IO@ and
+-- need to invoke a computation that requires some other monad
+-- functionality, such as a reader.  There are a number of
+-- iteratee-specific runner functions that help you run other
+-- 'MonadTrans' transformers inside the 'Iter' monad.  These typically
+-- use the names of the runner functions in the mtl library, but with
+-- an @I@ appended--for instance 'runReaderTI', 'runStateTI',
+-- 'runWriterTI'.  Here's a fuller example of adapting the inner
+-- 'Iter' 'Monad'.  The example also illustrates that @'Iter' t m@ is
+-- member any mtl classes (such as 'MonadReader' and 'MonadState')
+-- that @m@ is.
+--
+-- @
+--iter1 :: Iter String ('ReaderT' MyState IO) Bool
+--iter1 = do
+--  s <- 'ask'
+--  liftIO $ ('putStrLn' ('show' s) >> return True)
+--        ``catch`` \('SomeException' _) -> return False
+--
+--iter2 :: Iter String ('StateT' MyState IO) ()
+--iter2 = do
+--  s <- 'get'
+--  ok <- 'liftI' $ 'runReaderTI' iter1 s
+--  if ok then return () else fail \"iter1 failed\"
+-- @
+module Data.IterIO.Trans (-- * Adapters for Iters of mtl transformers
+                          liftI, liftIterIO
                          , runContTI, runErrorTI, runListTI, runReaderTI
                          , runRWSI, runRWSLI, runStateTI, runStateTLI
                          , runWriterTI, runWriterTLI
+                         -- * Functions for building new monad adapters
+                         , adaptIter, adaptIterM
+                         -- * Iter-specific state monad transformer
+                         , IterStateT(..), runIterStateT
+                         , iget, igets, iput, imodify
                          ) where
 
 import Control.Monad.Cont
@@ -42,13 +85,12 @@ import Data.IterIO.Iter
 --
 
 -- | @IterStateT@ is a variant of the 'StateT' monad transformer
--- specifically designed for use inside 'Iter's.  The difference
--- between 'IterStateT' and 'StateT' is that the 'runIterStateT'
--- function returns an 'Iter' instead of just the result, which is
--- somewhat analogous to the way 'finishI' returns an 'Iter' inside an
--- 'Iter' so you can inspect its state.  The advantage of this
--- approach is that you can recover the state even if an 'IterFail' or
--- 'InumFail' condition occurs.
+-- specifically designed for use inside 'Iter's.  The 'IterStateT'
+-- Monad itself is the same as 'StateT'.  However, the 'runIterStateT'
+-- function works differently from 'runStateT'--it returns an 'IterR'
+-- and the result state separately.  The advantage of this approach is
+-- that you can still recover the state at the point of the excaption
+-- even after an 'IterFail' or 'InumFail' condition.
 newtype IterStateT s m a = IterStateT (s -> m (a, s))
 
 instance (Monad m) => Monad (IterStateT s m) where
@@ -66,8 +108,8 @@ instance (MonadIO m) => MonadIO (IterStateT s m) where
 
 -- | Runs an @'IterStateT' s m@ computation on some state @s@.
 -- Returns the result ('IterR') of the 'Iter' and the state of @s@ as
--- a pair.  Pulls residual input up to the enclosing 'Iter' monad as
--- with 'pullupResid'.
+-- a pair.  Pulls residual input up to the enclosing 'Iter' monad (as
+-- with @'pullupResid'@ in "Data.IterIO.Inum").
 runIterStateT :: (ChunkData t, Monad m) => 
                  Iter t (IterStateT s m) a -> s -> Iter t m (IterR t m a, s)
 runIterStateT i0 s0 = Iter $ adapt s0 . runIter i0
@@ -100,24 +142,28 @@ imodify f = lift $ IterStateT $ \s -> return ((), f s)
 -- Adapter utility functions
 --
 
--- | Adapt an 'Iter' from one monad to another.  Requires two
--- functions, one adapting the result to a new type (if required), and
--- a second adapting monadic computations from one monad to the other.
--- For example, 'liftIterM' could be implemented as:
+-- | Adapt an 'Iter' from one monad to another.  This function is the
+-- lowest-level monad adapter function, upon which all of the other
+-- adapters are built.  @adaptIter@ requires two functions as
+-- arguments.  One adapts the result to a new type (if required).  The
+-- second adapts monadic computations from one monad to the other.
+-- For example, 'liftI' could be implemented as:
 --
--- > liftIterM :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
--- >              Iter s m a -> Iter s (t m) a
--- > liftIterM = adaptIter id $ lift . lift >=> liftIterM
+-- @
+--  liftI :: ('MonadTrans' t, Monad m, Monad (t m), 'ChunkData' s) =>
+--           'Iter' s m a -> 'Iter' s (t m) a
+--  liftI = adaptIter 'id' (\\m -> 'lift' ('lift' m) >>= liftI)
+-- @
 --
--- Here @'lift' . 'lift'@ executes a computation of type
--- @m ('Iter' s m a)@ from within the @'Iter' s (t m)@ monad.
--- The result, of type @'Iter' s m a@, can then be fed back into
--- @liftIterM@ recursively.
+-- Here @'lift' ('lift' m)@ executes a computation @m@ of type @m
+-- ('Iter' s m a)@ from within the @'Iter' s (t m)@ monad.  The
+-- result, of type @'Iter' s m a@, can then be fed back into
+-- @liftI@ recursively.
 --
--- Note that in general the computation adapters must invoke the outer
--- function recursively.  @adaptIter@ is designed this way because the
--- result adapter function may need to change.  An example is
--- 'runStateTI', which could be implemented as follows:
+-- Note that in general a computation adapters must invoke the outer
+-- adapter function recursively.  @adaptIter@ is designed this way
+-- because the result adapter function may need to change.  An example
+-- is 'runStateTI', which could be implemented as follows:
 --
 -- > runStateTI :: (ChunkData t, Monad m) =>
 -- >               Iter t (StateT s m) a -> s -> Iter t m (a, s)
@@ -140,14 +186,18 @@ adaptIter f mf i = Iter $ check . runIter i
     where check (IterM m) = runIter (mf $ liftM (Iter . runIterR) m) mempty
           check r = stepR' r check $ fmapR f r
 
--- | Adapt monadic computations of an 'Iter' from one monad to
--- another.  This only works when the values are converted straight
--- through.  For more complex scenarios, you need 'adaptIter'.
+-- | Simplified adapter function to translate 'Iter' computations from
+-- one monad to another.  This only works on monads @m@ for which
+-- running @m a@ returns a result of type @a@.  For more complex
+-- scenarios (such as 'ListT' or 'StateT'), you need to use the more
+-- general 'adaptIter'.
 --
 -- As an example, the 'liftIterIO' function is implemented as follows:
 --
--- > liftIterIO :: (ChunkData t, MonadIO m) => Iter t IO a -> Iter t m a
--- > liftIterIO = adaptIterM liftIO
+-- @
+-- liftIterIO :: (ChunkData t, 'MonadIO' m) => Iter t IO a -> Iter t m a
+-- liftIterIO = adaptIterM 'liftIO'
+-- @
 adaptIterM :: (ChunkData t, Monad m1, Monad m2) =>
               (m1 (Iter t m1 a) -> m2 (Iter t m1 a)) -- ^ Conversion function
            -> Iter t m1 a       -- ^ 'Iter' of input monad
@@ -157,9 +207,9 @@ adaptIterM f = adapt
 
 -- | Run an @'Iter' s m@ computation from witin the @'Iter' s (t m)@
 -- monad, where @t@ is a 'MonadTrans'.
-liftIterM :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
-             Iter s m a -> Iter s (t m) a
-liftIterM = adaptIterM lift
+liftI :: (MonadTrans t, Monad m, Monad (t m), ChunkData s) =>
+         Iter s m a -> Iter s (t m) a
+liftI = adaptIterM lift
 
 -- | Run an @'Iter' t IO@ computation from within an @'Iter' t m@
 -- monad where @m@ is in class 'MonadIO'.

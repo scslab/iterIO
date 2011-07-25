@@ -71,14 +71,18 @@ findLongestPrefix mp t = maybe ckprefix (\v1 -> Just (t, v1)) ma
 -- 'Map.Map', along with the residual input that follows the key.
 mapI :: (ChunkData t, LL.ListLike t e, Ord t, Eq e, Monad m) =>
         Map t a -> Iter t m a
-mapI mp | Map.null mp = throwI $ IterMiscParseErr "mapI: null map"
+mapI mp | Map.null mp = fail $ "mapI: null map"
         | otherwise = do
   c@(Chunk t eof) <- chunkI
   if not (eof) && more t
     then iterF (runIter (mapI mp) . mappend c)
     else case findLongestPrefix mp t of
-           Nothing -> throwI $ IterExpected (chunkShow t) $
-                      map chunkShow $ Map.keys mp
+           Nothing -> Iter $ \c' ->
+             Fail (IterExpected $
+                   (show c
+                   , show (Map.size mp) ++ " keys including the following:")
+                   : map (\k -> ("", chunkShow k)) (take 5 $ Map.keys mp))
+             Nothing (Just $ mappend c c')
            Just (k, v) -> ungetI (LL.drop (LL.length k) t) >> return v
     where
       gtmap t = snd $ Map.split t mp

@@ -1,11 +1,11 @@
 
 module Data.IterIO.HttpRoute
     (HttpRoute(..)
-    , runHttpRoute
+    , runHttpRoute, addHeader
     , routeConst, routeFn, routeReq
     , routeMethod, routeHost, routeTop
-    , HttpMap, routeMap, routeMap', routeName, routePath, routeVar
-    , mimeTypesI, routeFileSys, FileSystemCalls(..), routeGenFileSys
+    , HttpMap, routeMap, routeAlwaysMap, routeName, routePath, routeVar
+    , mimeTypesI, dirRedir, routeFileSys, FileSystemCalls(..), routeGenFileSys
     ) where
 
 import           Control.Monad
@@ -64,19 +64,19 @@ import           Data.IterIO.Parse
 -- be served out of the file system under the @\"\/var\/www\/htdocs\"@
 -- directory.  (This example assumes @mimeMap@ has been constructed as
 -- discussed for 'mimeTypesI'.)
-data HttpRoute m =
-    HttpRoute !(HttpReq -> Maybe (Iter L.ByteString m (HttpResp m)))
+newtype HttpRoute m s =
+    HttpRoute (HttpReq s -> Maybe (Iter L.ByteString m (HttpResp m)))
 
 runHttpRoute :: (Monad m) =>
-                HttpRoute m -> HttpReq -> Iter L.ByteString m (HttpResp m)
+                HttpRoute m s -> HttpReq s -> Iter L.ByteString m (HttpResp m)
 runHttpRoute (HttpRoute route) rq = fromMaybe (return $ resp404 rq) $ route rq
 
-instance Monoid (HttpRoute m) where
+instance Monoid (HttpRoute m s) where
     mempty = HttpRoute $ const Nothing
     mappend (HttpRoute a) (HttpRoute b) =
         HttpRoute $ \req -> a req `mplus` b req
 
-popPath :: Bool -> HttpReq -> HttpReq
+popPath :: Bool -> HttpReq s -> HttpReq s
 popPath isParm req =
     case reqPathLst req of
       h:t -> req { reqPathLst = t
@@ -86,25 +86,59 @@ popPath isParm req =
                  }
       _   -> error "Data.IterIO.Http.popPath: empty path"
 
+-- | Prepend a header field to the response produced by an 'HttpRoute'
+-- if that 'HttpRoute' is successful.  For example, to let clients
+-- cache static data for an hour, you might use:
+--
+-- @
+--   addHeader ('S8.pack' \"Cache-control: max-age=3600\") $
+--       'routeFileSys' mime ('dirRedir' \"index.html\") \"\/var\/www\/htdocs\"
+-- @
+addHeader :: (Monad m) => S8.ByteString -> HttpRoute m s -> HttpRoute m s
+addHeader h (HttpRoute r) = HttpRoute $ \req -> liftM (liftM addit) (r req)
+    where addit resp = resp { respHeaders = h : respHeaders resp }
+
 -- | Route all requests to a constant response action that does not
 -- depend on the request.  This route always succeeds, so anything
 -- 'mappend'ed will never be used.
-routeConst :: (Monad m) => HttpResp m -> HttpRoute m
+routeConst :: (Monad m) => HttpResp m -> HttpRoute m s
 routeConst resp = HttpRoute $ const $ Just $ return resp
 
 -- | Route all requests to a particular function.  This route always
 -- succeeds, so anything 'mappend'ed will never be used.
-routeFn :: (HttpReq -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m
+routeFn :: (HttpReq s -> Iter L.ByteString m (HttpResp m)) -> HttpRoute m s
 routeFn fn = HttpRoute $ Just . fn
 
--- | Construct a route by inspecting the request.
-routeReq :: (HttpReq -> HttpRoute m) -> HttpRoute m
+-- | Select a route based on some arbitrary function of the request.
+-- For most purposes, the existing predicates ('routeName',
+-- 'routePath', etc.) should be fine, but occationally you might want
+-- to define a custom predicate.  For example, to reject methods other
+-- then \"GET\" or \"POST\" at the top of your route, you could say:
+--
+-- @
+--      myRoute = 'mconcat' [ rejectBadMethod
+--                        , otherRoute1
+--                        , ...
+--                        ]
+--      ...
+--
+--rejectBadMethod :: 'HttpRoute' m
+--rejectBadMethod =
+--      routeReq $ \req ->
+--          case 'reqMethod' req of
+--            s | s == 'S8.pack' \"GET\" || s == 'S8.pack' \"PUT\" ->
+--                  'mempty'                   {- reject route, falling through
+--                                                      to rest of myRoute -}
+--            _ -> 'routeConst' $ 'resp405' req  {- reject request -}
+-- @
+routeReq :: (HttpReq s -> HttpRoute m s) -> HttpRoute m s
 routeReq fn = HttpRoute $ \req ->
                 let (HttpRoute route) = fn req
                 in route req
 
+
 -- | Route the root directory (/).
-routeTop :: HttpRoute m -> HttpRoute m
+routeTop :: HttpRoute m s -> HttpRoute m s
 routeTop (HttpRoute route) = HttpRoute $ \req ->
                              if null $ reqPathLst req then route req
                              else Nothing
@@ -112,8 +146,8 @@ routeTop (HttpRoute route) = HttpRoute $ \req ->
 -- | Route requests whose \"Host:\" header matches a particular
 -- string.
 routeHost :: String -- ^ String to compare against host (must be lower-case)
-          -> HttpRoute m   -- ^ Target route to follow if host matches
-          -> HttpRoute m
+          -> HttpRoute m s -- ^ Target route to follow if host matches
+          -> HttpRoute m s
 routeHost host (HttpRoute route) = HttpRoute check
     where shost = S8.pack $ map toLower host
           check req | reqHost req /= shost = Nothing
@@ -121,30 +155,22 @@ routeHost host (HttpRoute route) = HttpRoute check
 
 -- | Route based on the method (GET, POST, HEAD, etc.) in a request.
 routeMethod :: String           -- ^ String method should match
-            -> HttpRoute m      -- ^ Target route to take if method matches
-            -> HttpRoute m
+            -> HttpRoute m s    -- ^ Target route to take if method matches
+            -> HttpRoute m s
 routeMethod method (HttpRoute route) = HttpRoute check
     where smethod = S8.pack method
           check req | reqMethod req /= smethod = Nothing
                     | otherwise                = route req
 
 -- | Type alias for the argument of 'routeMap'.
-type HttpMap m = [(String, HttpRoute m)]
+type HttpMap m s = [(String, HttpRoute m s)]
 
 -- | @routeMap@ builds an efficient map out of a list of
--- @(directory_name, 'HttpRoute')@ pairs.  It matches all requests and
--- returns a 404 error if there is a request for a name not present in
--- the map.
-routeMap :: (Monad m) => HttpMap m -> HttpRoute m
-routeMap lst = routeMap' lst `mappend` routeFn (return . resp404)
-
--- | @routeMap'@ is like @routeMap@, but only matches names that exist
--- in the map.  Thus, multiple @routeMap'@ results can be combined
--- with 'mappend'.  By contrast, combining @routeMap@ results with
--- 'mappend' is useless--the first one will match all requests (and
--- return a 404 error for names that do not appear in the map).
-routeMap' :: HttpMap m -> HttpRoute m
-routeMap' lst = HttpRoute check
+-- @(directory_name, 'HttpRoute')@ pairs.  If a name is not in the
+-- map, the request is not matched.  Note that only the next directory
+-- component in the URL is matched.
+routeMap :: HttpMap m s -> HttpRoute m s
+routeMap lst = HttpRoute check
     where
       check req = case reqPathLst req of
                     h:_ -> maybe Nothing
@@ -155,9 +181,14 @@ routeMap' lst = HttpRoute check
       rmap = Map.fromListWithKey nocombine $ map packfirst lst
       nocombine k _ _ = error $ "routeMap: duplicate key for " ++ S8.unpack k
 
+-- | @routeAlwaysMap@ is like @routeMap@, but matches all requests and
+-- returns a 404 error for names that do not appear in the map.
+routeAlwaysMap :: (Monad m) => HttpMap m s -> HttpRoute m s
+routeAlwaysMap lst = routeMap lst `mappend` routeFn (return . resp404)
+
 -- | Routes a specific directory name, like 'routeMap' for a singleton
 -- map.
-routeName :: String -> HttpRoute m -> HttpRoute m
+routeName :: String -> HttpRoute m s -> HttpRoute m s
 routeName name (HttpRoute route) = HttpRoute check
     where sname = S8.pack name
           headok (h:_) | h == sname = True
@@ -167,7 +198,7 @@ routeName name (HttpRoute route) = HttpRoute check
 
 -- | Routes a specific path, like 'routeName', except that the path
 -- can include several directories.
-routePath :: String -> HttpRoute m -> HttpRoute m
+routePath :: String -> HttpRoute m s -> HttpRoute m s
 routePath path route = foldr routeName route dirs
     where dirs = case splitDirectories path of
                    "/":t -> t
@@ -177,7 +208,7 @@ routePath path route = foldr routeName route dirs
 -- front of the 'reqPathParams' list in the 'HttpReq' structure.  This
 -- allows the name to serve as a variable argument to the eventual
 -- handling function.
-routeVar :: HttpRoute m -> HttpRoute m
+routeVar :: HttpRoute m s -> HttpRoute m s
 routeVar (HttpRoute route) = HttpRoute check
     where check req = case reqPathLst req of
                         _:_ -> route $ popPath True req
@@ -210,12 +241,12 @@ mimeTypesI :: (Monad m) =>
               String
            -> Iter S8.ByteString m (String -> S8.ByteString)
 mimeTypesI deftype = do
-  mmap <- Map.fromList <$> foldrI (++) [] ((mimeLine <|> nil) <* eol)
+  mmap <- Map.fromList <$> concatI ((mimeLine <|> nil) <* eol)
   return $ \suffix -> maybe (S8.pack deftype) id $ Map.lookup suffix mmap
     where
       mimeLine = do
         typ <- word
-        foldrI (\a b -> (S8.unpack a, typ):b) [] (space >> word)
+        many $ do space; ext <- word; return (S8.unpack ext, typ)
       word = while1I $ \c -> c > eord ' ' && c <= eord '~'
       space = skipWhile1I $ \c -> c == eord ' ' || c == eord '\t'
       comment = char '#' >> skipWhileI (/= eord '\n')
@@ -257,6 +288,12 @@ defaultFileSystemCalls = FileSystemCalls { fs_stat = liftIO . getFileStatus
           fdToOnum fd = do h <- fdToHandle fd
                            return $ enumHandle h `inumFinally` liftIO (hClose h)
 
+-- | @dirRedir indexFileName@ redirects requests to the URL formed by
+-- appending @\"/\" ++ indexFileName@ to the requested URL.
+dirRedir :: (Monad m) => FilePath -> FilePath -> HttpRoute m s
+dirRedir index _path = routeFn $ \req -> return $
+                       resp301 $ S8.unpack (reqNormalPath req) ++ '/':index
+
 modTimeUTC :: FileStatus -> UTCTime
 modTimeUTC = posixSecondsToUTCTime . realToFrac . modificationTime
 
@@ -267,39 +304,47 @@ modTimeUTC = posixSecondsToUTCTime . realToFrac . modificationTime
 routeFileSys :: (MonadIO m) =>
                 (String -> S8.ByteString)
              -- ^ Map of file suffixes to mime types (see 'mimeTypesI')
-             -> FilePath
-             -- ^ Default file name to append when the request is for
-             -- a directory (e.g., @\"index.html\"@).  Empty string
-             -- results in no directory access.  Do not use @\".\"@ or
-             -- @\"..\"@ or you will cause an infinite redirect cycle.
+             -> (FilePath -> HttpRoute m s)
+             -- ^ Handler to invoke when the URL maps to a directory
+             -- in the file system.  Reasonable options include:
+             --
+             -- * @('const' 'mempty')@ to do nothing, which results in a
+             --   403 forbidden,
+             --
+             -- * @('dirRedir' \"index.html\")@ to redirect directory
+             --   accesses to an index file, and
+             --
+             -- * a recursive invocation such as @(routeFileSys
+             -- typemap . (++ \"/index.html\"))@ to re-route the
+             -- request directly to an index file.
              -> FilePath
              -- ^ Pathname of directory to serve from file system
-             -> HttpRoute m
+             -> HttpRoute m s
 routeFileSys = routeGenFileSys defaultFileSystemCalls
 
 -- | A generalized version of 'routeFileSys' that takes a
 -- 'FileSystemCalls' object and can therefore work outside of the
--- 'MonadIO' monad.
+-- 'MonadIO' monad.  Other than the 'FileSystemCalls' object, the
+-- arguments and their meaning are identical to 'routeFileSys'.
 routeGenFileSys :: (Monad m) =>
                    FileSystemCalls h m
                 -> (String -> S8.ByteString)
+                -> (FilePath -> HttpRoute m s)
                 -> FilePath
-                -> FilePath
-                -> HttpRoute m
+                -> HttpRoute m s
 routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
     where
       dir = if null dir0 then "." else dir0
-      check req = do
+      checkErr req e _ | isDoesNotExistError e = return $ resp404 req
+                       | otherwise             = return $ resp500 (show e)
+      check req = flip catchI (checkErr req) $ do
         let path = dir ++ concatMap (('/' :) . S8.unpack) (reqPathLst req)
-        estat <- tryI $ fs_stat fs path
-        case estat of
-          Right st | isRegularFile st     -> doFile req path st
-                   | not (isDirectory st) -> return $ resp404 req
-                   | null index           -> return $ resp403 req
-                   | otherwise -> return $ resp301 $
-                                  S8.unpack (reqNormalPath req) ++ '/':index
-          Left (e,_ ) | isDoesNotExistError e -> return $ resp404 req
-                      | otherwise             -> return $ resp500 (show e)
+        st <- fs_stat fs path
+        case () of
+          _ | isRegularFile st     -> doFile req path st
+            | not (isDirectory st) -> return $ resp404 req
+            | otherwise -> runHttpRoute
+                           (index path `mappend` routeConst (resp403 req)) req
       doFile req path st
           | reqMethod req == S8.pack "GET"
             && maybe True (< (modTimeUTC st)) (reqIfModifiedSince req) = do
@@ -319,14 +364,14 @@ routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
           | otherwise = return $ resp405 req
           where resp = defaultHttpResp { respChunk = False
                                        , respHeaders = mkHeaders req st }
-                                            
+
       mkHeaders req st =
           [ S8.pack $ "Last-Modified: " ++ (http_fmt_time $ modTimeUTC st)
           , S8.pack $ "Content-Length: " ++ (show $ fileSize st)
           , S8.pack "Content-Type: " `S8.append` typemap (fileExt req) ]
       fileExt req =
-          case reqPathLst req of
-            [] -> []
-            l  -> case takeExtension (S8.unpack $ last l) of [] -> []; _:t -> t
+          drop 1 $ takeExtension $ case reqPathLst req of
+                                     [] -> dir
+                                     l  -> S8.unpack $ last l
 
 

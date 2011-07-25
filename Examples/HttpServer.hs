@@ -56,7 +56,7 @@ mkHttpServer port mctx = do
 
 runHttpServer :: (MonadIO m)
               => HttpServer
-              -> HttpRequestHandler m
+              -> HttpRequestHandler m ()
               -> (Net.SockAddr -> m (Iter L m ()) -> IO (Iter L m ()))
               -> IO ()
 runHttpServer srv handler runConn = forever $ do

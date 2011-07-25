@@ -142,16 +142,16 @@ fixtest2 i = do
 -- defined using 'fixMonadIO'.
 fixIterPure :: (ChunkData t, MonadFix m) =>
                (a -> Iter t m a) -> Iter t m a
-fixIterPure f = IterM $ mfix ff
-    where
-      ff ~(Done a _)  = check $ f a
+fixIterPure f = Iter $ \c ->
+  let ff ~(Done a _)  = check $ runIter (f a) c
       -- Warning: IterF case re-runs function, repeating side effects
-      check (IterF _) = return $ iterF $ \c ->
-                        fixIterPure $ \a -> runIter (f a) c
+      check (IterF _) = return $ IterF $ Iter $ \c' ->
+                        runIter (fixIterPure f) (mappend c c')
       check (IterM m) = m >>= check
-      check iter      = return iter
-
+      check r         = return r
+  in IterM $ mfix ff
 -}
+
 
 --
 -- Some utility functions for things that are made hard by the Haskell
@@ -159,9 +159,7 @@ fixIterPure f = IterM $ mfix ff
 --
 
 -- | @SendRecvString@ is the class of string-like objects that can be
--- used with datagram sockets.  'genSendTo' accepts 'Nothing' as a
--- destination address and then calls the @send@ (rather than
--- @sendto@) system call.
+-- used with datagram sockets.
 class (Show t) => SendRecvString t where
     genRecv     :: Socket -> Int -> IO t
     genSend     :: Socket -> t -> IO ()

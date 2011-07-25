@@ -16,10 +16,10 @@ import Data.IterIO
 filterLines :: (Monad m) =>
                String
             -> Inum L.ByteString [L.ByteString] m a
-filterLines s = mkInum $ do
-                  line <- lineI
-                  return $ if match line then [line] else []
+filterLines s = mkInum loop
     where
+      loop = do line <- lineI
+                if match line then return [line] else return []
       ls = L8.pack s
       match l | L.null l  = False
               | otherwise = L.isPrefixOf ls l || match (L.tail l)
@@ -40,6 +40,7 @@ enumFileCatchError file = enumFile file `inumCatch` enumCatchIO
                   -> IterR () m (IterR t m a)
                   -> Iter () m (IterR t m a)
       enumCatchIO _ = verboseResumeI
+      -- or to avoid the need for a type signature, you could say:
       -- enumCatchIO e = flip const (e :: IOError) verboseResumeI
 
 main :: IO ()
