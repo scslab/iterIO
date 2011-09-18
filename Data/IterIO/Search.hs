@@ -60,9 +60,10 @@ findLongestPrefix mp t = maybe ckprefix (\v1 -> Just (t, v1)) ma
     where
       (ltmap, ma, _) = Map.splitLookup t mp
       (k, v) = Map.findMax ltmap
+      kIsGood = not (Map.null ltmap) && k `LL.isPrefixOf` t
       p = longestCommonPrefix k t
       ckprefix | Map.null mp || LL.null t = Nothing
-               | k `LL.isPrefixOf` t      = Just (k, v)
+               | kIsGood                  = Just (k, v)
                | otherwise                = findLongestPrefix ltmap p
 
 -- | Reads input until it can uniquely determine the longest key in a
