@@ -33,7 +33,7 @@ instance CtlCmd SslC SslConnection
 enumSsl :: (MonadIO m) => SSL.SSL -> Onum L.ByteString m a
 enumSsl ssl = mkInumC id ch codec
     where ch = mkCtl (\SslC -> return $ SslConnection ssl)
-               `consCtl` (socketCtl $ SSL.sslSocket ssl)
+               `consCtl` (maybe noCtl socketCtl $ SSL.sslSocket ssl)
           codec = do buf <- liftIO (SSL.read ssl L.defaultChunkSize)
                      if S.null buf
                        then return L.empty

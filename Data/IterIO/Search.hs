@@ -63,6 +63,7 @@ findLongestPrefix mp t = maybe ckprefix (\v1 -> Just (t, v1)) ma
       kIsGood = not (Map.null ltmap) && k `LL.isPrefixOf` t
       p = longestCommonPrefix k t
       ckprefix | Map.null mp || LL.null t = Nothing
+               -- XXX LL.null t case above is redundant, maybe remove?
                | kIsGood                  = Just (k, v)
                | otherwise                = findLongestPrefix ltmap p
 

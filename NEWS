@@ -1,7 +1,11 @@
 
-* Changes since release 0.1
+* Changes in release 0.2
 
-A few bugs were fixed, including one in ctlCons.
+Updated to compile with HsOpenSSL 0.10.1, which has incompatible
+sslSocket function.
+
+A few bugs were fixed, including one in ctlCons, and another in HTTP
+cookie parsing.
 
 The HTTPReq type is now parameterized by session state.
 
