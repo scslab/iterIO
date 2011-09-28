@@ -717,7 +717,7 @@ combineExpected e _ = Fail e Nothing Nothing
 --    @b@ concurrently as input chunks arrive.  If @a@ throws a parse
 --    error, then the result of executing @b@ is returned.  If @a@
 --    either succeeds or throws an exception that is not a parse
---    error/EOF/'mzero', then the result of running @a@ is returned.
+--    error\/EOF\/'mzero', then the result of running @a@ is returned.
 --
 --  * With @multiParse a b@, if @b@ returns a value, executes a
 --    monadic action via 'lift', or issues a control request via
