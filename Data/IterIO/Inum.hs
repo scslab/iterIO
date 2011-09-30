@@ -23,7 +23,7 @@ module Data.IterIO.Inum
     -- * Enumerator construction monad
     -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM
-    , setCtlHandler, setResidHandler, setAutoEOF, setAutoDone
+    , setCtlHandler, setAutoEOF, setAutoDone
     , addCleanup, withCleanup
     , ifeed, ifeed1, ipipe, irun, irepeat, ipopresid, idone
     ) where
@@ -896,7 +896,6 @@ data InumState tIn tOut m a = InumState {
       insAutoEOF :: !Bool
     , insAutoDone :: !Bool
     , insCtl :: !(CtlHandler (Iter tIn m) tOut m a)
-    , insResid :: !(ResidHandler tIn tOut)
     , insIter :: !(IterR tOut m a)
     , insCleanup :: !(InumM tIn tOut m a ())
     , insCleaning :: !Bool
@@ -907,7 +906,6 @@ defaultInumState = InumState {
                      insAutoEOF = False
                    , insAutoDone = False
                    , insCtl = noCtl
-                   , insResid = id
                    , insIter = IterF $ Iter $ const $ error "insIter"
                    , insCleanup = return ()
                    , insCleaning = False
@@ -934,13 +932,6 @@ setCtlHandler :: (ChunkData tIn, Monad m) =>
                  CtlHandler (Iter tIn m) tOut m a
               -> InumM tIn tOut m a ()
 setCtlHandler ch = imodify $ \s -> s { insCtl = ch }
-
--- | Set the handler an 'Inum' should use for pulling up residual
--- data at the end of an 'InumM' computation.
-setResidHandler :: (ChunkData tIn, Monad m) =>
-                   ResidHandler tIn tOut
-                -> InumM tIn tOut m a ()
-setResidHandler rh = imodify $ \s -> s { insResid = rh }
 
 -- | Set the /AutoEOF/ flag within an 'InumM' computation.  If this
 -- flag is 'True', handle 'IterEOF' exceptions like a normal but
@@ -1010,15 +1001,9 @@ runInumM inumm s0 = do
   (err1, s1) <- getErr =<< runIterStateT inumm s0
   (err2, s2) <- getErr =<< runIterStateT (insCleanup s1)
                                  s1 { insAutoDone = False, insCleaning = True }
-  let r0 = insIter s2
-  r <- if doResid r0
-       then withResidHandler (insResid s2) (getResid r0) $ return . setResid r0
-       else return r0
+  let r = insIter s2
   Iter $ maybe (Done r) (\e -> Fail e (Just r) . Just) $ mplus err2 err1
     where
-      doResid (Done _ _) = True
-      doResid (Fail _ _ (Just _)) = True
-      doResid _ = False
       getErr (Fail (IterEOFErr _) _ _, s) | insAutoEOF s = return (Nothing, s)
       getErr (Fail e _ _, s)                             = return (Just e, s)
       getErr (_, s)                                      = return (Nothing, s)
@@ -1170,18 +1155,18 @@ inumTee :: (ChunkData t, Monad m) =>
            Iter t m b -> Inum t t m a
 inumTee tee0 iter0 = runInumM (loop tee0)
                      defaultInumState { insIter = IterF iter0
-                                      , insCtl = passCtl pullupResid
-                                      , insResid = pullupResid }
+                                      , insCtl = passCtl pullupResid }
     where
       loop tee = do
         c <- Iter $ \c'@(Chunk _ eof) -> Done c' (Chunk mempty eof)
         liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
       feed (Chunk d False) (IterF tee) = do
         done <- ifeed d `onExceptionI` liftI (runI tee)
-        if done then liftI (runI tee) >> return () else loop tee
+        if done then liftI (runI tee) >> ipopresid >>= ungetI else loop tee
       feed (Chunk d True) (IterF _) = ifeed d >> return ()
       feed _ (Fail r _ _) = Iter $ Fail r Nothing . Just
       feed (Chunk d eof) (Done _ _) = do
         done <- ifeed d
         unless (done || eof) $ ipipe inumNop >> return ()
+        ipopresid >>= ungetI
       feed _ _ = error "inumTee"
