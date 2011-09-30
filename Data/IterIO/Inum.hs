@@ -1162,8 +1162,7 @@ idone = setAutoEOF True >> throwEOFI "idone"
 -- @'handleI'@, causing @stderr@ to be closed.)
 inumTee :: (ChunkData t, Monad m) =>
            Iter t m b -> Inum t t m a
-inumTee tee0 iter0 = runInumM (loop tee0)
-                     nopInumState { insIter = IterF iter0 }
+inumTee tee0 iter0 = runInumM (loop tee0) nopInumState { insIter = IterF iter0 }
     where loop tee = do
             c <- Iter $ \c'@(Chunk _ eof) -> Done c' (Chunk mempty eof)
             liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
