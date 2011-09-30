@@ -19,6 +19,7 @@ module Data.IterIO.Inum
     , runIterM, runIterMC, runInum
     -- * Some basic Inums
     , inumNop, inumNull, inumPure, enumPure, inumRepeat
+    , inumTee
     -- * Enumerator construction monad
     -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM
@@ -1128,3 +1129,34 @@ ipopresid = do
 -- @'throwI' ...@ for an unsuccessful exit.)
 idone :: (ChunkData tIn, Monad m) => InumM tIn tOut m a b
 idone = setAutoEOF True >> throwEOFI "idone"
+
+-- | An 'Inum' that acts like 'inumNop', except that before passing
+-- data on, it feeds a copy to a \"tee\" 'Iter' (by analogy with the
+-- Unix @tee@ utility), which may, for instance, transform and log the
+-- data.
+--
+-- The tee `Iter`'s return value is ignored.  If the tee 'Iter'
+-- returns before an EOF is received and before the target 'Iter' has
+-- finished processing input, then @inumTee@ will continue to pass
+-- data to the target 'Iter'.  However, if the tee 'Iter' fails, then
+-- this will cause @inumTee@ to fail immediately.
+--
+-- As an example, one could implement @'inumStderr'@ (from
+-- "Data.IterIO.ListLike") as:
+--
+-- > inumStderr = inumTee $ handleI stderr
+--
+inumTee :: (ChunkData t, Monad m) =>
+           Iter t m b -> Inum t t m a
+inumTee tee0 = mkInumM $ setCtlHandler (passCtl pullupResid) >> loop tee0
+    where
+      loop tee = do
+        c <- Iter $ \c'@(Chunk _ eof) -> Done c' (Chunk mempty eof)
+        liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
+      feed (Chunk d eof) (IterF tee) = do
+        done <- ifeed d `onExceptionI` liftI (runI tee)
+        unless (done || eof) $ loop tee
+      feed _ (Fail r _ _) = Iter $ Fail r Nothing . Just
+      feed (Chunk d eof) (Done _ _) = do
+        done <- ifeed d
+        unless (done || eof) $ ipipe inumNop >> return ()
