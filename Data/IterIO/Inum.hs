@@ -911,6 +911,15 @@ defaultInumState = InumState {
                    , insCleaning = False
                    }
 
+-- | An InumState that passes all control messages up and pulls up all
+-- residual data at the end.  Requires the input and output types to
+-- be the same.
+noopInumState :: (ChunkData t, Monad m) => InumState t t m a
+noopInumState = s
+    where s = (defaultInumState `asTypeOf` s) {
+                insCtl = passCtl pullupResid
+              , insCleanup = ipopresid >>= ungetI }
+
 -- | A monad in which to define the actions of an @'Inum' tIn tOut m
 -- a@.  Note @InumM tIn tOut m a@ is a 'Monad' of kind @* -> *@, where
 -- @a@ is the (almost always parametric) return type of the 'Inum'.  A
@@ -1154,19 +1163,16 @@ idone = setAutoEOF True >> throwEOFI "idone"
 inumTee :: (ChunkData t, Monad m) =>
            Iter t m b -> Inum t t m a
 inumTee tee0 iter0 = runInumM (loop tee0)
-                     defaultInumState { insIter = IterF iter0
-                                      , insCtl = passCtl pullupResid }
-    where
-      loop tee = do
-        c <- Iter $ \c'@(Chunk _ eof) -> Done c' (Chunk mempty eof)
-        liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
-      feed (Chunk d False) (IterF tee) = do
-        done <- ifeed d `onExceptionI` liftI (runI tee)
-        if done then liftI (runI tee) >> ipopresid >>= ungetI else loop tee
-      feed (Chunk d True) (IterF _) = ifeed d >> return ()
-      feed _ (Fail r _ _) = Iter $ Fail r Nothing . Just
-      feed (Chunk d eof) (Done _ _) = do
-        done <- ifeed d
-        unless (done || eof) $ ipipe inumNop >> return ()
-        ipopresid >>= ungetI
-      feed _ _ = error "inumTee"
+                     noopInumState { insIter = IterF iter0 }
+    where loop tee = do
+            c <- Iter $ \c'@(Chunk _ eof) -> Done c' (Chunk mempty eof)
+            liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
+          feed (Chunk d False) (IterF tee) = do
+            done <- ifeed d `onExceptionI` liftI (runI tee)
+            if done then liftI (runI tee) >> return () else loop tee
+          feed (Chunk d True) (IterF _) = ifeed d >> return ()
+          feed _ (Fail r _ c) = reRunIter $ Fail r Nothing c
+          feed (Chunk d eof) (Done _ _) = do
+            done <- ifeed d
+            unless (done || eof) $ ipipe inumNop >> return ()
+          feed _ _ = error "inumTee"
