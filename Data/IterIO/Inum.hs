@@ -1153,10 +1153,12 @@ inumTee tee0 = mkInumM $ setCtlHandler (passCtl pullupResid) >> loop tee0
       loop tee = do
         c <- Iter $ \c'@(Chunk _ eof) -> Done c' (Chunk mempty eof)
         liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
-      feed (Chunk d eof) (IterF tee) = do
+      feed (Chunk d False) (IterF tee) = do
         done <- ifeed d `onExceptionI` liftI (runI tee)
-        unless (done || eof) $ loop tee
+        if done then liftI (runI tee) >> return () else loop tee
+      feed (Chunk d True) (IterF _) = ifeed d >> return ()
       feed _ (Fail r _ _) = Iter $ Fail r Nothing . Just
       feed (Chunk d eof) (Done _ _) = do
         done <- ifeed d
         unless (done || eof) $ ipipe inumNop >> return ()
+      feed _ _ = error "inumTee"
