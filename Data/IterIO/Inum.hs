@@ -914,8 +914,8 @@ defaultInumState = InumState {
 -- | An InumState that passes all control messages up and pulls up all
 -- residual data at the end.  Requires the input and output types to
 -- be the same.
-noopInumState :: (ChunkData t, Monad m) => InumState t t m a
-noopInumState = s
+nopInumState :: (ChunkData t, Monad m) => InumState t t m a
+nopInumState = s
     where s = (defaultInumState `asTypeOf` s) {
                 insCtl = passCtl pullupResid
               , insCleanup = ipopresid >>= ungetI }
@@ -1163,7 +1163,7 @@ idone = setAutoEOF True >> throwEOFI "idone"
 inumTee :: (ChunkData t, Monad m) =>
            Iter t m b -> Inum t t m a
 inumTee tee0 iter0 = runInumM (loop tee0)
-                     noopInumState { insIter = IterF iter0 }
+                     nopInumState { insIter = IterF iter0 }
     where loop tee = do
             c <- Iter $ \c'@(Chunk _ eof) -> Done c' (Chunk mempty eof)
             liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
