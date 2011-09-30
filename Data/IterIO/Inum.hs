@@ -1141,11 +1141,14 @@ idone = setAutoEOF True >> throwEOFI "idone"
 -- data to the target 'Iter'.  However, if the tee 'Iter' fails, then
 -- this will cause @inumTee@ to fail immediately.
 --
--- As an example, one could implement @'inumStderr'@ (from
--- "Data.IterIO.ListLike") as:
+-- As an example, one could implement something close to
+-- @'inumStderr'@ (from "Data.IterIO.ListLike") as follows:
 --
 -- > inumStderr = inumTee $ handleI stderr
 --
+-- (Except note that the real @'inumStderr'@ does not close its file
+-- descriptor, while the above implementation will send an EOF to
+-- @'handleI'@, causing @stderr@ to be closed.)
 inumTee :: (ChunkData t, Monad m) =>
            Iter t m b -> Inum t t m a
 inumTee tee0 = mkInumM $ setCtlHandler (passCtl pullupResid) >> loop tee0
