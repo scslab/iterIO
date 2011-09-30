@@ -1162,13 +1162,13 @@ idone = setAutoEOF True >> throwEOFI "idone"
 -- @'handleI'@, causing @stderr@ to be closed.)
 inumTee :: (ChunkData t, Monad m) =>
            Iter t m b -> Inum t t m a
-inumTee tee0 iter0 = runInumM (loop tee0) nopInumState { insIter = IterF iter0 }
-    where loop tee = do
-            c <- Iter $ \c'@(Chunk _ eof) -> Done c' (Chunk mempty eof)
-            liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
+inumTee tee0 iter0 = runInumM (chunk0I >>= loop tee0)
+                     nopInumState { insIter = IterF iter0 }
+    where chunk0I = Iter $ \c@(Chunk _ eof) -> Done c (Chunk mempty eof)
+          loop tee c = liftI (runIterMC (passCtl pullupResid) tee c) >>= feed c
           feed (Chunk d False) (IterF tee) = do
             done <- ifeed d `onExceptionI` liftI (runI tee)
-            if done then liftI (runI tee) >> return () else loop tee
+            if done then liftI (runI tee) >> return () else chunkI >>= loop tee
           feed (Chunk d True) (IterF _) = ifeed d >> return ()
           feed _ (Fail r _ c) = reRunIter $ Fail r Nothing c
           feed (Chunk d eof) (Done _ _) = do
