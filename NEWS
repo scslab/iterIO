@@ -1,4 +1,8 @@
 
+Fixed multiParse to avoid buffering when second 'Iter' fails
+
+Added inumTee function
+
 * Changes in release 0.2
 
 Updated to compile with HsOpenSSL 0.10.1, which has incompatible

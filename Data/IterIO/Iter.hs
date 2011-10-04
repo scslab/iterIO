@@ -791,6 +791,8 @@ multiParse a b = Iter $ \c -> check (runIter a c) (runIter b c)
     where
       check ra@(Done _ _) _ = ra
       check (IterF ia) (IterF ib) = IterF $ multiParse ia ib
+      check (IterF ia) (Fail e ma _) = IterF $ multiParse ia
+                                       (Iter $ const $ Fail e ma Nothing)
       check (IterF ia) rb =
           IterF $ onDoneInput (\ra c -> check ra (runIterR rb c)) ia
       check ra rb = stepR ra (flip check rb) $ case ra of
