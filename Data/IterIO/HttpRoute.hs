@@ -220,7 +220,7 @@ routeVar (HttpRoute route) = HttpRoute check
 
 -- | Parses @mime.types@ file data.  Returns a function mapping file
 -- suffixes to mime types.  The argument is a default mime type for
--- suffixes to do not match any in the mime.types data.  (Reasonable
+-- suffixes that do not match any in the mime.types data.  (Reasonable
 -- defaults might be @\"text\/html\"@, @\"text\/plain\"@, or, more
 -- pedantically but less usefully, @\"application\/octet-stream\"@.)
 --
