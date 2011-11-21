@@ -1,4 +1,6 @@
 
+Added the Codec type and runCodec, runCodecC functions.
+
 Fixed multiParse to avoid buffering when second 'Iter' fails
 
 Added inumTee function

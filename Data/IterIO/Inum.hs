@@ -20,6 +20,8 @@ module Data.IterIO.Inum
     -- * Some basic Inums
     , inumNop, inumNull, inumPure, enumPure, inumRepeat
     , inumTee
+    -- * Enumerator construction from Codecs
+    , Codec, runCodec, runCodecC
     -- * Enumerator construction monad
     -- $mkInumMIntro
     , InumM, mkInumM, mkInumAutoM
@@ -734,6 +736,53 @@ inumRepeat inum iter0 = do
     (False, Right (IterF iter)) -> inumRepeat inum iter
     (_, Right r) -> return r
     (_, Left r) -> reRunIter r
+
+--
+-- Codec-based Inum creation
+--
+
+-- | A @Codec@ produces some input to feed to an 'Iter', and
+-- optionally returns an 'Inum' that will produce the rest of the
+-- input.  The funciton 'runCodec' can be used to build an 'Inum' out
+-- of a 'Codec'.  Using 'runCodec' is much simpler than 'mkInumM', but
+-- more expressive than 'mkInum'.  For example, a possible
+-- implementation of 'mkInum' would be:
+--
+-- @
+--  mkInum :: ('ChunkData' tIn, 'ChunkData' tOut, 'Monad' m) =>
+--            'Iter' tIn m tOut -> 'Inum' tIn tOut m a
+--  mkInum trans = inum
+--      where inum = 'runCodec' 'id' $
+--                   'tryEOFI' trans >>= 'maybe' (return (mempty, Nothing)) doinput
+--            doinput input = do
+--              eof <- if null input then return False else 'atEOFI'
+--              return (input, if eof then Nothing else Just inum)
+-- @
+type Codec tIn tOut m a = Iter tIn m (tOut, Maybe (Inum tIn tOut m a))
+
+-- | A generalized version of 'runCodec' that allows a 'CtlHandler' to
+-- be specified.
+--
+-- @
+--   runCodec adj = runCodecC adj (passCtl adj)
+-- @
+runCodecC :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+             ResidHandler tIn tOut
+          -> CtlHandler (Iter tIn m) tOut m a
+          -> Codec tIn tOut m a
+          -> Inum tIn tOut m a
+runCodecC adj ch codec iter = do
+  (tOut, minum) <- codec
+  r <- runIterMC ch iter $ chunk tOut
+  case (minum, r) of
+    (Just inum, IterF i) -> inum i
+    _ | isIterActive r -> return r
+    _ -> withResidHandler adj (getResid r) $ return . setResid r
+
+-- | Build an 'Inum' from a 'Codec'.
+runCodec :: (ChunkData tIn, ChunkData tOut, Monad m) =>
+            ResidHandler tIn tOut -> Codec tIn tOut m a -> Inum tIn tOut m a
+runCodec adj = runCodecC adj (passCtl adj)
 
 --
 -- Complex Inum creation
