@@ -1,3 +1,7 @@
+{-# LANGUAGE CPP #-}
+#if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 702)
+{-# LANGUAGE Safe #-}
+#endif
 
 {- |
 
@@ -121,7 +125,7 @@ import Data.IterIO.ListLike
 
 {- $Tutorial
 
-#tutorial#
+ #tutorial#
 
 The iterIO library performs IO by hooking up sources of data, called
 /enumerators/, to data sinks, called /iteratees/, in a manner

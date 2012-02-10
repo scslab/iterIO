@@ -75,7 +75,7 @@ Library
                  time >= 1.1.4 && < 2,
                  unix >= 2.4 && < 3
 
-  ghc-options: -Wall
+  ghc-options: -Wall -pgmP cpphs -optP --cpp
   Exposed-modules:
     Data.IterIO,
     Data.IterIO.Atto,

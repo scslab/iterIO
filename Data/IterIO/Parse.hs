@@ -1,4 +1,7 @@
-
+{-# LANGUAGE CPP #-}
+#if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 702)
+{-# LANGUAGE Safe #-}
+#endif
 -- | This module contains functions to help parsing input from within
 -- 'Iter's.  Many of the operators are either imported from
 -- "Data.Applicative" or inspired by "Text.Parsec".
