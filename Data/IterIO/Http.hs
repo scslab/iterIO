@@ -11,6 +11,7 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , inumToChunks, inumFromChunks
                         , http_fmt_time, dateI
                         , FormField(..), foldForm
+                        , getRequest,  enumHttpReq 
                         -- , urlencodedFormI, multipartI, inumMultipart
                         -- , foldUrlencoded, foldMultipart, foldQuery
                         -- * HTTP Response support
@@ -1214,6 +1215,56 @@ inumHttpServer server = mkInumM loop
       fatal e@(SomeException _) = do
         liftI $ srvLogger server $ "Reply error: " ++ show e
         return ()
+
+--
+-- HTTP Client support
+--
+
+-- | Create a simple @GET@ request.
+getRequest :: Monad m => L -> m (L, HttpReq ())
+getRequest urlString = do
+  (scheme, host, mport, path, query) <- (enumPure urlString |$ uri)
+  return (lazyfy scheme 
+         , defaultHttpReq { reqMethod = S8.pack "GET"
+                          , reqPath = path
+                          , reqPathLst = path2list path
+                          , reqQuery = query
+                          , reqHost = host
+                          , reqPort = mport
+                          , reqVers = (1,1)
+                          })
+
+-- | Enumerate a request.
+enumHttpReq :: (Monad m)
+        => L -> HttpReq s -> Onum L m a
+enumHttpReq scheme req = mkInumM $ do
+  ifeed . lazyfy $ reqMethod req
+  ifeed sp
+  ifeed $ reqURI scheme req
+  ifeed sp
+  let (major, minor) = reqVers req
+  ifeed $ L8.pack $ "HTTP/" ++ show major ++ "." ++ show minor
+  ifeed $ L8.pack "\r\n"
+  ifeed $ L8.pack "\r\n"
+    where sp = L8.pack " "
+
+-- | Convert a strict ByteString to a lazy ByteString
+lazyfy :: S -> L
+lazyfy = L.pack . S.unpack
+
+-- | Given a sheme and request, creat the corresponding URI.
+reqURI :: L -> HttpReq s -> L
+reqURI scheme req = L8.concat
+  [ scheme
+  , L8.pack "://"
+  , lazyfy $ reqHost req
+  , maybe L.empty (L8.pack . (":"++) .  show) $ reqPort req
+  , lazyfy $ reqNormalPath req
+  , let q = reqQuery req
+    in if S.null q
+         then L.empty
+         else L8.append (L8.pack "?") (lazyfy q)
+  ]
 
 
 {-
