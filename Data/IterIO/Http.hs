@@ -53,7 +53,7 @@ import Data.List
 import Data.Time
 import Data.Typeable
 import Data.Word
-import System.Locale (defaultTimeLocale, rfc822DateFormat)
+import System.Locale (defaultTimeLocale)
 import System.IO
 import Text.Printf
 
@@ -946,7 +946,7 @@ stat501 = mkStat 501 "Not Implemented"
 data HttpResp m = HttpResp {
       respStatus :: !HttpStatus
     -- ^ The response status.
-    , respHeaders :: ![S.ByteString]
+    , respHeaders :: ![(S.ByteString, S.ByteString)]
     -- ^ Headers to send back
     , respChunk :: !Bool
     -- ^ True if the message body should be passed through
@@ -961,7 +961,7 @@ data HttpResp m = HttpResp {
     -- not contain a body.
     }
 
-respAddHeader :: S.ByteString -> HttpResp m -> HttpResp m
+respAddHeader :: (S.ByteString, S.ByteString) -> HttpResp m -> HttpResp m
 respAddHeader hdr resp = resp { respHeaders = hdr : respHeaders resp }
 
 instance Show (HttpResp m) where
@@ -991,8 +991,8 @@ mkHtmlResp :: (Monad m) =>
            -> HttpResp m
 mkHtmlResp stat html = resp
     where resp0 = mkHttpHead stat `asTypeOf` resp
-          ctype = S8.pack "Content-Type: text/html"
-          len = S8.pack $ "Content-Length: " ++ show (L8.length html)
+          ctype = (S8.pack "Content-Type", S8.pack"text/html")
+          len   = (S8.pack "Content-Length", S8.pack $ show (L8.length html))
           resp  = resp0 { respHeaders = respHeaders resp0 ++ [ctype, len]
                         , respBody = inumPure html
                         }
@@ -1012,8 +1012,8 @@ mkContentLenResp stat ctype body =
            , respChunk = False
            , respBody = inumPure body }
  where
-  contentType = S8.pack $ "Content-Type: " ++ ctype
-  contentLength = S8.pack $ "Content-Length: " ++ show (L8.length body)
+  contentType = (S8.pack "Content-Type", S8.pack ctype)
+  contentLength = (S8.pack "Content-Length", S8.pack . show .  L8.length $ body)
 
 -- | Make an 'HttpResp' of an arbitrary content-type based on an
 -- 'Onum' that will dynamically generate the message body.  Since the
@@ -1032,7 +1032,7 @@ mkOnumResp stat ctype body =
            , respChunk = True
            , respBody = body }
  where
-  contentType = S8.pack $ "Content-Type: " ++ ctype
+  contentType = (S8.pack "Content-Type", S8.pack ctype)
 
 htmlEscapeChar :: Char -> Maybe String
 htmlEscapeChar '<'  = Just "&lt;"
@@ -1053,7 +1053,7 @@ htmlEscape str = L8.unfoldr next (str, "")
 -- | Generate a 301 (redirect) response.
 resp301 :: (Monad m) => String -> HttpResp m
 resp301 target =
-    respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat301 html
+    respAddHeader (S8.pack "Location", S8.pack target) $ mkHtmlResp stat301 html
     where html = L8.concat
                  [L8.pack
                   "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
@@ -1068,7 +1068,7 @@ resp301 target =
 -- | Generate a 303 (see other) response.
 resp303 :: (Monad m) => String -> HttpResp m
 resp303 target =
-    respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat303 html
+    respAddHeader (S8.pack "Location", S8.pack target) $ mkHtmlResp stat303 html
     where html = L8.concat
                  [L8.pack
                   "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
@@ -1144,19 +1144,19 @@ resp500 msg = mkHtmlResp stat500 html
 -- | Format and enumerate a response header and body.
 enumHttpResp :: (Monad m) =>
                 HttpResp m
-             -> Maybe UTCTime   -- ^ Time for @Date:@ header (if desired)
              -> Onum L.ByteString m ()
-enumHttpResp resp mdate = inumPure fmtresp `cat` (respBody resp |. maybeChunk)
+enumHttpResp resp = inumPure fmtresp `cat` (respBody resp |. maybeChunk)
     where
-      fmtresp = L.append (fmtStat $ respStatus resp) hdrs
-      hdrs = foldr (L.append . hdr) (L8.pack "\r\n") $
-             (if respChunk resp
-              then ((S8.pack "Transfer-Encoding: chunked") :)
-              else id) $
-             (maybe id (\t -> (S8.pack ("Date: " ++ http_fmt_time t) :)) mdate)
-             (respHeaders resp)
-      hdr h = L.fromChunks [h, S8.pack "\r\n"]
+      fmtresp = L.append (fmtStat $ respStatus resp) hdrsL
+      hdrsS = if respChunk resp
+                then (transferEncoding, S8.pack "chunked") :
+                     (filter ((/= transferEncoding) . fst) $ respHeaders resp)
+                else  respHeaders resp
+      hdrsL = (L.concat $ map mkHeader hdrsS) `L8.append` L8.pack "\r\n"
       maybeChunk = if respChunk resp then inumToChunks else inumNop
+      mkHeader (k, v) = lazyfy k `L8.append` L8.pack ": "
+                                 `L8.append` lazyfy v `L8.append` L8.pack "\r\n"
+      transferEncoding = S8.pack "Transfer-Encoding"
 
 -- | Given the headers of an HTTP request, provides an iteratee that
 -- will process the request body (if any) and return a response.
@@ -1205,7 +1205,8 @@ inumHttpServer server = mkInumM loop
         resp <- liftI $ inumHttpBody req .|
                 (catchI handler errHandler <* nullI)
         now <- liftI $ srvDate server
-        tryI (irun $ enumHttpResp resp now) >>=
+        let respWithDate = maybe resp (addDate resp) now
+        tryI (irun $ enumHttpResp respWithDate) >>=
              either (fatal . fst) (const loop)
       errHandler e@(SomeException _) _ = do
         srvLogger server $ "Response error: " ++ show e
@@ -1213,6 +1214,8 @@ inumHttpServer server = mkInumM loop
       fatal e@(SomeException _) = do
         liftI $ srvLogger server $ "Reply error: " ++ show e
         return ()
+      addDate resp t = respAddHeader (S8.pack "Date"
+                                     , S8.pack . http_fmt_time $ t) resp
 
 --
 -- HTTP Client support
@@ -1303,8 +1306,8 @@ mkHttpReqHeaders req = L.concat . filter (/=L.empty) $
         --
         ifModifiedSinceHeader =
           mkHeader (S8.pack "If-Modified-Since"
-                   , maybe S.empty (S8.pack . showT) $ reqIfModifiedSince req)
-        showT = formatTime defaultTimeLocale rfc822DateFormat
+                   , maybe S.empty (S8.pack . http_fmt_time)
+                                     $ reqIfModifiedSince req)
         --
         cookieHeader =
           mkHeader (S8.pack "Cookie"
@@ -1344,11 +1347,10 @@ httpRespI = do
   crlf
   body <- data0I
   return HttpResp { respStatus  = stat
-                  , respHeaders = map unMkHeader hdrs'
+                  , respHeaders = hdrs'
                   , respChunk   = chunked
                   , respBody    = inumPure body }
-    where unMkHeader (k,v) = k `S8.append` S8.singleton ':' `S8.append` v
-          isChunked v = enumPure v |$ (cI <|> return False)
+    where isChunked v = enumPure v |$ (cI <|> return False)
           cI = do optionalI spaces
                   match $ L8.pack "chunked"
                   optionalI spaces

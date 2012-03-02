@@ -74,7 +74,7 @@ route = mconcat
                     , ("favicon.ico"
                       -- serve /favicon.ico from file ./static/favicon.ico,
                       -- but tell browser to cache it for 1 day
-                      , addHeader "Cache-Control: max-age=86400" $
+                      , addHeader ("Cache-Control", "max-age=86400") $
                                   routeFS "static/favicon.ico")
                     ]
         , routePath cabal_dir $ routeFS cabal_dir
