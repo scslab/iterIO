@@ -66,7 +66,7 @@ mkHttpClient host port ctx = withSocket $ \s -> do
  where withSocket action = do
          s <- Net.socket Net.AF_INET Net.Stream 6
          catchIO (action s) (\e -> Net.sClose s >> ioError e)
-       getHostAddr h = do
+       getHostAddr h = 
          catchIO (Net.inet_addr h) $ \_ -> do
            h' <- getHostByName_safe h
            case Net.hostAddresses h' of
@@ -91,7 +91,7 @@ simpleHttp urlString ctx = do
     where defaultPort s | s == S8.pack "http"  = return 80
                         | s == S8.pack "https" = return 443
                         | otherwise = throwIO . userError $
-                                        "Unrecognized scheme" ++ (S8.unpack s)
+                                        "Unrecognized scheme" ++ S8.unpack s
 
 -- | Catch 'IOException's
 catchIO :: IO a -> (IOException -> IO a) -> IO a

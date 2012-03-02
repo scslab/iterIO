@@ -113,7 +113,7 @@ text_except :: (Monad m) => String -> Iter L m L
 text_except except = concat1I (while1I ok <|> lws)
     where
       except' = fmap c2w except
-      ok c = c >= 0x20 && c < 0x7f && not (c `elem` except')
+      ok c = c >= 0x20 && c < 0x7f && c `notElem` except'
 
 -- | Parse one hex digit and return its value from 0-15.
 hex :: (Monad m) => Iter L m Int
@@ -146,7 +146,7 @@ token' = while1I (\c -> c < 127 && tokenTab ! c) <?> "token"
     where
       tokenTab :: UArray Word8 Bool
       tokenTab = listArray (0,127) $ fmap isTokenChar [0..127]
-      isTokenChar c = c > 0x20 && c < 0x7f && not (elem (chr c) separators)
+      isTokenChar c = c > 0x20 && c < 0x7f && chr c `notElem` separators
       separators = "()<>@,;:\\\"/[]?={} \t\177"
 
 -- | Percent-decode input for as long as the non percent-escaped
@@ -590,11 +590,9 @@ any_hdr req = do
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
   case Map.lookup field request_headers of
     Nothing -> return req'
-    Just f  -> do
-      r <- inumPure (L.fromChunks [val]) .|$
-               (f req' <* (optionalI spaces >> eofI)
-                      <?> (S8.unpack field ++ " header"))
-      return r
+    Just f  -> inumPure (L.fromChunks [val]) .|$
+                  (f req' <* (optionalI spaces >> eofI)
+                           <?> (S8.unpack field ++ " header"))
 
 -- | Parse an HTTP header, returning an 'HttpReq' data structure.
 httpReqI :: Monad m => Iter L.ByteString m (HttpReq ())
@@ -629,7 +627,7 @@ inumToChunks = mkInumM loop
 
 -- | An HTTP Chunk decoder (as specified by RFC 2616).
 inumFromChunks :: (Monad m) => Inum L.ByteString L.ByteString m a
-inumFromChunks = mkInumM $ getchunk
+inumFromChunks = mkInumM getchunk
     where
       osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
       chunk_ext_val = do char '='; osp; token <|> quoted_string; osp
@@ -655,10 +653,7 @@ inumHttpBody req =
       enc -> inumFromChunks |. tcInum enc
     where
       hasclen = isJust $ reqContentLength req
-      tcInum e 
-          --- | h == S8.pack "gzip"     = inumGunzip |. tcfold t
-          | otherwise = mkInum $
-                        fail $ "unknown Transfer-Coding " ++ chunkShow e
+      tcInum e = mkInum $ fail $ "unknown Transfer-Coding " ++ chunkShow e
 
 {-
 -- | This 'Inum' reads to the end of an HTTP message body (and not
@@ -863,7 +858,7 @@ reqBoundary req = case reqContentType req of
                                           lookup (S8.pack "boundary") parms
                     _ -> Nothing
 
-multipartI :: (Monad m) => HttpReq s -> Iter L m (Maybe (FormField))
+multipartI :: (Monad m) => HttpReq s -> Iter L m (Maybe FormField)
 multipartI req = case reqBoundary req of
                    Just b  -> findpart $ S8.pack "--" `S8.append` b
                    Nothing -> return Nothing
@@ -884,7 +879,7 @@ multipartI req = case reqBoundary req of
       hdrs <- many hdr_field_val
       crlf
       return FormField {
-                   ffName = maybe S.empty id $ lookup (S8.pack "name") parms
+                   ffName = fromMaybe S.empty $ lookup (S8.pack "name") parms
                  , ffParams = parms
                  , ffHeaders = cdhdr:hdrs
                  }
@@ -1294,8 +1289,8 @@ mkHttpReqHeaders req = L.concat . filter (/=L.empty) $
   where mkHeader (k,v) =
           if S.null v
             then L.empty
-            else (lazyfy k) `L8.append` (L8.pack ": ")
-                            `L8.append` (lazyfy v) `L8.append` (L8.pack "\r\n")
+            else lazyfy k `L8.append` L8.pack ": "
+                          `L8.append` lazyfy v `L8.append` L8.pack "\r\n"
         --
         hostHeader = mkHeader (S8.pack "Host", reqHost req)
         --
@@ -1314,7 +1309,7 @@ mkHttpReqHeaders req = L.concat . filter (/=L.empty) $
         cookieHeader =
           mkHeader (S8.pack "Cookie"
                    , S8.intercalate (S8.singleton ';') $ map p $ reqCookies req)
-        p (k, v) = k `S8.append` (S8.singleton '=') `S8.append` v
+        p (k, v) = k `S8.append` S8.singleton '=' `S8.append` v
         --
         contentTypeHeader =
           mkHeader (S8.pack "Content-Type"
@@ -1325,7 +1320,7 @@ mkHttpReqHeaders req = L.concat . filter (/=L.empty) $
         allHeaders = map mkHeader $ reqHeaders req
 
 -- Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
-httpStatusI :: (Monad m) => Iter L m (HttpStatus)
+httpStatusI :: (Monad m) => Iter L m HttpStatus
 httpStatusI = do
   _ <- hTTPvers
   spaces
@@ -1352,7 +1347,7 @@ httpRespI = do
                   , respHeaders = map unMkHeader hdrs'
                   , respChunk   = chunked
                   , respBody    = inumPure body }
-    where unMkHeader (k,v) = k `S8.append` (S8.singleton ':') `S8.append` v
+    where unMkHeader (k,v) = k `S8.append` S8.singleton ':' `S8.append` v
           isChunked v = enumPure v |$ (cI <|> return False)
           cI = do optionalI spaces
                   match $ L8.pack "chunked"
