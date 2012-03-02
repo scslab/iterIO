@@ -1,7 +1,7 @@
--- {-# LANGUAGE CPP #-}
--- #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 702)
--- {-# LANGUAGE Trustworthy #-}
--- #endif
+{-# LANGUAGE CPP #-}
+#if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 702)
+{-# LANGUAGE Trustworthy #-}
+#endif
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
