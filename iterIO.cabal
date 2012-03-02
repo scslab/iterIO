@@ -82,6 +82,7 @@ Library
     Data.IterIO.Iter,
     Data.IterIO.Extra,
     Data.IterIO.Http,
+    Data.IterIO.HttpClient,
     Data.IterIO.HttpRoute,
     Data.IterIO.Inum,
     Data.IterIO.ListLike,
