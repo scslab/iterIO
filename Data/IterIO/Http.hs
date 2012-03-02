@@ -19,7 +19,7 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , stat100, stat200, stat301, stat302, stat303, stat304
                         , stat400, stat401, stat403, stat404, stat405
                         , stat500, stat501
-                        , HttpResp(..), defaultHttpResp
+                        , HttpResp(..), defaultHttpResp, respAddHeader 
                         , mkHttpHead, mkHtmlResp, mkContentLenResp, mkOnumResp
                         , resp301, resp303, resp403, resp404, resp405, resp500
                         , enumHttpResp, httpRespI 
@@ -961,6 +961,7 @@ data HttpResp m = HttpResp {
     -- not contain a body.
     }
 
+-- | Add header to the HTTP response.
 respAddHeader :: (S.ByteString, S.ByteString) -> HttpResp m -> HttpResp m
 respAddHeader hdr resp = resp { respHeaders = hdr : respHeaders resp }
 
