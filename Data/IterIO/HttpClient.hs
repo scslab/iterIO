@@ -73,20 +73,19 @@ mkHttpClient host port ctx = withSocket $ \s -> do
            err $ "Failed to lookup " ++ show h
        err = throwIO . userError
 
---simpleHttp :: String -> Maybe SSL.SSLContext -> IO S
+simpleHttp :: String -> Maybe SSL.SSLContext -> IO (HttpResp IO)
 simpleHttp urlString ctx = do
-  (scheme, req) <- getRequest (L8.pack urlString)
-  port   <- maybe (defaultPort scheme) return $ reqPort req
-  let cEnum  = enumHttpReq scheme req
+  req <- getRequest (L8.pack urlString)
+  port <- maybe (defaultPort $ reqScheme req) return $ reqPort req
+  let cEnum  = enumHttpReq req
   client <- mkHttpClient (reqHost req) port ctx
   (sIter,sEnum) <- httpConnect client
-  cEnum |$ stdoutI
   cEnum |$ sIter
-  sEnum |$ stdoutI
-    where defaultPort s | s == L8.pack "http"  = return 80
-                        | s == L8.pack "https" = return 443
+  sEnum |$ httpRespI 
+    where defaultPort s | s == S8.pack "http"  = return 80
+                        | s == S8.pack "https" = return 443
                         | otherwise = throwIO . userError $
-                                        "Unrecognized scheme" ++ (L8.unpack s)
+                                        "Unrecognized scheme" ++ (S8.unpack s)
 
 -- | Catch 'IOException's
 catchIO :: IO a -> (IOException -> IO a) -> IO a

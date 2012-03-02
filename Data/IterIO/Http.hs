@@ -1,7 +1,7 @@
-{-# LANGUAGE CPP #-}
-#if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 702)
-{-# LANGUAGE Trustworthy #-}
-#endif
+-- {-# LANGUAGE CPP #-}
+-- #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 702)
+-- {-# LANGUAGE Trustworthy #-}
+-- #endif
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
@@ -22,7 +22,7 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , HttpResp(..), defaultHttpResp
                         , mkHttpHead, mkHtmlResp, mkContentLenResp, mkOnumResp
                         , resp301, resp303, resp403, resp404, resp405, resp500
-                        , enumHttpResp
+                        , enumHttpResp, httpRespI 
                         -- * HTTP connection handling
                         , HttpRequestHandler
                         , HttpServerConf(..), nullHttpServer, ioHttpServer
@@ -53,7 +53,7 @@ import Data.List
 import Data.Time
 import Data.Typeable
 import Data.Word
-import System.Locale (defaultTimeLocale)
+import System.Locale (defaultTimeLocale, rfc822DateFormat)
 import System.IO
 import Text.Printf
 
@@ -68,6 +68,9 @@ type S = S.ByteString
 
 strictify :: L -> S
 strictify = S.concat . L.toChunks
+
+lazyfy :: S -> L
+lazyfy = L.pack . S.unpack
 
 --
 -- Basic pieces
@@ -411,7 +414,9 @@ path2list path = runIdentity $ inumPure path |$ (slash [] <?> "absolute path")
 
 -- | Data structure representing an HTTP request message.
 data HttpReq s = HttpReq {
-      reqMethod :: !S.ByteString
+      reqScheme :: !S.ByteString
+    -- ^ Scheme (e.g., \'http\', \'https\', ...)
+    , reqMethod :: !S.ByteString
     -- ^ Method (e.g., GET, POST, ...).
     , reqPath :: !S.ByteString
     -- ^ Raw path from the URL (not needed if you use @reqPathList@
@@ -458,7 +463,8 @@ data HttpReq s = HttpReq {
     } deriving (Typeable, Show)
 
 defaultHttpReq :: HttpReq ()
-defaultHttpReq = HttpReq { reqMethod = S.empty
+defaultHttpReq = HttpReq { reqScheme = S.empty
+                         , reqMethod = S.empty
                          , reqPath = S.empty
                          , reqPathLst = []
                          , reqPathParams = []
@@ -1218,50 +1224,142 @@ inumHttpServer server = mkInumM loop
 --
 
 -- | Create a simple @GET@ request.
-getRequest :: Monad m => L -> m (L, HttpReq ())
+getRequest :: Monad m => L -> m (HttpReq ())
 getRequest urlString = do
-  (scheme, host, mport, path, query) <- (enumPure urlString |$ uri)
-  return (lazyfy scheme 
-         , defaultHttpReq { reqMethod = S8.pack "GET"
-                          , reqPath = path
-                          , reqPathLst = path2list path
-                          , reqQuery = query
-                          , reqHost = host
-                          , reqPort = mport
-                          , reqVers = (1,1)
-                          })
+  (scheme, host, mport, path, query) <- (enumPure urlString |$ absUri)
+  return defaultHttpReq { reqScheme  = scheme
+                        , reqMethod  = S8.pack "GET"
+                        , reqPath    = path
+                        , reqPathLst = path2list path
+                        , reqQuery   = query
+                        , reqHost    = host
+                        , reqPort    = mport
+                        , reqVers    = (1,1)
+                        }
 
 -- | Enumerate a request.
 enumHttpReq :: (Monad m)
-        => L -> HttpReq s -> Onum L m a
-enumHttpReq scheme req = mkInumM $ do
-  ifeed . lazyfy $ reqMethod req
-  ifeed sp
-  ifeed $ reqURI scheme req
-  ifeed sp
-  let (major, minor) = reqVers req
-  ifeed $ L8.pack $ "HTTP/" ++ show major ++ "." ++ show minor
+        => HttpReq s -> Onum L m a
+enumHttpReq req = mkInumM $ do
+  ifeed $ mkHttpRequest_Line req
+  ifeed $ mkHttpReqHeaders req
   ifeed $ L8.pack "\r\n"
-  ifeed $ L8.pack "\r\n"
-    where sp = L8.pack " "
 
--- | Convert a strict ByteString to a lazy ByteString
-lazyfy :: S -> L
-lazyfy = L.pack . S.unpack
+-- | Create HTTP request line, defined by RFC2616 as:
+--
+-- > Request-Line = Method SP Request-URI SP HTTP-Version CRLF
+mkHttpRequest_Line :: HttpReq s -> L
+mkHttpRequest_Line req = L.concat [
+    lazyfy $ reqMethod req
+  , sp
+  , mkReqURI req
+  , sp
+  , let (major, minor) = reqVers req
+    in L8.pack $ "HTTP/" ++ show major ++ "." ++ show minor
+  , L8.pack "\r\n"
+  ]
+    where sp = L8.singleton ' '
 
--- | Given a sheme and request, creat the corresponding URI.
-reqURI :: L -> HttpReq s -> L
-reqURI scheme req = L8.concat
-  [ scheme
-  , L8.pack "://"
+-- | Given a request, create the Request-URI.
+-- The 'reqPathLst' is used (instead of the raw 'reqPath') when
+-- possible.
+mkReqURI :: HttpReq s -> L
+mkReqURI req = L.concat
+  [ let s = reqScheme req
+    in if S.null s then L.empty
+                   else L8.append (lazyfy s) (L8.pack "://")
   , lazyfy $ reqHost req
   , maybe L.empty (L8.pack . (":"++) .  show) $ reqPort req
-  , lazyfy $ reqNormalPath req
+  , lazyfy $ if null $ reqPathLst req
+               then reqPath req
+               else reqNormalPath req
   , let q = reqQuery req
-    in if S.null q
-         then L.empty
-         else L8.append (L8.pack "?") (lazyfy q)
+    in if S.null q then L.empty
+                   else L8.append (L8.singleton '?') (lazyfy q)
   ]
+
+-- | Given a request, emit all the headers.
+-- Namely, this function returns :
+-- *(( general-header | request-header | entity-header) CRLF)
+-- It does not, howerver, check that that headers are well-formed.
+mkHttpReqHeaders :: HttpReq s -> L
+mkHttpReqHeaders req = L.concat . filter (/=L.empty) $
+        hostHeader
+      : contentTypeHeader
+      : contentLengthHeader
+      : cookieHeader
+      : transferEncodingHeader
+      : ifModifiedSinceHeader 
+      : allHeaders
+  where mkHeader (k,v) =
+          if S.null v
+            then L.empty
+            else (lazyfy k) `L8.append` (L8.pack ": ")
+                            `L8.append` (lazyfy v) `L8.append` (L8.pack "\r\n")
+        --
+        hostHeader = mkHeader (S8.pack "Host", reqHost req)
+        --
+        transferEncodingHeader =
+          mkHeader (S8.pack "Transfer-Encoding", reqTransferEncoding req)
+        --
+        contentLengthHeader =
+          mkHeader (S8.pack "Content-Length"
+                   , maybe S.empty (S8.pack . show) $ reqContentLength req)
+        --
+        ifModifiedSinceHeader =
+          mkHeader (S8.pack "If-Modified-Since"
+                   , maybe S.empty (S8.pack . showT) $ reqIfModifiedSince req)
+        showT = formatTime defaultTimeLocale rfc822DateFormat
+        --
+        cookieHeader =
+          mkHeader (S8.pack "Cookie"
+                   , S8.intercalate (S8.singleton ';') $ map p $ reqCookies req)
+        p (k, v) = k `S8.append` (S8.singleton '=') `S8.append` v
+        --
+        contentTypeHeader =
+          mkHeader (S8.pack "Content-Type"
+                   , maybe S.empty ctF $ reqContentType req)
+        ctF (mt,params) = mt `S8.append` 
+          (S8.intercalate (S8.singleton ';') $ map p params)
+        --
+        allHeaders = map mkHeader $ reqHeaders req
+
+-- Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
+httpStatusI :: (Monad m) => Iter L m (HttpStatus)
+httpStatusI = do
+  _ <- hTTPvers
+  spaces
+  status <- whileMinMaxI 3 3 (isDigit . w2c) >>= readI <?> "Status code"
+  spaces
+  phrase <- L8.unpack <$> text_except "\r\n"
+  skipI crlf
+  return $ mkStat status phrase
+
+-- | Return a response with the \'Trasnfer-Encoding\' removed. Use
+-- 'enumHttpResp' to enumerate the headers and body.
+httpRespI :: (Monad m) => Iter L m (HttpResp m)
+httpRespI = do
+  stat <- httpStatusI
+  hdrs <- many hdr_field_val
+  chunked <- maybe (return False) (isChunked . L8.map toLower . lazyfy) $ 
+                lookup (S8.pack "transfer-encoding") hdrs
+  let hdrs' = if chunked
+                then filter ((/= S8.pack "transfer-encoding") . fst) hdrs
+                else hdrs
+  crlf
+  body <- data0I
+  return HttpResp { respStatus  = stat
+                  , respHeaders = map unMkHeader hdrs'
+                  , respChunk   = chunked
+                  , respBody    = inumPure body }
+    where unMkHeader (k,v) = k `S8.append` (S8.singleton ':') `S8.append` v
+          isChunked v = enumPure v |$ (cI <|> return False)
+          cI = do optionalI spaces
+                  match $ L8.pack "chunked"
+                  optionalI spaces
+                  return True
+
+
 
 
 {-
