@@ -449,8 +449,8 @@ data HttpReq s = HttpReq {
     -- type.
     , reqContentLength :: !(Maybe Int)
     -- ^ Value of the content-Length header, if any.
-    , reqTransferEncoding :: ![S.ByteString]
-    -- ^ A list of the encodings in the Transfer-Encoding header.
+    , reqTransferEncoding :: !S.ByteString
+    -- ^ The Transfer-Encoding header.
     , reqIfModifiedSince :: !(Maybe UTCTime)
     -- ^ Time from the If-Modified-Since header (if present)
     , reqSession :: s
@@ -471,7 +471,7 @@ defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqCookies = []
                          , reqContentType = Nothing
                          , reqContentLength = Nothing
-                         , reqTransferEncoding = []
+                         , reqTransferEncoding = S.empty
                          , reqIfModifiedSince = Nothing
                          , reqSession = ()
                          }
@@ -555,7 +555,7 @@ content_length_hdr req = do
 
 transfer_encoding_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 transfer_encoding_hdr req = do
-  tclist <- many tc
+  tclist <- tc
   return req { reqTransferEncoding = tclist }
   where
     tc = do
@@ -642,20 +642,17 @@ inumFromChunks = mkInumM $ getchunk
 inumHttpBody :: (Monad m) => HttpReq s -> Inum L.ByteString L.ByteString m a
 inumHttpBody req =
     case reqTransferEncoding req of
-      lst | null lst || lst == [S8.pack "identity"] ->
+      enc | S.null enc || enc == S8.pack "identity" ->
               if hasclen then inumTakeExact (fromJust $ reqContentLength req)
                          else inumNull -- No message body present
-      lst | lst == [S8.pack "chunked"] -> inumFromChunks
-      lst -> inumFromChunks |. tcfold (reverse lst)
+      enc | enc == S8.pack "chunked" -> inumFromChunks
+      enc -> inumFromChunks |. tcInum enc
     where
       hasclen = isJust $ reqContentLength req
-      tcfold [] = inumNop
-      tcfold (h:t) 
-          | h == S8.pack "identity" = tcfold t
-          | h == S8.pack "chunked"  = tcfold t -- Has to be first one
+      tcInum e 
           --- | h == S8.pack "gzip"     = inumGunzip |. tcfold t
           | otherwise = mkInum $
-                        fail $ "unknown Transfer-Coding " ++ chunkShow h
+                        fail $ "unknown Transfer-Coding " ++ chunkShow e
 
 {-
 -- | This 'Inum' reads to the end of an HTTP message body (and not
