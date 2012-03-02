@@ -1,5 +1,9 @@
-
-module Data.IterIO.HttpClient where
+module Data.IterIO.HttpClient ( HttpClient(..)
+                              , simpleHttp
+                              -- * Internal
+                              , mkHttpClient
+                              , httpConnect
+                              ) where
 
 import Prelude hiding (catch, head, id, div)
 
@@ -73,6 +77,8 @@ mkHttpClient host port ctx = withSocket $ \s -> do
            err $ "Failed to lookup " ++ show h
        err = throwIO . userError
 
+-- | Given a URL and SSL context, perform a simple GET requrest.
+-- Use 'enumHttpResp' to retrieve the body, etc.
 simpleHttp :: String -> Maybe SSL.SSLContext -> IO (HttpResp IO)
 simpleHttp urlString ctx = do
   req <- getRequest (L8.pack urlString)
