@@ -1,6 +1,6 @@
 Name:           iterIO
 Homepage:       http://www.scs.stanford.edu/~dm/iterIO
-Version:        0.2.1
+Version:        0.2.2
 Cabal-version:  >= 1.6
 build-type:     Simple
 License:        BSD3
