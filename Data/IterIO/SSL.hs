@@ -1,12 +1,14 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 
 module Data.IterIO.SSL where
 
 import Control.Exception (throwIO, ErrorCall(..), finally, onException)
+import qualified Control.Exception as E
 import Control.Monad
 import Control.Monad.Trans
-import Data.ByteString as S
+import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Lazy.Internal as L (defaultChunkSize)
 import Data.Typeable
@@ -14,6 +16,9 @@ import qualified Network.Socket as Net
 import qualified OpenSSL.Session as SSL
 import System.Cmd
 import System.Exit
+import System.IO (hPutStrLn, stderr)
+
+import Foreign.C.Error (errnoToIOError, eOK)
 
 import Data.IterIO.Iter
 import Data.IterIO.Inum
@@ -71,7 +76,10 @@ iterSSL ctx sock server = do
   (if server then SSL.accept ssl else SSL.connect ssl)
                           `onException` Net.sClose sock
   liftIO $ pairFinalizer (sslI ssl) (enumSsl ssl) $
-         SSL.shutdown ssl SSL.Bidirectional `finally` Net.sClose sock
+         SSL.shutdown ssl SSL.Bidirectional
+         `E.catch` \(e::IOError) -> unless (notErr e) (ioError e)
+         `finally` Net.sClose sock
+    where notErr = (== errnoToIOError "SSL_shutdown" eOK Nothing Nothing)
 
 -- | Simplest possible SSL context, loads cert and unencrypted private
 -- key from a single file.
