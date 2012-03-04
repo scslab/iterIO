@@ -632,17 +632,9 @@ inumToChunks = mkInumM loop
 
 -- | An HTTP Chunk decoder (as specified by RFC 2616).
 inumFromChunks :: (Monad m) => Inum L.ByteString L.ByteString m a
-inumFromChunks = mkInumM getchunk
-    where
-      osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
-      chunk_ext_val = do char '='; osp; token <|> quoted_string; osp
-      chunk_ext = do char ';'; osp; token; osp; optionalI chunk_ext_val
-      getchunk = do
-        size <- hexInt <* (osp >> skipMany chunk_ext >> crlf)
-        if size > 0 then ipipe (inumTakeExact size) >> getchunk
-                    else do
-                      skipMany (noctl >> crlf)
-                      skipI crlf
+inumFromChunks = mkInum $ do
+  eof <- atEOFI
+  if eof then return L.empty else chunkedBodyI
 
 -- | This 'Inum' reads to the end of an HTTP message body (and not
 -- beyond) and decodes the Transfer-Encoding.  It handles straight
@@ -1157,7 +1149,7 @@ enumHttpResp :: (Monad m) =>
              -> Onum L.ByteString m ()
 enumHttpResp resp = inumPure fmtresp `cat` (respBody resp |. maybeChunk)
     where
-      fmtresp = L.append (fmtStat $ respStatus resp) hdrsL
+      fmtresp = (fmtStat $ respStatus resp) `L.append` hdrsL
       hdrsS = if respChunk resp
                 then (transferEncoding, S8.pack "chunked") :
                      (filter ((/= transferEncoding) . fst) $ respHeaders resp)
@@ -1255,53 +1247,61 @@ mkRequestToAbsUri urlString method = do
                         }
      where uaHeader = (S8.pack "User-Agent", S8.pack userAgent)
 
--- | Enumerate a request.
+-- | Enumerate a request, and body.
 enumHttpReq :: (Monad m)
-        => HttpReq s -> Onum L m a
-enumHttpReq req = mkInumM $ do
-  ifeed $ mkHttpRequest_Line req
-  ifeed $ mkHttpReqHeaders req
-  ifeed $ L8.pack "\r\n"
+        => HttpReq s -> L -> Onum L m a
+enumHttpReq req body =
+  enumNoBody |. inumStoL
+   `lcat` (enumPure body |. maybeChunk)
+  where enumNoBody = enumPure $ S.concat [ mkHttpRequest_Line req
+                                         , mkHttpReqHeaders req
+                                         , S8.pack "\r\n"
+                                         ]
+        maybeChunk = case lookup transferEncoding (reqHeaders req) of
+                       Just v | v == S8.pack "chunked" -> inumToChunks 
+                       _ -> inumNop
+        transferEncoding = S8.pack "Transfer-Encoding"
+
 
 -- | Create HTTP request line, defined by RFC2616 as:
 --
 -- > Request-Line = Method SP Request-URI SP HTTP-Version CRLF
-mkHttpRequest_Line :: HttpReq s -> L
-mkHttpRequest_Line req = L.concat [
-    lazyfy $ reqMethod req
+mkHttpRequest_Line :: HttpReq s -> S
+mkHttpRequest_Line req = S.concat [
+    reqMethod req
   , sp
   , mkReqURI req
   , sp
   , let (major, minor) = reqVers req
-    in L8.pack $ "HTTP/" ++ show major ++ "." ++ show minor
-  , L8.pack "\r\n"
+    in S8.pack $ "HTTP/" ++ show major ++ "." ++ show minor
+  , S8.pack "\r\n"
   ]
-    where sp = L8.singleton ' '
+    where sp = S8.singleton ' '
 
 -- | Given a request, create the Request-URI.
 -- The 'reqPathLst' is used (instead of the raw 'reqPath') when
 -- possible.
-mkReqURI :: HttpReq s -> L
-mkReqURI req = L.concat
+mkReqURI :: HttpReq s -> S
+mkReqURI req = S.concat
   [ let s = reqScheme req
-    in if S.null s then L.empty
-                   else L8.append (lazyfy s) (L8.pack "://")
-  , lazyfy $ reqHost req
-  , maybe L.empty (L8.pack . (":"++) .  show) $ reqPort req
-  , lazyfy $ if null $ reqPathLst req
-               then reqPath req
-               else reqNormalPath req
+    in if S.null s then S.empty
+                   else S8.append s (S8.pack "://")
+  , reqHost req
+  , maybe S.empty (S8.pack . (":"++) .  show) $ reqPort req
+  , if null $ reqPathLst req
+      then reqPath req
+      else reqNormalPath req
   , let q = reqQuery req
-    in if S.null q then L.empty
-                   else L8.append (L8.singleton '?') (lazyfy q)
+    in if S.null q then S.empty
+                   else S8.append (S8.singleton '?') q
   ]
 
 -- | Given a request, emit all the headers.
 -- Namely, this function returns :
 -- *(( general-header | request-header | entity-header) CRLF)
 -- It does not, howerver, check that that headers are well-formed.
-mkHttpReqHeaders :: HttpReq s -> L
-mkHttpReqHeaders req = L.concat . filter (/=L.empty) $
+mkHttpReqHeaders :: HttpReq s -> S
+mkHttpReqHeaders req = S.concat . filter (/=S.empty) $
         hostHeader
       : contentTypeHeader
       : contentLengthHeader
@@ -1311,9 +1311,9 @@ mkHttpReqHeaders req = L.concat . filter (/=L.empty) $
       : allHeaders
   where mkHeader (k,v) =
           if S.null v
-            then L.empty
-            else lazyfy k `L8.append` L8.pack ": "
-                          `L8.append` lazyfy v `L8.append` L8.pack "\r\n"
+            then S.empty
+            else k `S8.append` S8.pack ": "
+                   `S8.append` v `S8.append` S8.pack "\r\n"
         --
         hostHeader = mkHeader (S8.pack "Host", reqHost req)
         --
@@ -1382,18 +1382,16 @@ httpRespI = do
 -- | This 'Inum' reads to the end of an HTTP message body (and not
 -- beyond) and decodes the Transfer-Encoding.  It handles straight
 -- content of a size specified by the Content-Length header and
--- chunk-encoded content.
+-- chunk-encoded content. If neither headers are set, it reads the
+-- body lazyly (with 'pureI').
 httpBodyI :: (Monad m) => [(S,S)] -> Bool -> Iter L m L
 httpBodyI hdrs isChunked = 
   if isChunked
     then chunkedBodyI
-    else let mAct = do lenS <- lookup (S8.pack "content-length") hdrs
-                       len <- maybeRead . S8.unpack $ lenS
-                       return $ takeI len
-         in fromMaybe err mAct
+    else let mLen = do lenS <- lookup (S8.pack "content-length") hdrs
+                       maybeRead . S8.unpack $ lenS
+         in maybe pureI takeI mLen
   where maybeRead = fmap fst . listToMaybe . reads
-        err = fail "Expected \'Transfer-Encoding\' to be\
-                   \ \'chunked\' or \'Content-Length\' to be set."
 
 -- | This 'Iter' decodes \'chunk\' encoded body. Specifically,
 -- it implements \'chunked-body\' of RFC2616.
@@ -1404,7 +1402,7 @@ chunkedBodyI = do
   skipI crlf
   return $ L.concat r
     where chunk = do size <- chunk_size
-                     optionalI chunk_ext
+                     chunk_ext
                      crlf
                      b <- if size > 0
                             then takeI size <* crlf

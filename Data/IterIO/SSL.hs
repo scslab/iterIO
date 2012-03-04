@@ -16,7 +16,6 @@ import qualified Network.Socket as Net
 import qualified OpenSSL.Session as SSL
 import System.Cmd
 import System.Exit
-import System.IO (hPutStrLn, stderr)
 
 import Foreign.C.Error (errnoToIOError, eOK)
 

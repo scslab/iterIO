@@ -140,7 +140,7 @@ genSimpleHttp req ctx redirectCount passCookies = do
   port <- maybe (defaultPort scheme) return $ reqPort req
   client <- mkHttpClient (reqHost req) port ctx isHttps
   (sIter,sOnum) <- httpConnect client
-  enumHttpReq req |$ sIter  
+  enumHttpReq req L.empty |$ sIter  
   resp <- sOnum |$ httpRespI
   if redirectCount > 0
     then handleRedirect req ctx redirectCount resp passCookies
