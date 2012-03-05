@@ -512,13 +512,14 @@ request_line :: (Monad m) => Iter L m (HttpReq ())
 request_line = do
   method <- strictify <$> while1I (isUpper . w2c)
   spaces
-  (_, host, mport, path, query) <- uri
+  (scheme, host, mport, path, query) <- uri
   spaces
   (major, minor) <- hTTPvers
   optionalI spaces
   skipI crlf
   return defaultHttpReq {
-                 reqMethod = method
+                 reqScheme = scheme
+               , reqMethod = method
                , reqPath = path
                , reqPathLst = path2list path
                , reqQuery = query
