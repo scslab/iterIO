@@ -79,8 +79,6 @@ import Control.Monad.Writer.Strict
 import qualified Control.Monad.RWS.Lazy as Lazy
 import qualified Control.Monad.State.Lazy as Lazy
 import qualified Control.Monad.Writer.Lazy as Lazy
-import Control.Monad
-import Control.Monad.Trans
 
 import Data.IterIO.Iter
 

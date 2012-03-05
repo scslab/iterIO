@@ -282,7 +282,9 @@ instance (ChunkData t) => Show (IterR t m a) where
                         ++ shows c rest)
 
 iterTc :: TyCon
-iterTc = mkTyCon "Iter"
+iterTc = mkTyCon3 "iterIO" "Data.IterIO.Iter" "Iter"
+-- iterTc = mkTyCon "Iter"
+
 instance (Typeable t, Typeable1 m) => Typeable1 (Iter t m) where
     typeOf1 iter = mkTyConApp iterTc [typeOf $ t iter, typeOf1 $ m iter]
         where t :: Iter t m a -> t; t _ = undefined
