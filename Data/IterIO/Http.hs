@@ -11,8 +11,8 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , inumToChunks, inumFromChunks
                         , http_fmt_time, dateI
                         , FormField(..), foldForm
-                        , getRequest, headRequest, mkRequestToAbsUri 
-                        , enumHttpReq 
+                        , headRequest, getRequest, postRequest
+                        , mkRequestToAbsUri, enumHttpReq 
                         -- , urlencodedFormI, multipartI, inumMultipart
                         -- , foldUrlencoded, foldMultipart, foldQuery
                         -- * HTTP Response support
@@ -1223,13 +1223,22 @@ inumHttpServer server = mkInumM loop
 -- HTTP Client support
 --
 
+-- | Create a simple HEAD request.
+headRequest :: Monad m => L -> m (HttpReq ())
+headRequest url = mkRequestToAbsUri url $ S8.pack "HEAD"
+
 -- | Create a simple GET request.
 getRequest :: Monad m => L -> m (HttpReq ())
 getRequest url = mkRequestToAbsUri url $ S8.pack "GET"
 
--- | Create a simple HEAD request.
-headRequest :: Monad m => L -> m (HttpReq ())
-headRequest url = mkRequestToAbsUri url $ S8.pack "HEAD"
+-- | Create a simple POST request, given the URL, Content-Type,
+-- and Content-Length.
+postRequest :: Monad m => L -> S -> S -> m (HttpReq ())
+postRequest url ctypeV lenV = do
+  req <- mkRequestToAbsUri url $ S8.pack "POST"
+  let ctype = ( S8.pack "Content-Type", ctypeV)
+      len   = ( S8.pack "Content-Length", lenV)
+  return $ req { reqHeaders = reqHeaders req ++ [ctype, len] }
 
 -- | Createa generic HTTP request, given an absoluteURI:
 mkRequestToAbsUri :: Monad m => L -> S -> m (HttpReq ())
@@ -1243,16 +1252,17 @@ mkRequestToAbsUri urlString method = do
                         , reqHost    = host
                         , reqPort    = mport
                         , reqVers    = (1,1)
-                        , reqHeaders = [uaHeader]
+                        , reqHeaders = [hostHeader host, uaHeader]
                         }
      where uaHeader = (S8.pack "User-Agent", S8.pack userAgent)
+           hostHeader host = (S8.pack "Host", host)
 
 -- | Enumerate a request, and body.
 enumHttpReq :: (Monad m)
         => HttpReq s -> L -> Onum L m a
 enumHttpReq req body =
   enumNoBody |. inumStoL
-   `lcat` (enumPure body |. maybeChunk)
+    `lcat` (enumPure body |. maybeChunk)
   where enumNoBody = enumPure $ S.concat [ mkHttpRequest_Line req
                                          , mkHttpReqHeaders req
                                          , S8.pack "\r\n"
@@ -1394,7 +1404,8 @@ httpBodyI hdrs isChunked =
   where maybeRead = fmap fst . listToMaybe . reads
 
 -- | This 'Iter' decodes \'chunk\' encoded body. Specifically,
--- it implements \'chunked-body\' of RFC2616.
+-- it implements \'chunked-body\' of RFC2616. Note: the
+-- entity-headers in the trailer are ignored.
 chunkedBodyI :: Monad m => Iter L m L
 chunkedBodyI = do
   r <- many chunk
