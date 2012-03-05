@@ -1408,17 +1408,17 @@ httpBodyI hdrs isChunked =
 -- entity-headers in the trailer are ignored.
 chunkedBodyI :: Monad m => Iter L m L
 chunkedBodyI = do
-  r <- many chunk
+  r <- many chunk_
   skipMany trailer
   skipI crlf
   return $ L.concat r
-    where chunk = do size <- chunk_size
-                     chunk_ext
-                     crlf
-                     b <- if size > 0
-                            then takeI size <* crlf
-                            else return L.empty -- last-chunk
-                     return b
+    where chunk_ = do size <- chunk_size
+                      chunk_ext
+                      crlf
+                      b <- if size > 0
+                             then takeI size <* crlf
+                             else return L.empty -- last-chunk
+                      return b
           chunk_size = hexInt 
           chunk_ext = skipMany $ do char ';'
                                     osp
