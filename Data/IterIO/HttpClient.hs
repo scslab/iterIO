@@ -48,7 +48,7 @@ maxNrRedirects = 5
 
 -- | Given an HTTP client configuration, make the actual connection to
 -- server.
-httpConnect :: HttpClient -> IO (Iter L IO (), Onum L IO a)
+httpConnect :: MonadIO m => HttpClient -> IO (Iter L m (), Onum L m a)
 httpConnect hc = do
   let s       = hcSock hc
       isHttps = hcIsHttps hc
@@ -99,24 +99,27 @@ mkHttpClient host port ctx isHttps = withSocket $ \s -> do
 
 -- | Given a URL and SSL context, perform a simple HEAD request.
 -- Use 'enumHttpResp' to retrieve the body.
-simpleHeadHttp :: String                -- ^ URL
+simpleHeadHttp :: MonadIO m
+               => String                -- ^ URL
                -> Maybe SSL.SSLContext  -- ^ SSL Context
-               -> IO (HttpResp IO)
+               -> m (HttpResp m)
 simpleHeadHttp urlString ctx = do
   req <- headRequest (L8.pack urlString)
   genSimpleHttp req L.empty ctx maxNrRedirects True
 
 -- | Alias for 'simpleGetHttp'.
-simpleHttp :: String                -- ^ URL
+simpleHttp :: MonadIO m 
+           => String                -- ^ URL
            -> Maybe SSL.SSLContext  -- ^ SSL Context
-           -> IO (HttpResp IO)
+           -> m (HttpResp m)
 simpleHttp = simpleGetHttp
 
 -- | Given a URL and SSL context, perform a simple GET request.
 -- Use 'enumHttpResp' to retrieve the body.
-simpleGetHttp :: String                -- ^ URL
+simpleGetHttp :: MonadIO m 
+              => String                -- ^ URL
               -> Maybe SSL.SSLContext  -- ^ SSL Context
-              -> IO (HttpResp IO)
+              -> m (HttpResp m)
 simpleGetHttp urlString ctx = do
   req <- getRequest (L8.pack urlString)
   genSimpleHttp req L.empty ctx maxNrRedirects True
@@ -125,11 +128,12 @@ simpleGetHttp urlString ctx = do
 -- a simple POST request. Note: message body must be properly encoded
 -- (e.g., URL-encoded if the Content-Type is
 -- \"application\/x-www-form-urlencoded\").
-simplePostHttp :: String                -- ^ URL
+simplePostHttp :: MonadIO m 
+               => String                -- ^ URL
                -> String                -- ^ Content-Type header
                -> L                     -- ^ Message body
                -> Maybe SSL.SSLContext  -- ^ SSL Context
-               -> IO (HttpResp IO)
+               -> m (HttpResp m)
 simplePostHttp urlString ct body ctx = do
   req <- postRequest (L8.pack urlString) (S8.pack ct) (S8.pack . show . L8.length $ body)
   genSimpleHttp req body ctx maxNrRedirects True
@@ -143,18 +147,19 @@ simplePostHttp urlString ct body ctx = do
 -- it does not parse \"Set-Cookie\" headers and so is unaware of the
 -- cookie domain. Hence, the flag is used for the decision in passing
 -- the cookie to the location of a redirect.
-genSimpleHttp :: HttpReq ()            -- ^ Reqeuest
+genSimpleHttp :: MonadIO m
+              => HttpReq ()            -- ^ Reqeuest
               -> L                     -- ^ Message body
               -> Maybe SSL.SSLContext  -- ^ SSL Context
               -> Int                   -- ^ Redirect count
               -> Bool                  -- ^ Pass cookies
-              -> IO (HttpResp IO)
+              -> m (HttpResp m)
 genSimpleHttp req body ctx redirectCount passCookies = do
   let scheme = reqScheme req
       isHttps = scheme == (S8.pack "https")
   port <- maybe (defaultPort scheme) return $ reqPort req
-  client <- mkHttpClient (reqHost req) port ctx isHttps
-  (sIter,sOnum) <- httpConnect client
+  client <- liftIO $ mkHttpClient (reqHost req) port ctx isHttps
+  (sIter,sOnum) <- liftIO $ httpConnect client
   enumHttpReq req body |$ sIter  
   resp <- sOnum |$ httpRespI
   if redirectCount > 0
@@ -162,20 +167,21 @@ genSimpleHttp req body ctx redirectCount passCookies = do
     else return resp
     where defaultPort s | s == S8.pack "http"  = return 80
                         | s == S8.pack "https" = return 443
-                        | otherwise = throwIO . userError $
+                        | otherwise = liftIO . throwIO . userError $
                                         "Unrecognized scheme" ++ S8.unpack s
 
 -- | Given a 3xx response and original request, handle the redirect.
 -- The paramets of @handleRedirect@ are the same as 'genSimpleHttp',
 -- hwere they are explained. Currently, only reponses with status
 -- codes 30[1237] and set \"Location\" header are handled.
-handleRedirect :: HttpReq ()           -- ^ Original request
+handleRedirect :: MonadIO m 
+               => HttpReq ()           -- ^ Original request
                -> L                    -- ^ Message body
                -> Maybe SSL.SSLContext -- ^ SSL context
                -> Int                  -- ^ Redirect count
-               -> HttpResp IO          -- ^ Response
+               -> HttpResp m           -- ^ Response
                -> Bool                 -- ^ Pass cookies
-               -> IO (HttpResp IO)    
+               -> m (HttpResp m)    
 handleRedirect req body ctx n resp passCookies = 
   if (respStatus resp `notElem` s300s) || (reqMethod req `notElem` meths)
     then return resp
