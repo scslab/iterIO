@@ -95,10 +95,11 @@ popPath isParm req =
 -- cache static data for an hour, you might use:
 --
 -- @
---   addHeader ('S8.pack' \"Cache-control: max-age=3600\") $
+--   addHeader ('S8.pack' \"Cache-control\", 'S8.pack' \"max-age=3600\") $
 --       'routeFileSys' mime ('dirRedir' \"index.html\") \"\/var\/www\/htdocs\"
 -- @
-addHeader :: (Monad m) => S8.ByteString -> HttpRoute m s -> HttpRoute m s
+addHeader :: (Monad m) =>
+  (S8.ByteString, S8.ByteString) -> HttpRoute m s -> HttpRoute m s
 addHeader h (HttpRoute r) = HttpRoute $ \req -> liftM (liftM addit) (r req)
     where addit resp = resp { respHeaders = h : respHeaders resp }
 
@@ -370,9 +371,9 @@ routeGenFileSys fs typemap index dir0 = HttpRoute $ Just . check
                                        , respHeaders = mkHeaders req st }
 
       mkHeaders req st =
-          [ S8.pack $ "Last-Modified: " ++ (http_fmt_time $ modTimeUTC st)
-          , S8.pack $ "Content-Length: " ++ (show $ fileSize st)
-          , S8.pack "Content-Type: " `S8.append` typemap (fileExt req) ]
+          [ (S8.pack "Last-Modified", S8.pack . http_fmt_time $ modTimeUTC st)
+          , (S8.pack "Content-Length", S8.pack . show $ fileSize st)
+          , (S8.pack "Content-Type", typemap (fileExt req)) ]
       fileExt req =
           drop 1 $ takeExtension $ case reqPathLst req of
                                      [] -> dir

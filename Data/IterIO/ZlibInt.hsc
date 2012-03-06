@@ -7,7 +7,8 @@
 module Data.IterIO.ZlibInt where
 
 import Data.Word
-import Foreign
+import System.IO.Unsafe (unsafePerformIO)
+import Foreign hiding (unsafePerformIO)
 import Foreign.C
 
 #include "zlib.h"

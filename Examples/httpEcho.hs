@@ -32,9 +32,8 @@ port = 8000
 -- Request handler
 --
 
-handleRequest :: (MonadIO m) => IO.Handle -> Iter L m ()
-handleRequest h = do
-  req <- httpReqI
+handleRequest :: (MonadIO m) => HttpReq () -> IO.Handle -> Iter L m ()
+handleRequest req h = do
   case S.unpack $ reqMethod req of
     "GET" ->
       case reqPathLst req of
@@ -277,7 +276,9 @@ handleConnection :: Net.Socket -> IO ()
 handleConnection s = do
   h <- Net.socketToHandle s IO.ReadWriteMode
   IO.hSetBuffering h IO.NoBuffering
-  enumHandle' h |$ handleRequest h
+  enumHandle' h |$ do 
+      req <- httpReqI
+      inumHttpBody req .| handleRequest req h
   IO.hClose h
 
 
