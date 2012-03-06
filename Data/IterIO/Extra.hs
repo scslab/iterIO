@@ -219,5 +219,5 @@ traceInput tag = Iter $ \c -> trace (tag ++ ": " ++ show c) $ Done () c
 traceI :: (ChunkData t, Monad m) => String -> Iter t m ()
 traceI msg = Iter $ \c -> inlinePerformIO $ do
                tid <- myThreadId
-               putTraceMsg $ show tid ++ ": " ++ msg
+               traceIO $ show tid ++ ": " ++ msg
                return $ Done () c

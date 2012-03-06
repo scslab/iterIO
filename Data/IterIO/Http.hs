@@ -11,17 +11,20 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , inumToChunks, inumFromChunks
                         , http_fmt_time, dateI
                         , FormField(..), foldForm
+                        , headRequest, getRequest, postRequest
+                        , mkRequestToAbsUri, enumHttpReq 
                         -- , urlencodedFormI, multipartI, inumMultipart
                         -- , foldUrlencoded, foldMultipart, foldQuery
                         -- * HTTP Response support
                         , HttpStatus(..)
-                        , stat100, stat200, stat301, stat302, stat303, stat304
+                        , stat100, stat200
+                        , stat301, stat302, stat303, stat304, stat307
                         , stat400, stat401, stat403, stat404, stat405
                         , stat500, stat501
-                        , HttpResp(..), defaultHttpResp
+                        , HttpResp(..), defaultHttpResp, respAddHeader 
                         , mkHttpHead, mkHtmlResp, mkContentLenResp, mkOnumResp
                         , resp301, resp303, resp403, resp404, resp405, resp500
-                        , enumHttpResp
+                        , enumHttpResp, httpRespI 
                         -- * HTTP connection handling
                         , HttpRequestHandler
                         , HttpServerConf(..), nullHttpServer, ioHttpServer
@@ -60,6 +63,9 @@ import Data.IterIO
 import Data.IterIO.Parse
 import Data.IterIO.Search
 
+import Data.Version (showVersion)
+import Paths_iterIO (version)
+
 -- import System.IO
 
 type L = L8.ByteString
@@ -67,6 +73,12 @@ type S = S.ByteString
 
 strictify :: L -> S
 strictify = S.concat . L.toChunks
+
+lazyfy :: S -> L
+lazyfy = L.pack . S.unpack
+
+userAgent :: String
+userAgent = "haskell-iterIO/"  ++ showVersion version
 
 --
 -- Basic pieces
@@ -109,7 +121,7 @@ text_except :: (Monad m) => String -> Iter L m L
 text_except except = concat1I (while1I ok <|> lws)
     where
       except' = fmap c2w except
-      ok c = c >= 0x20 && c < 0x7f && not (c `elem` except')
+      ok c = c >= 0x20 && c < 0x7f && c `notElem` except'
 
 -- | Parse one hex digit and return its value from 0-15.
 hex :: (Monad m) => Iter L m Int
@@ -142,7 +154,7 @@ token' = while1I (\c -> c < 127 && tokenTab ! c) <?> "token"
     where
       tokenTab :: UArray Word8 Bool
       tokenTab = listArray (0,127) $ fmap isTokenChar [0..127]
-      isTokenChar c = c > 0x20 && c < 0x7f && not (elem (chr c) separators)
+      isTokenChar c = c > 0x20 && c < 0x7f && chr c `notElem` separators
       separators = "()<>@,;:\\\"/[]?={} \t\177"
 
 -- | Percent-decode input for as long as the non percent-escaped
@@ -410,7 +422,9 @@ path2list path = runIdentity $ inumPure path |$ (slash [] <?> "absolute path")
 
 -- | Data structure representing an HTTP request message.
 data HttpReq s = HttpReq {
-      reqMethod :: !S.ByteString
+      reqScheme :: !S.ByteString
+    -- ^ Scheme (e.g., \'http\', \'https\', ...)
+    , reqMethod :: !S.ByteString
     -- ^ Method (e.g., GET, POST, ...).
     , reqPath :: !S.ByteString
     -- ^ Raw path from the URL (not needed if you use @reqPathList@
@@ -448,8 +462,8 @@ data HttpReq s = HttpReq {
     -- type.
     , reqContentLength :: !(Maybe Int)
     -- ^ Value of the content-Length header, if any.
-    , reqTransferEncoding :: ![S.ByteString]
-    -- ^ A list of the encodings in the Transfer-Encoding header.
+    , reqTransferEncoding :: !S.ByteString
+    -- ^ The Transfer-Encoding header.
     , reqIfModifiedSince :: !(Maybe UTCTime)
     -- ^ Time from the If-Modified-Since header (if present)
     , reqSession :: s
@@ -457,7 +471,8 @@ data HttpReq s = HttpReq {
     } deriving (Typeable, Show)
 
 defaultHttpReq :: HttpReq ()
-defaultHttpReq = HttpReq { reqMethod = S.empty
+defaultHttpReq = HttpReq { reqScheme = S.empty
+                         , reqMethod = S.empty
                          , reqPath = S.empty
                          , reqPathLst = []
                          , reqPathParams = []
@@ -470,7 +485,7 @@ defaultHttpReq = HttpReq { reqMethod = S.empty
                          , reqCookies = []
                          , reqContentType = Nothing
                          , reqContentLength = Nothing
-                         , reqTransferEncoding = []
+                         , reqTransferEncoding = S.empty
                          , reqIfModifiedSince = Nothing
                          , reqSession = ()
                          }
@@ -500,13 +515,14 @@ request_line :: (Monad m) => Iter L m (HttpReq ())
 request_line = do
   method <- strictify <$> while1I (isUpper . w2c)
   spaces
-  (_, host, mport, path, query) <- uri
+  (scheme, host, mport, path, query) <- uri
   spaces
   (major, minor) <- hTTPvers
   optionalI spaces
   skipI crlf
   return defaultHttpReq {
-                 reqMethod = method
+                 reqScheme = scheme
+               , reqMethod = method
                , reqPath = path
                , reqPathLst = path2list path
                , reqQuery = query
@@ -554,7 +570,7 @@ content_length_hdr req = do
 
 transfer_encoding_hdr :: (Monad m) => HttpReq s -> Iter L m (HttpReq s)
 transfer_encoding_hdr req = do
-  tclist <- many tc
+  tclist <- tc
   return req { reqTransferEncoding = tclist }
   where
     tc = do
@@ -583,11 +599,9 @@ any_hdr req = do
   let req' = req { reqHeaders = (field, val) : reqHeaders req }
   case Map.lookup field request_headers of
     Nothing -> return req'
-    Just f  -> do
-      r <- inumPure (L.fromChunks [val]) .|$
-               (f req' <* (optionalI spaces >> eofI)
-                      <?> (S8.unpack field ++ " header"))
-      return r
+    Just f  -> inumPure (L.fromChunks [val]) .|$
+                  (f req' <* (optionalI spaces >> eofI)
+                           <?> (S8.unpack field ++ " header"))
 
 -- | Parse an HTTP header, returning an 'HttpReq' data structure.
 httpReqI :: Monad m => Iter L.ByteString m (HttpReq ())
@@ -622,17 +636,9 @@ inumToChunks = mkInumM loop
 
 -- | An HTTP Chunk decoder (as specified by RFC 2616).
 inumFromChunks :: (Monad m) => Inum L.ByteString L.ByteString m a
-inumFromChunks = mkInumM $ getchunk
-    where
-      osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
-      chunk_ext_val = do char '='; osp; token <|> quoted_string; osp
-      chunk_ext = do char ';'; osp; token; osp; optionalI chunk_ext_val
-      getchunk = do
-        size <- hexInt <* (osp >> skipMany chunk_ext >> crlf)
-        if size > 0 then ipipe (inumTakeExact size) >> getchunk
-                    else do
-                      skipMany (noctl >> crlf)
-                      skipI crlf
+inumFromChunks = mkInum $ do
+  eof <- atEOFI
+  if eof then return L.empty else chunkedBodyI
 
 -- | This 'Inum' reads to the end of an HTTP message body (and not
 -- beyond) and decodes the Transfer-Encoding.  It handles straight
@@ -641,20 +647,14 @@ inumFromChunks = mkInumM $ getchunk
 inumHttpBody :: (Monad m) => HttpReq s -> Inum L.ByteString L.ByteString m a
 inumHttpBody req =
     case reqTransferEncoding req of
-      lst | null lst || lst == [S8.pack "identity"] ->
+      enc | S.null enc || enc == S8.pack "identity" ->
               if hasclen then inumTakeExact (fromJust $ reqContentLength req)
                          else inumNull -- No message body present
-      lst | lst == [S8.pack "chunked"] -> inumFromChunks
-      lst -> inumFromChunks |. tcfold (reverse lst)
+      enc | enc == S8.pack "chunked" -> inumFromChunks
+      enc -> inumFromChunks |. tcInum enc
     where
       hasclen = isJust $ reqContentLength req
-      tcfold [] = inumNop
-      tcfold (h:t) 
-          | h == S8.pack "identity" = tcfold t
-          | h == S8.pack "chunked"  = tcfold t -- Has to be first one
-          --- | h == S8.pack "gzip"     = inumGunzip |. tcfold t
-          | otherwise = mkInum $
-                        fail $ "unknown Transfer-Coding " ++ chunkShow h
+      tcInum e = mkInum $ fail $ "unknown Transfer-Coding " ++ chunkShow e
 
 {-
 -- | This 'Inum' reads to the end of an HTTP message body (and not
@@ -859,7 +859,7 @@ reqBoundary req = case reqContentType req of
                                           lookup (S8.pack "boundary") parms
                     _ -> Nothing
 
-multipartI :: (Monad m) => HttpReq s -> Iter L m (Maybe (FormField))
+multipartI :: (Monad m) => HttpReq s -> Iter L m (Maybe FormField)
 multipartI req = case reqBoundary req of
                    Just b  -> findpart $ S8.pack "--" `S8.append` b
                    Nothing -> return Nothing
@@ -880,7 +880,7 @@ multipartI req = case reqBoundary req of
       hdrs <- many hdr_field_val
       crlf
       return FormField {
-                   ffName = maybe S.empty id $ lookup (S8.pack "name") parms
+                   ffName = fromMaybe S.empty $ lookup (S8.pack "name") parms
                  , ffParams = parms
                  , ffHeaders = cdhdr:hdrs
                  }
@@ -915,6 +915,9 @@ foldMultipart req f z = multipartI req >>= doPart
 -- 'stat500', etc.
 data HttpStatus = HttpStatus !Int !S.ByteString deriving Show
 
+instance Eq HttpStatus where
+  HttpStatus c0 _ == HttpStatus c1 _ = c0 == c1
+
 mkStat :: Int -> String -> HttpStatus
 mkStat n s = HttpStatus n $ S8.pack s
 
@@ -924,7 +927,7 @@ fmtStat (HttpStatus n s) = L.fromChunks [
                            , s, S8.pack "\r\n"]
 
 stat100, stat200
-           , stat301, stat302, stat303, stat304
+           , stat301, stat302, stat303, stat304, stat307
            , stat400, stat401, stat403, stat404, stat405
            , stat500, stat501 :: HttpStatus
 stat100 = mkStat 100 "Continue"
@@ -933,6 +936,7 @@ stat301 = mkStat 301 "Moved Permanently"
 stat302 = mkStat 302 "Found"
 stat303 = mkStat 303 "See Other"
 stat304 = mkStat 304 "Not Modified"
+stat307 = mkStat 307 "Temporary Redirect"
 stat400 = mkStat 400 "Bad Request"
 stat401 = mkStat 401 "Unauthorized"
 stat403 = mkStat 403 "Forbidden"
@@ -947,7 +951,7 @@ stat501 = mkStat 501 "Not Implemented"
 data HttpResp m = HttpResp {
       respStatus :: !HttpStatus
     -- ^ The response status.
-    , respHeaders :: ![S.ByteString]
+    , respHeaders :: ![(S.ByteString, S.ByteString)]
     -- ^ Headers to send back
     , respChunk :: !Bool
     -- ^ True if the message body should be passed through
@@ -962,7 +966,8 @@ data HttpResp m = HttpResp {
     -- not contain a body.
     }
 
-respAddHeader :: S.ByteString -> HttpResp m -> HttpResp m
+-- | Add header to the HTTP response.
+respAddHeader :: (S.ByteString, S.ByteString) -> HttpResp m -> HttpResp m
 respAddHeader hdr resp = resp { respHeaders = hdr : respHeaders resp }
 
 instance Show (HttpResp m) where
@@ -992,8 +997,8 @@ mkHtmlResp :: (Monad m) =>
            -> HttpResp m
 mkHtmlResp stat html = resp
     where resp0 = mkHttpHead stat `asTypeOf` resp
-          ctype = S8.pack "Content-Type: text/html"
-          len = S8.pack $ "Content-Length: " ++ show (L8.length html)
+          ctype = (S8.pack "Content-Type", S8.pack"text/html")
+          len   = (S8.pack "Content-Length", S8.pack $ show (L8.length html))
           resp  = resp0 { respHeaders = respHeaders resp0 ++ [ctype, len]
                         , respBody = inumPure html
                         }
@@ -1013,8 +1018,8 @@ mkContentLenResp stat ctype body =
            , respChunk = False
            , respBody = inumPure body }
  where
-  contentType = S8.pack $ "Content-Type: " ++ ctype
-  contentLength = S8.pack $ "Content-Length: " ++ show (L8.length body)
+  contentType = (S8.pack "Content-Type", S8.pack ctype)
+  contentLength = (S8.pack "Content-Length", S8.pack . show .  L8.length $ body)
 
 -- | Make an 'HttpResp' of an arbitrary content-type based on an
 -- 'Onum' that will dynamically generate the message body.  Since the
@@ -1033,7 +1038,7 @@ mkOnumResp stat ctype body =
            , respChunk = True
            , respBody = body }
  where
-  contentType = S8.pack $ "Content-Type: " ++ ctype
+  contentType = (S8.pack "Content-Type", S8.pack ctype)
 
 htmlEscapeChar :: Char -> Maybe String
 htmlEscapeChar '<'  = Just "&lt;"
@@ -1054,7 +1059,7 @@ htmlEscape str = L8.unfoldr next (str, "")
 -- | Generate a 301 (redirect) response.
 resp301 :: (Monad m) => String -> HttpResp m
 resp301 target =
-    respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat301 html
+    respAddHeader (S8.pack "Location", S8.pack target) $ mkHtmlResp stat301 html
     where html = L8.concat
                  [L8.pack
                   "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
@@ -1069,7 +1074,7 @@ resp301 target =
 -- | Generate a 303 (see other) response.
 resp303 :: (Monad m) => String -> HttpResp m
 resp303 target =
-    respAddHeader (S8.pack $ "Location: " ++ target) $ mkHtmlResp stat303 html
+    respAddHeader (S8.pack "Location", S8.pack target) $ mkHtmlResp stat303 html
     where html = L8.concat
                  [L8.pack
                   "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n\
@@ -1145,19 +1150,19 @@ resp500 msg = mkHtmlResp stat500 html
 -- | Format and enumerate a response header and body.
 enumHttpResp :: (Monad m) =>
                 HttpResp m
-             -> Maybe UTCTime   -- ^ Time for @Date:@ header (if desired)
              -> Onum L.ByteString m ()
-enumHttpResp resp mdate = inumPure fmtresp `cat` (respBody resp |. maybeChunk)
+enumHttpResp resp = inumPure fmtresp `cat` (respBody resp |. maybeChunk)
     where
-      fmtresp = L.append (fmtStat $ respStatus resp) hdrs
-      hdrs = foldr (L.append . hdr) (L8.pack "\r\n") $
-             (if respChunk resp
-              then ((S8.pack "Transfer-Encoding: chunked") :)
-              else id) $
-             (maybe id (\t -> (S8.pack ("Date: " ++ http_fmt_time t) :)) mdate)
-             (respHeaders resp)
-      hdr h = L.fromChunks [h, S8.pack "\r\n"]
+      fmtresp = (fmtStat $ respStatus resp) `L.append` hdrsL
+      hdrsS = if respChunk resp
+                then (transferEncoding, S8.pack "chunked") :
+                     (filter ((/= transferEncoding) . fst) $ respHeaders resp)
+                else  respHeaders resp
+      hdrsL = (L.concat $ map mkHeader hdrsS) `L8.append` L8.pack "\r\n"
       maybeChunk = if respChunk resp then inumToChunks else inumNop
+      mkHeader (k, v) = lazyfy k `L8.append` L8.pack ": "
+                                 `L8.append` lazyfy v `L8.append` L8.pack "\r\n"
+      transferEncoding = S8.pack "Transfer-Encoding"
 
 -- | Given the headers of an HTTP request, provides an iteratee that
 -- will process the request body (if any) and return a response.
@@ -1206,7 +1211,8 @@ inumHttpServer server = mkInumM loop
         resp <- liftI $ inumHttpBody req .|
                 (catchI handler errHandler <* nullI)
         now <- liftI $ srvDate server
-        tryI (irun $ enumHttpResp resp now) >>=
+        let respWithDate = maybe resp (addDate resp) now
+        tryI (irun $ enumHttpResp respWithDate) >>=
              either (fatal . fst) (const loop)
       errHandler e@(SomeException _) _ = do
         srvLogger server $ "Response error: " ++ show e
@@ -1214,6 +1220,218 @@ inumHttpServer server = mkInumM loop
       fatal e@(SomeException _) = do
         liftI $ srvLogger server $ "Reply error: " ++ show e
         return ()
+      addDate resp t = respAddHeader (S8.pack "Date"
+                                     , S8.pack . http_fmt_time $ t) resp
+
+--
+-- HTTP Client support
+--
+
+-- | Create a simple HEAD request.
+headRequest :: Monad m => L -> m (HttpReq ())
+headRequest url = mkRequestToAbsUri url $ S8.pack "HEAD"
+
+-- | Create a simple GET request.
+getRequest :: Monad m => L -> m (HttpReq ())
+getRequest url = mkRequestToAbsUri url $ S8.pack "GET"
+
+-- | Create a simple POST request, given the URL, Content-Type,
+-- and Content-Length.
+postRequest :: Monad m => L -> S -> S -> m (HttpReq ())
+postRequest url ctypeV lenV = do
+  req <- mkRequestToAbsUri url $ S8.pack "POST"
+  let ctype = ( S8.pack "Content-Type", ctypeV)
+      len   = ( S8.pack "Content-Length", lenV)
+  return $ req { reqHeaders = reqHeaders req ++ [ctype, len] }
+
+-- | Createa generic HTTP request, given an absoluteURI:
+mkRequestToAbsUri :: Monad m => L -> S -> m (HttpReq ())
+mkRequestToAbsUri urlString method = do 
+  (scheme, host, mport, path, query) <- enumPure urlString |$ absUri
+  return defaultHttpReq { reqScheme  = scheme
+                        , reqMethod  = method
+                        , reqPath    = path
+                        , reqPathLst = path2list path
+                        , reqQuery   = query
+                        , reqHost    = host
+                        , reqPort    = mport
+                        , reqVers    = (1,1)
+                        , reqHeaders = [hostHeader host, uaHeader]
+                        }
+     where uaHeader = (S8.pack "User-Agent", S8.pack userAgent)
+           hostHeader host = (S8.pack "Host", host)
+
+-- | Enumerate a request, and body.
+enumHttpReq :: (Monad m)
+        => HttpReq s -> L -> Onum L m a
+enumHttpReq req body =
+  enumNoBody |. inumStoL
+    `lcat` (enumPure body |. maybeChunk)
+  where enumNoBody = enumPure $ S.concat [ mkHttpRequest_Line req
+                                         , mkHttpReqHeaders req
+                                         , S8.pack "\r\n"
+                                         ]
+        maybeChunk = case lookup transferEncoding (reqHeaders req) of
+                       Just v | v == S8.pack "chunked" -> inumToChunks 
+                       _ -> inumNop
+        transferEncoding = S8.pack "Transfer-Encoding"
+
+
+-- | Create HTTP request line, defined by RFC2616 as:
+--
+-- > Request-Line = Method SP Request-URI SP HTTP-Version CRLF
+mkHttpRequest_Line :: HttpReq s -> S
+mkHttpRequest_Line req = S.concat [
+    reqMethod req
+  , sp
+  , mkReqURI req
+  , sp
+  , let (major, minor) = reqVers req
+    in S8.pack $ "HTTP/" ++ show major ++ "." ++ show minor
+  , S8.pack "\r\n"
+  ]
+    where sp = S8.singleton ' '
+
+-- | Given a request, create the Request-URI.
+-- The 'reqPathLst' is used (instead of the raw 'reqPath') when
+-- possible.
+mkReqURI :: HttpReq s -> S
+mkReqURI req = S.concat
+  [ let s = reqScheme req
+    in if S.null s then S.empty
+                   else S8.append s (S8.pack "://")
+  , reqHost req
+  , maybe S.empty (S8.pack . (":"++) .  show) $ reqPort req
+  , if null $ reqPathLst req
+      then reqPath req
+      else reqNormalPath req
+  , let q = reqQuery req
+    in if S.null q then S.empty
+                   else S8.append (S8.singleton '?') q
+  ]
+
+-- | Given a request, emit all the headers.
+-- Namely, this function returns :
+-- *(( general-header | request-header | entity-header) CRLF)
+-- It does not, howerver, check that that headers are well-formed.
+mkHttpReqHeaders :: HttpReq s -> S
+mkHttpReqHeaders req = S.concat . filter (/=S.empty) $
+        hostHeader
+      : contentTypeHeader
+      : contentLengthHeader
+      : cookieHeader
+      : transferEncodingHeader
+      : ifModifiedSinceHeader 
+      : allHeaders
+  where mkHeader (k,v) =
+          if S.null v
+            then S.empty
+            else k `S8.append` S8.pack ": "
+                   `S8.append` v `S8.append` S8.pack "\r\n"
+        --
+        hostHeader = mkHeader (S8.pack "Host", reqHost req)
+        --
+        transferEncodingHeader =
+          mkHeader (S8.pack "Transfer-Encoding", reqTransferEncoding req)
+        --
+        contentLengthHeader =
+          mkHeader (S8.pack "Content-Length"
+                   , maybe S.empty (S8.pack . show) $ reqContentLength req)
+        --
+        ifModifiedSinceHeader =
+          mkHeader (S8.pack "If-Modified-Since"
+                   , maybe S.empty (S8.pack . http_fmt_time)
+                                     $ reqIfModifiedSince req)
+        --
+        cookieHeader =
+          mkHeader (S8.pack "Cookie"
+                   , S8.intercalate (S8.singleton ';') $ map p $ reqCookies req)
+        p (k, v) = k `S8.append` S8.singleton '=' `S8.append` v
+        --
+        contentTypeHeader =
+          mkHeader (S8.pack "Content-Type"
+                   , maybe S.empty ctF $ reqContentType req)
+        ctF (mt,params) = mt `S8.append` 
+          (S8.intercalate (S8.singleton ';') $ map p params)
+        --
+        allHeaders = map mkHeader $ reqHeaders req
+
+-- Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
+httpStatusI :: (Monad m) => Iter L m HttpStatus
+httpStatusI = do
+  _ <- hTTPvers
+  spaces
+  status <- whileMinMaxI 3 3 (isDigit . w2c) >>= readI <?> "Status code"
+  spaces
+  phrase <- L8.unpack <$> text_except "\r\n"
+  skipI crlf
+  return $ mkStat status phrase
+
+-- | Return a response. If the \'Trasnfer-Encoding\' header is set to
+-- \'chunked\', it is removed from the headers and the 'respChunk'
+-- field is set.
+-- 'enumHttpResp' to enumerate the headers and body.
+httpRespI :: (MonadIO m) => Iter L m (HttpResp m)
+httpRespI = do
+  stat <- httpStatusI
+  hdrs <- many hdr_field_val
+  chunked <- maybe (return False) (isChunked . L8.map toLower . lazyfy) $ 
+                lookup (S8.pack "transfer-encoding") hdrs
+  let hdrs' = if chunked
+                then filter ((/= S8.pack "transfer-encoding") . fst) hdrs
+                else hdrs
+  skipI crlf
+  body <- httpBodyI hdrs' chunked
+  let resp = HttpResp { respStatus  = stat
+                      , respHeaders = hdrs'
+                      , respChunk   = chunked
+                      , respBody    = enumPure body }
+  return resp
+    where isChunked v = enumPure v |$ (cI <|> return False)
+          cI = do optionalI spaces
+                  match $ L8.pack "chunked"
+                  optionalI spaces
+                  return True
+
+-- | This 'Inum' reads to the end of an HTTP message body (and not
+-- beyond) and decodes the Transfer-Encoding.  It handles straight
+-- content of a size specified by the Content-Length header and
+-- chunk-encoded content. If neither headers are set, it reads the
+-- body lazyly (with 'pureI').
+httpBodyI :: (Monad m) => [(S,S)] -> Bool -> Iter L m L
+httpBodyI hdrs isChunked = 
+  if isChunked
+    then chunkedBodyI
+    else let mLen = do lenS <- lookup (S8.pack "content-length") hdrs
+                       maybeRead . S8.unpack $ lenS
+         in maybe pureI takeI mLen
+  where maybeRead = fmap fst . listToMaybe . reads
+
+-- | This 'Iter' decodes \'chunk\' encoded body. Specifically,
+-- it implements \'chunked-body\' of RFC2616. Note: the
+-- entity-headers in the trailer are ignored.
+chunkedBodyI :: Monad m => Iter L m L
+chunkedBodyI = do
+  r <- many chunk_
+  skipMany trailer
+  skipI crlf
+  return $ L.concat r
+    where chunk_ = do size <- chunk_size
+                      chunk_ext
+                      crlf
+                      b <- if size > 0
+                             then takeI size <* crlf
+                             else return L.empty -- last-chunk
+                      return b
+          chunk_size = hexInt 
+          chunk_ext = skipMany $ do char ';'
+                                    osp
+                                    chunk_ext_name
+                                    optionalI $ char '=' >> chunk_ext_val
+          chunk_ext_name = token
+          chunk_ext_val  = token <|> quoted_string
+          trailer = hdr_field_val
+          osp = skipWhileI $ \c -> c == eord ' ' || c == eord '\t'
 
 
 {-
