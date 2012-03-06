@@ -93,6 +93,7 @@ Library
     Data.IterIO.Zlib
   Other-modules:
     Data.IterIO.ZlibInt
+    Paths_iterIO
   Extensions:
     ForeignFunctionInterface, DeriveDataTypeable,
     ExistentialQuantification, MultiParamTypeClasses,

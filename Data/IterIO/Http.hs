@@ -63,6 +63,9 @@ import Data.IterIO
 import Data.IterIO.Parse
 import Data.IterIO.Search
 
+import Data.Version (showVersion)
+import Paths_iterIO (version)
+
 -- import System.IO
 
 type L = L8.ByteString
@@ -75,7 +78,7 @@ lazyfy :: S -> L
 lazyfy = L.pack . S.unpack
 
 userAgent :: String
-userAgent = "haskell-iterIO/0.2.2"
+userAgent = "haskell-iterIO/"  ++ showVersion version
 
 --
 -- Basic pieces
