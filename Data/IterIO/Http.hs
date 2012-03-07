@@ -390,8 +390,7 @@ absUri = do
                  rfc3986_test (rfc3986_unreserved .|. rfc3986_sub_delims) c
                  || c == eord ':'
   
--- | Parses a Request-URI, defined by RFC2616. Specifically,
--- it parses "*" | absoluteURI | abs_path  and
+-- | Parses a Request-URI, defined by RFC2616, and
 -- returns (scheme, host, path, query).
 uri :: (Monad m) => Iter L m (S, S, Maybe Int, S, S)
 uri = absUri
