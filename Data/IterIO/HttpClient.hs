@@ -1,13 +1,13 @@
 module Data.IterIO.HttpClient ( -- * Simple interface
                                 simpleHttp
-                              , simpleHeadHttp
-                              , simpleGetHttp
-                              , simplePostHttp
                               , genSimpleHttp 
                               -- * Advanced/internal interface
                               , HttpClient(..)
                               , mkHttpClient
                               , httpConnect
+                              -- * Create requests
+                              , headRequest, getRequest, postRequest
+                              , mkRequestToAbsUri
                               ) where
 
 import Prelude hiding (catch, head, id, div)
@@ -32,9 +32,23 @@ import Data.IterIO
 import Data.IterIO.Http
 import Data.IterIO.SSL
 
+import Data.Version (showVersion)
+import Paths_iterIO (version)
+
 type L = L.ByteString
 type S = S.ByteString
 
+
+lazyfy :: S -> L
+lazyfy = L.pack . S.unpack
+
+catchIO :: IO a -> (IOException -> IO a) -> IO a
+catchIO = catch
+
+userAgent :: String
+userAgent = "haskell-iterIO/"  ++ showVersion version
+
+-- | An HTTP client.
 data HttpClient = HttpClient {
       hcSock     :: !Net.Socket
     , hcSockAddr :: !Net.SockAddr
@@ -69,7 +83,11 @@ httpConnect hc = do
                        return (nullI, inumNull)
 
 
--- | Some of this code is from the "HTTP" package.
+-- | Given the host, port, context, and \"is-https\" flag, create
+-- a client value. The returned value can be used with 'httpConnect'
+-- to get raw pipes to/from the server.
+--
+-- /Note:/ Some of this code is from the "HTTP" package.
 mkHttpClient :: S                     -- ^ Host
               -> Int                  -- ^ Port
               -> Maybe SSL.SSLContext -- ^ SSL context
@@ -97,46 +115,18 @@ mkHttpClient host port ctx isHttps = withSocket $ \s -> do
            err $ "Failed to lookup " ++ show h
        err = throwIO . userError
 
--- | Given a URL and SSL context, perform a simple HEAD request.
--- Use 'enumHttpResp' to retrieve the body.
-simpleHeadHttp :: MonadIO m
-               => String                -- ^ URL
-               -> Maybe SSL.SSLContext  -- ^ SSL Context
-               -> m (HttpResp m)
-simpleHeadHttp urlString ctx = do
-  req <- headRequest (L8.pack urlString)
-  genSimpleHttp req L.empty ctx maxNrRedirects True
+--
+-- Simple interface
+--
 
--- | Alias for 'simpleGetHttp'.
-simpleHttp :: MonadIO m 
-           => String                -- ^ URL
-           -> Maybe SSL.SSLContext  -- ^ SSL Context
+-- | Perform a simple HTTP request, given the the request header, body
+-- and SSL context, if any.
+simpleHttp :: MonadIO m
+           => HttpReq ()           -- ^ Request header
+           -> L                    -- ^ Request body
+           -> Maybe SSL.SSLContext -- ^ SSL Context
            -> m (HttpResp m)
-simpleHttp = simpleGetHttp
-
--- | Given a URL and SSL context, perform a simple GET request.
--- Use 'enumHttpResp' to retrieve the body.
-simpleGetHttp :: MonadIO m 
-              => String                -- ^ URL
-              -> Maybe SSL.SSLContext  -- ^ SSL Context
-              -> m (HttpResp m)
-simpleGetHttp urlString ctx = do
-  req <- getRequest (L8.pack urlString)
-  genSimpleHttp req L.empty ctx maxNrRedirects True
-
--- | Given a URL, Content-Type, message body, and SSL context, perform
--- a simple POST request. Note: message body must be properly encoded
--- (e.g., URL-encoded if the Content-Type is
--- \"application\/x-www-form-urlencoded\").
-simplePostHttp :: MonadIO m 
-               => String                -- ^ URL
-               -> String                -- ^ Content-Type header
-               -> L                     -- ^ Message body
-               -> Maybe SSL.SSLContext  -- ^ SSL Context
-               -> m (HttpResp m)
-simplePostHttp urlString ct body ctx = do
-  req <- postRequest (L8.pack urlString) (S8.pack ct) (S8.pack . show . L8.length $ body)
-  genSimpleHttp req body ctx maxNrRedirects True
+simpleHttp req body ctx = genSimpleHttp req body ctx maxNrRedirects True
 
 -- | Make a general HTTP request.
 -- If the request is over HTTPS, the SSL context must be provided.
@@ -148,7 +138,7 @@ simplePostHttp urlString ct body ctx = do
 -- cookie domain. Hence, the flag is used for the decision in passing
 -- the cookie to the location of a redirect.
 genSimpleHttp :: MonadIO m
-              => HttpReq ()            -- ^ Reqeuest
+              => HttpReq ()            -- ^ Request header
               -> L                     -- ^ Message body
               -> Maybe SSL.SSLContext  -- ^ SSL Context
               -> Int                   -- ^ Redirect count
@@ -203,8 +193,47 @@ handleRedirect req body ctx n resp passCookies =
             genSimpleHttp mReq body ctx (n-1) passCookies
   
 
-catchIO :: IO a -> (IOException -> IO a) -> IO a
-catchIO = catch
+--
+-- Create requests
+--
 
-lazyfy :: S -> L
-lazyfy = L.pack . S.unpack
+-- | Create a simple HEAD request.
+-- The @url@ must be an @absoluteURI@.
+headRequest :: String -> HttpReq ()
+headRequest url = fromJust $ mkRequestToAbsUri (L8.pack url) $ S8.pack "HEAD"
+
+-- | Create a simple GET request.
+-- The @url@ must be an @absoluteURI@.
+getRequest :: String -> HttpReq ()
+getRequest url = fromJust $ mkRequestToAbsUri (L8.pack url) $ S8.pack "GET"
+
+-- | Given a URL, Content-Type, and message body, perform a simple
+-- POST request. Note: message body must be properly encoded (e.g.,
+-- URL-encoded if the Content-Type is
+-- \"application\/x-www-form-urlencoded\").
+postRequest :: String  -- ^ URL
+            -> String  -- ^ Content-Type header
+            -> L       -- ^ Message body
+            -> HttpReq ()
+postRequest url ct body =
+  let req = fromJust $ mkRequestToAbsUri (L8.pack url) $ S8.pack "POST"
+      ctype = (S8.pack "Content-Type", S8.pack ct)
+      len   = (S8.pack "Content-Length", S8.pack . show . L8.length $ body)
+  in req { reqHeaders = reqHeaders req ++ [ctype, len] }
+
+-- | Createa generic HTTP request, given an absoluteURI:
+mkRequestToAbsUri :: Monad m => L -> S -> m (HttpReq ())
+mkRequestToAbsUri urlString method = do
+  (scheme, host, mport, path, query) <- enumPure urlString |$ absUri
+  return defaultHttpReq { reqScheme  = scheme
+                        , reqMethod  = method
+                        , reqPath    = path
+                        , reqPathLst = path2list path
+                        , reqQuery   = query
+                        , reqHost    = host
+                        , reqPort    = mport
+                        , reqVers    = (1,1)
+                        , reqHeaders = [hostHeader host, uaHeader]
+                        }
+     where uaHeader = (S8.pack "User-Agent", S8.pack userAgent)
+           hostHeader host = (S8.pack "Host", host)
