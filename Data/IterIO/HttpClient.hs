@@ -1,6 +1,9 @@
 module Data.IterIO.HttpClient ( -- * Simple interface
                                 simpleHttp, genSimpleHttp 
                               , headRequest, getRequest, postRequest
+                                -- * GET, HEAD wrappers
+                              , simpleGetHttp, simpleGetHttps
+                              , simpleHeadHttp, simpleHeadHttps
                               -- * Advanced interface
                               , HttpClient(..)
                               , mkHttpClient
@@ -119,6 +122,37 @@ mkHttpClient host port ctx isHttps = withSocket $ \s -> do
          catchIO (Net.getHostByName h) $ \_ ->
            err $ "Failed to lookup " ++ show h
        err = throwIO . userError
+
+--
+-- Simple interface wrappers
+--
+
+-- | Perform a simple HTTP GET request. No SSL support.
+simpleGetHttp :: MonadIO m
+              => String          -- ^ URL
+              -> m (HttpResp m)
+simpleGetHttp url = simpleHttp (getRequest url) L.empty Nothing
+
+-- | Perform a simple HTTPS GET request.
+simpleGetHttps :: MonadIO m
+               => String          -- ^ URL
+               -> SSL.SSLContext  -- ^ SSL Context
+               -> m (HttpResp m)
+simpleGetHttps url ctx = simpleHttp (getRequest url) L.empty (Just ctx)
+
+-- | Perform a simple HTTP HEAD request. No SSL support.
+simpleHeadHttp :: MonadIO m
+               => String          -- ^ URL
+               -> m (HttpResp m)
+simpleHeadHttp url = simpleHttp (headRequest url) L.empty Nothing
+
+-- | Perform a simple HTTPS HEAD request.
+simpleHeadHttps :: MonadIO m
+                => String          -- ^ URL
+                -> SSL.SSLContext  -- ^ SSL Context
+                -> m (HttpResp m)
+simpleHeadHttps url ctx = simpleHttp (headRequest url) L.empty (Just ctx)
+
 
 --
 -- Simple interface
