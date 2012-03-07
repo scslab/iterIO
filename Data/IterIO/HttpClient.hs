@@ -1,12 +1,12 @@
 module Data.IterIO.HttpClient ( -- * Simple interface
-                                simpleHttp
-                              , genSimpleHttp 
-                              -- * Advanced/internal interface
+                                simpleHttp, genSimpleHttp 
+                              , headRequest, getRequest, postRequest
+                              -- * Advanced interface
                               , HttpClient(..)
                               , mkHttpClient
                               , httpConnect
-                              -- * Create requests
-                              , headRequest, getRequest, postRequest
+                              -- * Internal
+                              , userAgent
                               , mkRequestToAbsUri
                               ) where
 
@@ -45,15 +45,20 @@ lazyfy = L.pack . S.unpack
 catchIO :: IO a -> (IOException -> IO a) -> IO a
 catchIO = catch
 
+-- | User agent corresponding to this library.
 userAgent :: String
 userAgent = "haskell-iterIO/"  ++ showVersion version
 
 -- | An HTTP client.
 data HttpClient = HttpClient {
       hcSock     :: !Net.Socket
+    -- ^ Socket
     , hcSockAddr :: !Net.SockAddr
+    -- ^ Socket address
     , hcSslCtx   :: !(Maybe SSL.SSLContext)
+    -- ^ SSL context
     , hcIsHttps  :: !Bool
+    -- ^ Use SSL
     }
 
 -- | Maximum number of redirects (to avoid cycle).
@@ -128,7 +133,7 @@ simpleHttp :: MonadIO m
            -> m (HttpResp m)
 simpleHttp req body ctx = genSimpleHttp req body ctx maxNrRedirects True
 
--- | Make a general HTTP request.
+-- | Make a general HTTP request to host specified in the request.
 -- If the request is over HTTPS, the SSL context must be provided.
 -- The redirect count is used to limit the number of redirects
 -- followed (when receiving a 3xx response); use 0 to return the 
@@ -222,6 +227,7 @@ postRequest url ct body =
   in req { reqHeaders = reqHeaders req ++ [ctype, len] }
 
 -- | Createa generic HTTP request, given an absoluteURI:
+-- If the URI is not absolute, the parser will fail.
 mkRequestToAbsUri :: Monad m => L -> S -> m (HttpReq ())
 mkRequestToAbsUri urlString method = do
   (scheme, host, mport, path, query) <- enumPure urlString |$ absUri
