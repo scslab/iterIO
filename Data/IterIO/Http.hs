@@ -1,7 +1,7 @@
-{-# LANGUAGE CPP #-}
-#if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 702)
-{-# LANGUAGE Trustworthy #-}
-#endif
+-- {-# LANGUAGE CPP #-}
+-- #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 702)
+-- {-# LANGUAGE Trustworthy #-}
+-- #endif
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
@@ -1231,7 +1231,7 @@ enumHttpReq :: (Monad m) => HttpReq s -> L -> Onum L m a
 enumHttpReq req body =
   enumNoBody |. inumStoL
     `lcat` (enumPure body |. maybeChunk)
-  where enumNoBody = enumPure $ S.concat [ mkHttpRequest_Line req
+  where enumNoBody = enumPure $ S.concat [ mkHttpRequest_Line req False
                                          , mkHttpReqHeaders req
                                          , S8.pack "\r\n"
                                          ]
@@ -1244,11 +1244,15 @@ enumHttpReq req body =
 -- | Create HTTP request line, defined by RFC2616 as:
 --
 -- > Request-Line = Method SP Request-URI SP HTTP-Version CRLF
-mkHttpRequest_Line :: HttpReq s -> S
-mkHttpRequest_Line req = S.concat [
+-- 
+-- Set the @absURI@ flag to true if you wish to use an absolute-URI
+-- when in the request line. Note: if the flag is set to false then
+-- the \"Host\" header must be set.
+mkHttpRequest_Line :: HttpReq s -> Bool -> S
+mkHttpRequest_Line req absURI = S.concat [
     reqMethod req
   , sp
-  , mkReqURI req
+  , mkReqURI req absURI
   , sp
   , let (major, minor) = reqVers req
     in S8.pack $ "HTTP/" ++ show major ++ "." ++ show minor
@@ -1257,29 +1261,31 @@ mkHttpRequest_Line req = S.concat [
     where sp = S8.singleton ' '
 
 -- | Given a request, create the Request-URI.
--- The 'reqPathLst' is used (instead of the raw 'reqPath') when
--- possible.
-mkReqURI :: HttpReq s -> S
-mkReqURI req = S.concat
-  [ let s = reqScheme req
-    in if S.null s then S.empty
-                   else S8.append s (S8.pack "://")
-  , reqHost req
-  , maybe S.empty (S8.pack . (":"++) .  show) $ reqPort req
+-- If @absURI@ flag is True and the 'reqHost' field is not set, the
+-- port and scheme are ignored.
+-- The 'reqPathLst' is used (instead of the raw 'reqPath') when available.
+mkReqURI :: HttpReq s -> Bool -> S
+mkReqURI req absURI = S.concat
+  [ if absURI then authorization else S.empty
   , if null $ reqPathLst req
       then reqPath req
       else reqNormalPath req
-  , let q = reqQuery req
-    in if S.null q then S.empty
-                   else S8.append (S8.singleton '?') q
+  , emptyIfNull reqQuery $ \q -> S8.append (S8.singleton '?') q
   ]
+    where emptyIfNull rF g = let r = (rF req)
+                             in if S.null r then S.empty else g r
+          authorization = emptyIfNull reqHost $ \h -> S.concat 
+            [ emptyIfNull reqScheme $ \s -> S8.append s (S8.pack "://")
+            , h
+            , maybe S.empty (S8.pack . (":"++) .  show) $ reqPort req
+            ]
 
 -- | Given a request, emit all the headers.
 -- Namely, this function returns :
 -- *(( general-header | request-header | entity-header) CRLF)
 -- It does not, howerver, check that that headers are well-formed.
 mkHttpReqHeaders :: HttpReq s -> S
-mkHttpReqHeaders req = S.concat . filter (/=S.empty) $
+mkHttpReqHeaders req = S.concat . nub . filter (not . S.null) $
         hostHeader
       : contentTypeHeader
       : contentLengthHeader

@@ -1,11 +1,14 @@
+{-# LANGUAGE OverloadedStrings #-}
 import Data.IterIO
 import Data.IterIO.Http
 import Data.IterIO.HttpClient
 import OpenSSL
 import qualified OpenSSL.Session as SSL
+import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import System.Environment
 
+import Control.Concurrent
 
 main :: IO ()
 main = withOpenSSL $ do

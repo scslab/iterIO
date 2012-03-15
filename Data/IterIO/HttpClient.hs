@@ -8,14 +8,16 @@ module Data.IterIO.HttpClient ( -- * Simple interface
                               , HttpClient(..)
                               , mkHttpClient
                               , httpConnect
+                              , inumHttpClient
                               -- * Internal
                               , userAgent
+                              , maxNrRedirects
                               , mkRequestToAbsUri
                               ) where
 
-import Prelude hiding (catch, head, id, div)
+import Prelude hiding (catch, head, div)
 
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import Control.Exception
 import Control.Monad.Trans
 
@@ -29,14 +31,14 @@ import qualified Network.Socket as Net
 import qualified Network.BSD as Net
 import qualified OpenSSL.Session as SSL
 
-import System.IO
-
 import Data.IterIO
 import Data.IterIO.Http
 import Data.IterIO.SSL
 
 import Data.Version (showVersion)
 import Paths_iterIO (version)
+
+import Data.IORef
 
 type L = L.ByteString
 type S = S.ByteString
@@ -64,9 +66,9 @@ data HttpClient = HttpClient {
     -- ^ Use SSL
     }
 
--- | Maximum number of redirects (to avoid cycle).
+-- | Maximum number of redirects. Defult: no redirect (0).
 maxNrRedirects :: Int
-maxNrRedirects = 5
+maxNrRedirects = 0
 
 -- | Given an HTTP client configuration, make the actual connection to
 -- server.
@@ -78,17 +80,8 @@ httpConnect hc = do
     throwIO (userError "Need SSL context for  HTTPS")
   Net.connect s (hcSockAddr hc)
   if hcIsHttps hc
-    then mkSecure s (fromJust $ hcSslCtx hc)
-    else mkInsecure s
-  where
-    mkInsecure s = do
-      h <- Net.socketToHandle s ReadWriteMode
-      hSetBuffering h NoBuffering
-      return (handleI h, enumHandle h `inumFinally` liftIO (hClose h))
-    mkSecure s ctx = iterSSL ctx s False `catch` \e@(SomeException _) -> do
-                       hPutStrLn stderr (show e)
-                       Net.sClose s
-                       return (nullI, inumNull)
+    then iterSSL (fromJust $ hcSslCtx hc) s False
+    else iterStream s
 
 
 -- | Given the host, port, context, and \"is-https\" flag, create
@@ -189,38 +182,45 @@ genSimpleHttp req body ctx redirectCount passCookies = do
   port <- maybe (defaultPort scheme) return $ reqPort req
   client <- liftIO $ mkHttpClient (reqHost req) port ctx isHttps
   (sIter,sOnum) <- liftIO $ httpConnect client
-  enumHttpReq req body |$ sIter  
-  resp <- sOnum |$ httpRespI
-  if redirectCount > 0
-    then handleRedirect req body ctx redirectCount resp passCookies
-    else return resp
-    where defaultPort s | s == S8.pack "http"  = return 80
+  refResp <- liftIO $ newIORef Nothing
+  count <- liftIO $ newIORef 0
+  sOnum |$ inumHttpClient (req, body) (handler count refResp) .| sIter
+  mresp <- liftIO $ readIORef refResp
+  maybe err return mresp
+    where handler countRef refResp resp = do
+            liftIO $ writeIORef refResp (Just resp)
+            count <- liftIO $ do c <- readIORef countRef
+                                 writeIORef countRef (c+1)
+                                 return c
+            if count < redirectCount
+              then handleRedirect (req, body) passCookies resp
+              else return Nothing
+          defaultPort s | s == S8.pack "http"  = return 80
                         | s == S8.pack "https" = return 443
                         | otherwise = liftIO . throwIO . userError $
                                         "Unrecognized scheme" ++ S8.unpack s
+          err = liftIO . throwIO . userError $ "Request failed"
 
 -- | Given a 3xx response and original request, handle the redirect.
--- The paramets of @handleRedirect@ are the same as 'genSimpleHttp',
--- hwere they are explained. Currently, only reponses with status
--- codes 30[1237] and set \"Location\" header are handled.
+-- Currently, only reponses with status codes 30[1237] and set
+-- \"Location\" header are handled. Note that the request is made to
+-- the same host, so a redirect to a different host will result in a
+-- 4xx response.
 handleRedirect :: MonadIO m 
-               => HttpReq ()           -- ^ Original request
-               -> L                    -- ^ Message body
-               -> Maybe SSL.SSLContext -- ^ SSL context
-               -> Int                  -- ^ Redirect count
-               -> HttpResp m           -- ^ Response
+               => (HttpReq s, L )      -- ^ Original request
                -> Bool                 -- ^ Pass cookies
-               -> m (HttpResp m)    
-handleRedirect req body ctx n resp passCookies = 
+               -> HttpResp m           -- ^ Response
+               -> Iter L m (Maybe (HttpReq s, L))
+handleRedirect (req, body) passCookies resp = 
   if (respStatus resp `notElem` s300s) || (reqMethod req `notElem` meths)
-    then return resp
-    else let newLoc = lookup (S8.pack "location") $ respHeaders resp
-         in maybe (return resp) doRedirect newLoc
+    then return Nothing
+    else doRedirect $ lookup (S8.pack "location") $ respHeaders resp 
     where s300s = [stat301, stat302, stat303, stat307]
           meths = [S8.pack "GET", S8.pack "HEAD"]
-          doRedirect url = do
+          doRedirect Nothing = return Nothing
+          doRedirect (Just url) = do
             newReq <- mkRequestToAbsUri (lazyfy url) (reqMethod req)
-            let mReq = newReq { reqHeaders          = reqHeaders req
+            let req' = newReq { reqHeaders          = reqHeaders req
                               , reqCookies          = if passCookies
                                                         then reqCookies req
                                                         else []
@@ -229,8 +229,7 @@ handleRedirect req body ctx n resp passCookies =
                               , reqTransferEncoding = reqTransferEncoding req
                               , reqIfModifiedSince  = reqIfModifiedSince req
                               , reqSession          = reqSession req }
-            genSimpleHttp mReq body ctx (n-1) passCookies
-  
+            return $ Just (req', body)
 
 --
 -- Create requests
@@ -272,8 +271,34 @@ mkRequestToAbsUri urlString method = do
                         , reqQuery   = query
                         , reqHost    = host
                         , reqPort    = mport
+                        , reqContentLength = Just 0
                         , reqVers    = (1,1)
                         , reqHeaders = [hostHeader host, uaHeader]
                         }
      where uaHeader = (S8.pack "User-Agent", S8.pack userAgent)
            hostHeader host = (S8.pack "Host", host)
+
+-- | An HTTP response handler used by HTTP clients.
+type HttpResponseHandler m s =
+      HttpResp m -> Iter L m (Maybe (HttpReq s, L))
+
+-- | Given an initial request, and a response handler,
+-- create an inum that provides underlying functionality of an http
+-- client.
+inumHttpClient :: MonadIO m 
+               => (HttpReq s, L)
+               -> HttpResponseHandler m s -> Inum L L m a
+inumHttpClient (req,body) respHandler = mkInumM $ 
+  tryI (irun $ enumHttpReq req body) >>=
+             either (fatal . fst) (const loop)
+  where loop = do eof <- atEOFI
+                  unless eof doresp
+        doresp = do
+          resp <- liftI $ httpRespI
+          mreq <- catchI (liftI $ respHandler resp) errH
+          maybe (return ())
+                (\(req', body') ->
+                    tryI (irun $ enumHttpReq req' body') >>=
+                      either (fatal . fst) (const loop)) mreq
+        fatal (SomeException _) = return ()
+        errH  (SomeException _) = return . return $ Nothing
