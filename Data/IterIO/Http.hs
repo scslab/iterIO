@@ -6,13 +6,12 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
 module Data.IterIO.Http (-- * HTTP Request support
-                         HttpReq(..), reqNormalPath
+                         HttpReq(..), defaultHttpReq, reqNormalPath
                         , httpReqI, inumHttpBody
                         , inumToChunks, inumFromChunks
                         , http_fmt_time, dateI
                         , FormField(..), foldForm
-                        , headRequest, getRequest, postRequest
-                        , mkRequestToAbsUri, enumHttpReq 
+                        , enumHttpReq 
                         -- , urlencodedFormI, multipartI, inumMultipart
                         -- , foldUrlencoded, foldMultipart, foldQuery
                         -- * HTTP Response support
@@ -29,6 +28,8 @@ module Data.IterIO.Http (-- * HTTP Request support
                         , HttpRequestHandler
                         , HttpServerConf(..), nullHttpServer, ioHttpServer
                         , inumHttpServer
+                        -- * URI parsers
+                        , absUri, uri, path2list
                         -- -- * For debugging
                         -- , postReq, encReq, mptest, mptest'
                         -- , formTestMultipart, formTestUrlencoded
@@ -63,8 +64,6 @@ import Data.IterIO
 import Data.IterIO.Parse
 import Data.IterIO.Search
 
-import Data.Version (showVersion)
-import Paths_iterIO (version)
 
 -- import System.IO
 
@@ -77,8 +76,6 @@ strictify = S.concat . L.toChunks
 lazyfy :: S -> L
 lazyfy = L.pack . S.unpack
 
-userAgent :: String
-userAgent = "haskell-iterIO/"  ++ showVersion version
 
 --
 -- Basic pieces
@@ -378,7 +375,7 @@ pathI = dopath <?> "path"
       qpcharslash c = rfc3986_test rfc3986_pcharslash c
                       || c == eord '?' || c == eord '%'
  
--- | Returns (scheme, host, path, query)
+-- | Parses an absoluteURI, returning (scheme, host, path, query)
 absUri :: (Monad m) => Iter L m (S, S, Maybe Int, S, S)
 absUri = do
   scheme <- strictify <$> satisfy (isAlpha . w2c)
@@ -393,7 +390,8 @@ absUri = do
                  rfc3986_test (rfc3986_unreserved .|. rfc3986_sub_delims) c
                  || c == eord ':'
   
--- | Returns (scheme, host, path, query).
+-- | Parses a Request-URI, defined by RFC2616, and
+-- returns (scheme, host, path, query).
 uri :: (Monad m) => Iter L m (S, S, Maybe Int, S, S)
 uri = absUri
       <|> path
@@ -403,7 +401,8 @@ uri = absUri
       path = do (p, q) <- ensureI (== eord '/') *> pathI
                 return (S.empty, S.empty, Nothing, p, q)
 
--- | Turn a path into a list of components
+-- | Turn a path into a list of components. Used to set the
+-- 'reqPathLst' field in a request.
 path2list :: S -> [S]
 path2list path = runIdentity $ inumPure path |$ (slash [] <?> "absolute path")
     where
@@ -1227,47 +1226,12 @@ inumHttpServer server = mkInumM loop
 -- HTTP Client support
 --
 
--- | Create a simple HEAD request.
-headRequest :: Monad m => L -> m (HttpReq ())
-headRequest url = mkRequestToAbsUri url $ S8.pack "HEAD"
-
--- | Create a simple GET request.
-getRequest :: Monad m => L -> m (HttpReq ())
-getRequest url = mkRequestToAbsUri url $ S8.pack "GET"
-
--- | Create a simple POST request, given the URL, Content-Type,
--- and Content-Length.
-postRequest :: Monad m => L -> S -> S -> m (HttpReq ())
-postRequest url ctypeV lenV = do
-  req <- mkRequestToAbsUri url $ S8.pack "POST"
-  let ctype = ( S8.pack "Content-Type", ctypeV)
-      len   = ( S8.pack "Content-Length", lenV)
-  return $ req { reqHeaders = reqHeaders req ++ [ctype, len] }
-
--- | Createa generic HTTP request, given an absoluteURI:
-mkRequestToAbsUri :: Monad m => L -> S -> m (HttpReq ())
-mkRequestToAbsUri urlString method = do 
-  (scheme, host, mport, path, query) <- enumPure urlString |$ absUri
-  return defaultHttpReq { reqScheme  = scheme
-                        , reqMethod  = method
-                        , reqPath    = path
-                        , reqPathLst = path2list path
-                        , reqQuery   = query
-                        , reqHost    = host
-                        , reqPort    = mport
-                        , reqVers    = (1,1)
-                        , reqHeaders = [hostHeader host, uaHeader]
-                        }
-     where uaHeader = (S8.pack "User-Agent", S8.pack userAgent)
-           hostHeader host = (S8.pack "Host", host)
-
 -- | Enumerate a request, and body.
-enumHttpReq :: (Monad m)
-        => HttpReq s -> L -> Onum L m a
+enumHttpReq :: (Monad m) => HttpReq s -> L -> Onum L m a
 enumHttpReq req body =
   enumNoBody |. inumStoL
     `lcat` (enumPure body |. maybeChunk)
-  where enumNoBody = enumPure $ S.concat [ mkHttpRequest_Line req
+  where enumNoBody = enumPure $ S.concat [ mkHttpRequest_Line req False
                                          , mkHttpReqHeaders req
                                          , S8.pack "\r\n"
                                          ]
@@ -1280,11 +1244,15 @@ enumHttpReq req body =
 -- | Create HTTP request line, defined by RFC2616 as:
 --
 -- > Request-Line = Method SP Request-URI SP HTTP-Version CRLF
-mkHttpRequest_Line :: HttpReq s -> S
-mkHttpRequest_Line req = S.concat [
+-- 
+-- Set the @absURI@ flag to true if you wish to use an absolute-URI
+-- when in the request line. Note: if the flag is set to false then
+-- the \"Host\" header must be set.
+mkHttpRequest_Line :: HttpReq s -> Bool -> S
+mkHttpRequest_Line req absURI = S.concat [
     reqMethod req
   , sp
-  , mkReqURI req
+  , mkReqURI req absURI
   , sp
   , let (major, minor) = reqVers req
     in S8.pack $ "HTTP/" ++ show major ++ "." ++ show minor
@@ -1293,29 +1261,31 @@ mkHttpRequest_Line req = S.concat [
     where sp = S8.singleton ' '
 
 -- | Given a request, create the Request-URI.
--- The 'reqPathLst' is used (instead of the raw 'reqPath') when
--- possible.
-mkReqURI :: HttpReq s -> S
-mkReqURI req = S.concat
-  [ let s = reqScheme req
-    in if S.null s then S.empty
-                   else S8.append s (S8.pack "://")
-  , reqHost req
-  , maybe S.empty (S8.pack . (":"++) .  show) $ reqPort req
+-- If @absURI@ flag is True and the 'reqHost' field is not set, the
+-- port and scheme are ignored.
+-- The 'reqPathLst' is used (instead of the raw 'reqPath') when available.
+mkReqURI :: HttpReq s -> Bool -> S
+mkReqURI req absURI = S.concat
+  [ if absURI then authorization else S.empty
   , if null $ reqPathLst req
       then reqPath req
       else reqNormalPath req
-  , let q = reqQuery req
-    in if S.null q then S.empty
-                   else S8.append (S8.singleton '?') q
+  , emptyIfNull reqQuery $ \q -> S8.append (S8.singleton '?') q
   ]
+    where emptyIfNull rF g = let r = (rF req)
+                             in if S.null r then S.empty else g r
+          authorization = emptyIfNull reqHost $ \h -> S.concat 
+            [ emptyIfNull reqScheme $ \s -> S8.append s (S8.pack "://")
+            , h
+            , maybe S.empty (S8.pack . (":"++) .  show) $ reqPort req
+            ]
 
 -- | Given a request, emit all the headers.
 -- Namely, this function returns :
 -- *(( general-header | request-header | entity-header) CRLF)
 -- It does not, howerver, check that that headers are well-formed.
 mkHttpReqHeaders :: HttpReq s -> S
-mkHttpReqHeaders req = S.concat . filter (/=S.empty) $
+mkHttpReqHeaders req = S.concat . nub . filter (not . S.null) $
         hostHeader
       : contentTypeHeader
       : contentLengthHeader

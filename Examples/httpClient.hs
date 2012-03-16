@@ -1,16 +1,19 @@
+{-# LANGUAGE OverloadedStrings #-}
 import Data.IterIO
 import Data.IterIO.Http
 import Data.IterIO.HttpClient
 import OpenSSL
 import qualified OpenSSL.Session as SSL
+import qualified Data.ByteString.Char8 as S8
+import qualified Data.ByteString.Lazy as L
+import System.Environment
 
-
-exampleNr :: Int
-exampleNr = 3
+import Control.Concurrent
 
 main :: IO ()
-main = withOpenSSL $ 
-  case exampleNr of
+main = withOpenSSL $ do
+  args <- getArgs
+  case read . head $ args of
    0 -> httpExample
    1 -> httpsExample
    2 -> httpChunkedExample
@@ -18,21 +21,21 @@ main = withOpenSSL $
    _ -> return ()
 
 httpExample = do
-  res <- simpleHttp "http://tools.ietf.org/html/rfc2616" Nothing
+  res <- simpleGetHttp "http://tools.ietf.org/html/rfc2616"
   enumHttpResp res |$ stdoutI
   
 httpsExample = do
   ctx <- SSL.context
   SSL.contextSetCADirectory ctx "/etc/ssl/certs/"
-  res <- simpleHttp "https://tools.ietf.org/html/rfc2616" (Just ctx)
+  res <- simpleGetHttps "https://tools.ietf.org/html/rfc2616" ctx
   enumHttpResp res |$ stdoutI
 
 httpChunkedExample = do
-  res <- simpleHttp "http://www.google.com" Nothing
+  res <- simpleGetHttp "http://www.google.com"
   enumHttpResp res |$ stdoutI
 
 httpsChunkedExample = do
   ctx <- SSL.context
   SSL.contextSetCADirectory ctx "/etc/ssl/certs/"
-  res <- simpleHttp "https://encrypted.google.com" (Just ctx)
+  res <- simpleGetHttps "https://encrypted.google.com" ctx
   enumHttpResp res |$ stdoutI
