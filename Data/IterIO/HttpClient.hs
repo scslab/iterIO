@@ -9,6 +9,7 @@ module Data.IterIO.HttpClient ( -- * Simple interface
                               , mkHttpClient
                               , httpConnect
                               , inumHttpClient
+                              , HttpResponesHandler
                               -- * Internal
                               , userAgent
                               , maxNrRedirects
