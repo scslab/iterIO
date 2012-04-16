@@ -256,8 +256,7 @@ postRequest :: String  -- ^ URL
             -> HttpReq ()
 postRequest url ct body =
   let req = fromJust $ mkRequestToAbsUri (L8.pack url) $ S8.pack "POST"
-      ctype = (S8.pack "Content-Type", S8.pack ct)
-  in req { reqHeaders = ctype : reqHeaders req
+  in req { reqContentType = Just (S8.pack ct, [])
          , reqContentLength = Just . fromIntegral . L8.length $ body }
 
 -- | Createa generic HTTP request, given an absoluteURI:
