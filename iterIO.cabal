@@ -5,9 +5,9 @@ Cabal-version:  >= 1.6
 build-type:     Simple
 License:        BSD3
 License-file:   LICENSE
-Author:         David Mazieres
+Author:         David Mazieres, Deian Stefan, Amit Levy
 Stability:      experimental
-Maintainer:     http://www.scs.stanford.edu/~dm/addr/
+Maintainer:     levya@cs.stanford.edu, deian@cs.stanford.edu
 Category:       System, Data, Enumerator
 Synopsis:       Iteratee-based IO with pipe operators
 Extra-source-files:
@@ -56,7 +56,7 @@ Description:
 
 Source-repository head
   Type:     git
-  Location: http://www.scs.stanford.edu/~dm/repos/iterIO.git
+  Location: http://github.com/scs/iterIO.git
 
 Library
   Build-depends: array >= 0.3.0.1 && < 2,
