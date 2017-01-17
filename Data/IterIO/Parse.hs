@@ -107,7 +107,7 @@ infixr 3 <|>
 (\/) = ifNoParse
 infix 2 \/
 
--- | @(f >$> a) t@ is equivalent to @f t '<$>' a@ (where '<$>' is and
+-- | @(f >$> a) t@ is equivalent to @f t '<$>' a@ (where '<$>' is an
 -- infix alias for 'fmap').  Particularly useful with infix
 -- combinators such as '\/' and ``orEmpty`` when chaining parse
 -- actions.  See examples at '\/' and 'orEmpty'.  Note 'fmap' is not
